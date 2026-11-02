@@ -1,0 +1,12 @@
+// Stub: StdVideo AV1 types
+typedef int StdVideoAV1ProfileIdc;
+typedef int StdVideoAV1LevelIdc;
+typedef StdVideoAV1ProfileIdc StdVideoAV1Profile;
+typedef StdVideoAV1LevelIdc StdVideoAV1Level;
+typedef struct StdVideoAV1SequenceHeader StdVideoAV1SequenceHeader;
+typedef struct StdVideoDecodeAV1PictureInfo StdVideoDecodeAV1PictureInfo;
+typedef struct StdVideoDecodeAV1ReferenceInfo StdVideoDecodeAV1ReferenceInfo;
+typedef struct StdVideoEncodeAV1DecoderModelInfo StdVideoEncodeAV1DecoderModelInfo;
+typedef struct StdVideoEncodeAV1OperatingPointInfo StdVideoEncodeAV1OperatingPointInfo;
+typedef struct StdVideoEncodeAV1PictureInfo StdVideoEncodeAV1PictureInfo;
+typedef struct StdVideoEncodeAV1ReferenceInfo StdVideoEncodeAV1ReferenceInfo;

@@ -1,0 +1,289 @@
+SWMenu.WGM: 971 BRTR objects, 7 levels, 971 48-byte transforms
+   105 WMenuNodeLoadTrack
+    35 WMenuNode
+     7 WMenuNodeLoadSave
+     3 WMenuNodeYesNo
+     2 WMenuNodePostRace
+    25 WMenuNodeSelectTrack
+     1 WMenuNodeSelectCShip
+     4 WMenuNodeSelectScenario
+     2 WMenuNodeControllerConfig
+     2 WMenuNodeTwoPlayer
+     3 WMenuNodeCarSelection
+    24 WMenuPage
+     8 WMenuControllerItem
+    13 WMenuSetValueItem
+     4 WMenuSetVolumeItem
+    14 WMenuCarItem
+    71 WMenuItem
+     3 GDFilm2
+     2 GDFilm
+     4 GDPsText
+   192 WMenuText
+     2 GDCamera
+    46 GDSprite
+   252 WMenuSprite
+    54 WMenuSound
+    75 GDModel
+    14 GDHModel
+     4 GDStdBrick
+GDModel resource links:
+  object 0x49 -> GMDL 0x7d8
+  object 0x33 -> GMDL 0x7d7
+  object 0x37 -> GMDL 0x7d6
+  object 0x101 -> GMDL 0x7b5
+  object 0x100 -> GMDL 0x7b6
+  object 0xf0 -> GMDL 0x7b7
+  object 0xef -> GMDL 0x7b8
+  object 0xdf -> GMDL 0x7b9
+  object 0xaa -> GMDL 0x7ba
+  object 0xa8 -> GMDL 0x7bc
+  object 0xa9 -> GMDL 0x7bb
+  object 0xb9 -> GMDL 0x7be
+  object 0xb7 -> GMDL 0x7c0
+  object 0xb6 -> GMDL 0x7c1
+  object 0xc8 -> GMDL 0x7c4
+  object 0xc9 -> GMDL 0x7c3
+  object 0xba -> GMDL 0x7c6
+  object 0xbb -> GMDL 0x7c5
+  object 0xda -> GMDL 0x7c7
+  object 0xd9 -> GMDL 0x7c8
+  object 0xd8 -> GMDL 0x7c9
+  object 0xcb -> GMDL 0x7ca
+  object 0xe9 -> GMDL 0x7cd
+  object 0xdd -> GMDL 0x7ce
+  object 0xdc -> GMDL 0x7cf
+  object 0xdb -> GMDL 0x7d0
+  object 0x114 -> GMDL 0x7d1
+  object 0x113 -> GMDL 0x7d2
+  object 0x112 -> GMDL 0x7d3
+  object 0x10e -> GMDL 0x7d4
+  object 0x3f -> GMDL 0x7d7
+  object 0x40 -> GMDL 0x7d6
+  object 0xee -> GMDL 0x7b5
+  object 0xed -> GMDL 0x7b6
+  object 0xec -> GMDL 0x7b7
+  object 0xeb -> GMDL 0x7b8
+  object 0xa6 -> GMDL 0x7b9
+  object 0x4d -> GMDL 0x7ba
+  object 0x4c -> GMDL 0x7bb
+  object 0x4b -> GMDL 0x7bc
+  object 0x5b -> GMDL 0x7be
+  object 0x59 -> GMDL 0x7c0
+  object 0x58 -> GMDL 0x7c1
+  object 0x67 -> GMDL 0x7c3
+  object 0x5e -> GMDL 0x7c4
+  object 0x5d -> GMDL 0x7c5
+  object 0x5c -> GMDL 0x7c6
+  object 0x75 -> GMDL 0x7c7
+  object 0x74 -> GMDL 0x7c8
+  object 0x6b -> GMDL 0x7c9
+  object 0x6a -> GMDL 0x7ca
+  object 0x79 -> GMDL 0x7cd
+  object 0x78 -> GMDL 0x7ce
+  object 0x77 -> GMDL 0x7cf
+  object 0x76 -> GMDL 0x7d0
+  object 0x87 -> GMDL 0x7d1
+  object 0x86 -> GMDL 0x7d2
+  object 0x85 -> GMDL 0x7d3
+  object 0x84 -> GMDL 0x7d4
+WMenuText property 0x4a candidate string keys: 102 unique nonzero values
+WMenuText property shapes (property / payload bytes: count, unique values, samples):
+  0x1a / 4: 192, 1 unique, [12 60 04 10], values: 12600410
+  0x1b / 48: 192, 1 unique, [00 00 80 3f 00 00 00 00 00 00 00 00], values: 0000803f0000000000000000000000000000803f0000000000000000000000000000803f000000000000000000000000
+  0x1d / 4: 192, 1 unique, [00 00 00 00], values: 00000000
+  0x1f / 4: 192, 3 unique, [00 00 80 00], values: 00000000, 00008000, 00008001
+  0x35 / 8: 192, 5 unique, [46 49 4c 4d dc 07 00 00], values: 46494c4db3070000, 46494c4ddb070000, 46494c4ddc070000, 46494c4ddd070000, 46494c4dde070000
+  0x36 / 4: 192, 1 unique, [42 00 18 00], values: 42001800
+  0x37 / 4: 192, 5 unique, [ff 00 00 00], values: dc000000, ec000000, f8000000, fb000000, ff000000
+  0x38 / 4: 192, 6 unique, [ff 00 00 00], values: 00000000, bd000000, d8000000, de000000, f0000000, ff000000
+  0x39 / 4: 192, 6 unique, [ff 00 00 00], values: 00000000, 14000000, 2c000000, 75000000, ac000000, ff000000
+  0x3a / 4: 192, 1 unique, [00 00 00 00], values: 00000000
+  0x3b / 4: 192, 1 unique, [00 00 00 40], values: 00000040
+  0x3c / 4: 192, 1 unique, [00 00 00 00], values: 00000000
+  0x3d / 4: 192, 1 unique, [00 00 00 00], values: 00000000
+  0x3e / 4: 192, 1 unique, [00 00 00 00], values: 00000000
+  0x3f / 4: 192, 1 unique, [00 00 00 00], values: 00000000
+  0x40 / 4: 192, 1 unique, [00 00 00 00], values: 00000000
+  0x41 / 4: 192, 1 unique, [00 00 80 3f], values: 0000803f
+  0x42 / 4: 192, 1 unique, [00 00 00 00], values: 00000000
+  0x43 / 4: 192, 1 unique, [00 00 00 00], values: 00000000
+  0x44 / 4: 192, 1 unique, [00 00 00 00], values: 00000000
+  0x45 / 4: 192, 5 unique, [00 00 00 00], values: 00000000, 64000000, a0000000, e6000000, ea000000
+  0x46 / 4: 192, 20 unique, [00 00 00 00], values: 00000000, 06000000, 0a000000, 0b000000, 10000000, 12000000, 20000000, 2e000000, ...
+  0x47 / 4: 192, 1 unique, [00 00 00 00], values: 00000000
+  0x48 / 4: 191, 1 unique, [00 00 00 00], values: 00000000
+  0x48 / 8: 1, 1 unique, [03 00 00 00 35 30 00 00], values: 0300000035300000
+  0x49 / 4: 192, 1 unique, [00 00 00 00], values: 00000000
+  0x4a / 4: 192, 103 unique, [0e 00 00 00], values: 00000000, 0a000000, 0e000000, 0f000000, 10000000, 11000000, 12000000, 13000000, ...
+  0x4b / 4: 192, 3 unique, [04 00 00 00], values: 00000200, 00080000, 04000000
+  0x4c / 4: 192, 3 unique, [0d 00 00 00], values: 0b000000, 0d000000, 0f000000
+  0x4d / 4: 192, 1 unique, [05 00 00 00], values: 05000000
+  0x4e / 4: 192, 2 unique, [00 00 00 00], values: 00000000, 01000000
+  0x17e / 4: 192, 2 unique, [00 00 00 00], values: 00000000, 01000000
+  0x17f / 4: 192, 2 unique, [01 00 00 00], values: 00000000, 01000000
+  0x180 / 4: 192, 2 unique, [00 00 00 00], values: 00000000, 01000000
+  0x181 / 4: 192, 2 unique, [00 00 00 00], values: 00000000, 08000000
+  0x182 / 4: 192, 3 unique, [00 00 00 00], values: 00000000, 03000000, 05000000
+  0x183 / 4: 192, 1 unique, [04 00 00 00], values: 04000000
+WMenuSprite property shapes (property / payload bytes: count, unique values, samples):
+  0x1a / 4: 252, 2 unique, [12 00 04 10], values: 12000410, 12600410
+  0x1b / 48: 252, 1 unique, [00 00 80 3f 00 00 00 00 00 00 00 00], values: 0000803f0000000000000000000000000000803f0000000000000000000000000000803f000000000000000000000000
+  0x1d / 4: 252, 1 unique, [00 00 00 00], values: 00000000
+  0x1f / 4: 252, 2 unique, [00 00 80 00], values: 00000000, 00008000
+  0x9e / 8: 252, 65 unique, [47 4d 41 54 13 03 00 00], values: 474d415413030000, 474d415414030000, 474d415415030000, 474d41541d030000, 474d41541e030000, 474d41541f030000, 474d415420030000, 474d415421030000, ...
+  0x9f / 4: 252, 7 unique, [00 00 00 00], values: 00000000, 18010000, 24000000, 28000000, 64000000, 6e000000, a0000000
+  0xa0 / 4: 252, 26 unique, [00 00 00 00], values: 00000000, 0a000000, 1c000000, 1f000000, 20000000, 23000000, 3c000000, 3f000000, ...
+  0xa1 / 4: 252, 1 unique, [00 00 00 00], values: 00000000
+  0xa2 / 4: 252, 1 unique, [00 00 00 00], values: 00000000
+  0xa3 / 4: 252, 2 unique, [00 00 00 00], values: 00000000, 01000000
+  0xa4 / 4: 252, 1 unique, [42 00 18 00], values: 42001800
+  0xa5 / 4: 252, 2 unique, [80 00 00 00], values: 80000000, ff000000
+  0xa6 / 4: 252, 2 unique, [80 00 00 00], values: 80000000, ff000000
+  0xa7 / 4: 252, 2 unique, [80 00 00 00], values: 80000000, ff000000
+  0xa8 / 4: 252, 1 unique, [00 00 00 00], values: 00000000
+  0xa9 / 4: 252, 1 unique, [00 00 80 3f], values: 0000803f
+  0xaa / 4: 252, 1 unique, [00 00 00 00], values: 00000000
+  0x184 / 4: 252, 1 unique, [00 00 00 00], values: 00000000
+  0x185 / 4: 252, 2 unique, [01 00 00 00], values: 00000000, 01000000
+  0x186 / 4: 252, 2 unique, [00 00 00 00], values: 00000000, 01000000
+  0x187 / 4: 252, 2 unique, [05 00 00 00], values: 00000000, 05000000
+  0x188 / 4: 252, 1 unique, [00 00 00 00], values: 00000000
+  0x189 / 4: 252, 2 unique, [00 00 20 00], values: 00002000, 04000000
+Tagged visual/resource references (unique class/tag/id triples):
+  GDFilm2 -> FILQ 0x7da
+  GDFilm -> FILM 0x7d9
+  GDFilm -> FILM 0x7dc
+  GDPsText -> FILM 0x7b3
+  WMenuText -> FILM 0x7b3
+  WMenuText -> FILM 0x7db
+  WMenuText -> FILM 0x7dc
+  WMenuText -> FILM 0x7dd
+  WMenuText -> FILM 0x7de
+  GDSprite -> GMAT 0x2fd
+  GDSprite -> GMAT 0x2ff
+  GDSprite -> GMAT 0x300
+  GDSprite -> GMAT 0x301
+  GDSprite -> GMAT 0x302
+  GDSprite -> GMAT 0x303
+  GDSprite -> GMAT 0x304
+  GDSprite -> GMAT 0x305
+  GDSprite -> GMAT 0x306
+  GDSprite -> GMAT 0x307
+  GDSprite -> GMAT 0x308
+  GDSprite -> GMAT 0x309
+  GDSprite -> GMAT 0x30a
+  GDSprite -> GMAT 0x30b
+  GDSprite -> GMAT 0x30c
+  GDSprite -> GMAT 0x30d
+  GDSprite -> GMAT 0x30e
+  GDSprite -> GMAT 0x311
+  GDSprite -> GMAT 0x312
+  GDSprite -> GMAT 0x316
+  GDSprite -> GMAT 0x317
+  GDSprite -> GMAT 0x318
+  GDSprite -> GMAT 0x319
+  GDSprite -> GMAT 0x31a
+  GDSprite -> GMAT 0x31b
+  GDSprite -> GMAT 0x31c
+  GDSprite -> GMAT 0x36e
+  GDSprite -> GMAT 0x373
+  GDSprite -> GMAT 0x374
+  GDSprite -> GMAT 0x375
+  GDSprite -> GMAT 0x376
+  GDSprite -> GMAT 0x377
+  WMenuSprite -> GMAT 0x2fe
+  WMenuSprite -> GMAT 0x313
+  WMenuSprite -> GMAT 0x314
+  WMenuSprite -> GMAT 0x315
+  WMenuSprite -> GMAT 0x31d
+  WMenuSprite -> GMAT 0x31e
+  WMenuSprite -> GMAT 0x31f
+  WMenuSprite -> GMAT 0x320
+  WMenuSprite -> GMAT 0x321
+  WMenuSprite -> GMAT 0x322
+  WMenuSprite -> GMAT 0x323
+  WMenuSprite -> GMAT 0x324
+  WMenuSprite -> GMAT 0x325
+  WMenuSprite -> GMAT 0x326
+  WMenuSprite -> GMAT 0x327
+  WMenuSprite -> GMAT 0x328
+  WMenuSprite -> GMAT 0x329
+  WMenuSprite -> GMAT 0x32a
+  WMenuSprite -> GMAT 0x32b
+  WMenuSprite -> GMAT 0x32c
+  WMenuSprite -> GMAT 0x32d
+  WMenuSprite -> GMAT 0x32e
+  WMenuSprite -> GMAT 0x32f
+  WMenuSprite -> GMAT 0x330
+  WMenuSprite -> GMAT 0x331
+  WMenuSprite -> GMAT 0x332
+  WMenuSprite -> GMAT 0x333
+  WMenuSprite -> GMAT 0x334
+  WMenuSprite -> GMAT 0x335
+  WMenuSprite -> GMAT 0x336
+  WMenuSprite -> GMAT 0x337
+  WMenuSprite -> GMAT 0x338
+  WMenuSprite -> GMAT 0x339
+  WMenuSprite -> GMAT 0x33a
+  WMenuSprite -> GMAT 0x33b
+  WMenuSprite -> GMAT 0x33c
+  WMenuSprite -> GMAT 0x33d
+  WMenuSprite -> GMAT 0x33e
+  WMenuSprite -> GMAT 0x33f
+  WMenuSprite -> GMAT 0x340
+  WMenuSprite -> GMAT 0x341
+  WMenuSprite -> GMAT 0x342
+  WMenuSprite -> GMAT 0x343
+  WMenuSprite -> GMAT 0x344
+  WMenuSprite -> GMAT 0x345
+  WMenuSprite -> GMAT 0x346
+  WMenuSprite -> GMAT 0x347
+  WMenuSprite -> GMAT 0x348
+  WMenuSprite -> GMAT 0x349
+  WMenuSprite -> GMAT 0x34a
+  WMenuSprite -> GMAT 0x34b
+  WMenuSprite -> GMAT 0x34c
+  WMenuSprite -> GMAT 0x34d
+  WMenuSprite -> GMAT 0x34e
+  WMenuSprite -> GMAT 0x34f
+  WMenuSprite -> GMAT 0x350
+  WMenuSprite -> GMAT 0x351
+  WMenuSprite -> GMAT 0x352
+  WMenuSprite -> GMAT 0x353
+  WMenuSprite -> GMAT 0x354
+  WMenuSprite -> GMAT 0x355
+  WMenuSprite -> GMAT 0x356
+  WMenuSprite -> GMAT 0x357
+  WMenuSprite -> GMAT 0x358
+  WMenuSprite -> GMAT 0x359
+  GDModel -> GMDL 0x7b5
+  GDModel -> GMDL 0x7b6
+  GDModel -> GMDL 0x7b7
+  GDModel -> GMDL 0x7b8
+  GDModel -> GMDL 0x7b9
+  GDModel -> GMDL 0x7ba
+  GDModel -> GMDL 0x7bb
+  GDModel -> GMDL 0x7bc
+  GDModel -> GMDL 0x7be
+  GDModel -> GMDL 0x7c0
+  GDModel -> GMDL 0x7c1
+  GDModel -> GMDL 0x7c3
+  GDModel -> GMDL 0x7c4
+  GDModel -> GMDL 0x7c5
+  GDModel -> GMDL 0x7c6
+  GDModel -> GMDL 0x7c7
+  GDModel -> GMDL 0x7c8
+  GDModel -> GMDL 0x7c9
+  GDModel -> GMDL 0x7ca
+  GDModel -> GMDL 0x7cd
+  GDModel -> GMDL 0x7ce
+  GDModel -> GMDL 0x7cf
+  GDModel -> GMDL 0x7d0
+  GDModel -> GMDL 0x7d1
+  GDModel -> GMDL 0x7d2
+  GDModel -> GMDL 0x7d3
+  GDModel -> GMDL 0x7d4
+  GDModel -> GMDL 0x7d6
+  GDModel -> GMDL 0x7d7
+  GDModel -> GMDL 0x7d8

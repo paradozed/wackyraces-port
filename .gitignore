@@ -1,0 +1,26 @@
+/build/
+__pycache__/
+*.pyc
+
+# No game content in git (AGENTS.md): original files, captures and anything
+# copied or generated from the game's data or executable.
+*.exe
+*.EXE
+*.dll
+*.wgm
+*.WGM
+*.gsw
+*.GSW
+*.snd
+*.avi
+*.bmp
+*.tga
+*.ico
+# Regenerated from WPC.EXE by tools/recover_resource_tables.py.
+/src/resources/*.ico
+# Ghidra project database: it embeds the imported executable.
+/analysis/ghidra/WPC.gpr
+/analysis/ghidra/WPC.rep/
+# Decompiler exports and verbatim disassembly of WPC.EXE (kept locally).
+/analysis/decompilation/**/*.c
+/analysis/disassembly/*.txt

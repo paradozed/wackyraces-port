@@ -1,0 +1,11 @@
+// Stub: StdVideo H265 types
+typedef int StdVideoH265ProfileIdc;
+typedef int StdVideoH265LevelIdc;
+typedef struct StdVideoH265VideoParameterSet StdVideoH265VideoParameterSet;
+typedef struct StdVideoH265SequenceParameterSet StdVideoH265SequenceParameterSet;
+typedef struct StdVideoH265PictureParameterSet StdVideoH265PictureParameterSet;
+typedef struct StdVideoEncodeH265SliceSegmentHeader StdVideoEncodeH265SliceSegmentHeader;
+typedef struct StdVideoEncodeH265PictureInfo StdVideoEncodeH265PictureInfo;
+typedef struct StdVideoEncodeH265ReferenceInfo StdVideoEncodeH265ReferenceInfo;
+typedef struct StdVideoDecodeH265PictureInfo StdVideoDecodeH265PictureInfo;
+typedef struct StdVideoDecodeH265ReferenceInfo StdVideoDecodeH265ReferenceInfo;

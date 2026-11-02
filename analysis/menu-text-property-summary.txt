@@ -1,0 +1,298 @@
+menu.WGM: 990 BRTR objects, 7 levels, 990 48-byte transforms
+   105 WMenuNodeLoadTrack
+    35 WMenuNode
+     7 WMenuNodeLoadSave
+     3 WMenuNodeYesNo
+     2 WMenuNodePostRace
+    25 WMenuNodeSelectTrack
+     1 WMenuNodeSelectCShip
+     4 WMenuNodeSelectScenario
+     2 WMenuNodeControllerConfig
+     2 WMenuNodeTwoPlayer
+     3 WMenuNodeCarSelection
+    25 WMenuPage
+     8 WMenuControllerItem
+    15 WMenuSetValueItem
+     4 WMenuSetVolumeItem
+    14 WMenuCarItem
+    71 WMenuItem
+     3 GDFilm2
+     1 GDFilm
+     6 GDPsText
+   204 WMenuText
+     2 GDCamera
+    46 GDSprite
+   252 WMenuSprite
+    55 WMenuSound
+    77 GDModel
+    14 GDHModel
+     4 GDStdBrick
+GDModel resource links:
+  object 0x49 -> GMDL 0x7cb
+  object 0x33 -> GMDL 0x7ca
+  object 0x37 -> GMDL 0x7c9
+  object 0x101 -> GMDL 0x7a6
+  object 0x100 -> GMDL 0x7a7
+  object 0xf0 -> GMDL 0x7a8
+  object 0xef -> GMDL 0x7a9
+  object 0xdf -> GMDL 0x7aa
+  object 0xaa -> GMDL 0x7ab
+  object 0xa8 -> GMDL 0x7ad
+  object 0xa9 -> GMDL 0x7ac
+  object 0xb9 -> GMDL 0x7af
+  object 0xb7 -> GMDL 0x7b1
+  object 0xb6 -> GMDL 0x7b2
+  object 0xc8 -> GMDL 0x7b5
+  object 0xc9 -> GMDL 0x7b4
+  object 0xba -> GMDL 0x7b7
+  object 0xbb -> GMDL 0x7b6
+  object 0xda -> GMDL 0x7b8
+  object 0xd9 -> GMDL 0x7b9
+  object 0xd8 -> GMDL 0x7ba
+  object 0xcb -> GMDL 0x7bb
+  object 0xe9 -> GMDL 0x7be
+  object 0xdd -> GMDL 0x7bf
+  object 0xdc -> GMDL 0x7c0
+  object 0xdb -> GMDL 0x7c1
+  object 0x114 -> GMDL 0x7c2
+  object 0x113 -> GMDL 0x7c3
+  object 0x112 -> GMDL 0x7c4
+  object 0x10e -> GMDL 0x7c5
+  object 0x3f -> GMDL 0x7ca
+  object 0x40 -> GMDL 0x7c9
+  object 0xee -> GMDL 0x7a6
+  object 0xed -> GMDL 0x7a7
+  object 0xec -> GMDL 0x7a8
+  object 0xeb -> GMDL 0x7a9
+  object 0xa6 -> GMDL 0x7aa
+  object 0x4d -> GMDL 0x7ab
+  object 0x4c -> GMDL 0x7ac
+  object 0x4b -> GMDL 0x7ad
+  object 0x5b -> GMDL 0x7af
+  object 0x59 -> GMDL 0x7b1
+  object 0x58 -> GMDL 0x7b2
+  object 0x67 -> GMDL 0x7b4
+  object 0x5e -> GMDL 0x7b5
+  object 0x5d -> GMDL 0x7b6
+  object 0x5c -> GMDL 0x7b7
+  object 0x75 -> GMDL 0x7b8
+  object 0x74 -> GMDL 0x7b9
+  object 0x6b -> GMDL 0x7ba
+  object 0x6a -> GMDL 0x7bb
+  object 0x79 -> GMDL 0x7be
+  object 0x78 -> GMDL 0x7bf
+  object 0x77 -> GMDL 0x7c0
+  object 0x76 -> GMDL 0x7c1
+  object 0x87 -> GMDL 0x7c2
+  object 0x86 -> GMDL 0x7c3
+  object 0x85 -> GMDL 0x7c4
+  object 0x84 -> GMDL 0x7c5
+  object 0x271 -> GMDL 0x7c8
+  object 0x270 -> GMDL 0x7c7
+WMenuText property 0x4a candidate string keys: 104 unique nonzero values
+WMenuText property shapes (property / payload bytes: count, unique values, samples):
+  0x1a / 4: 204, 1 unique, [12 60 04 10], values: 12600410
+  0x1b / 48: 204, 1 unique, [00 00 80 3f 00 00 00 00 00 00 00 00], values: 0000803f0000000000000000000000000000803f0000000000000000000000000000803f000000000000000000000000
+  0x1d / 4: 204, 1 unique, [00 00 00 00], values: 00000000
+  0x1f / 4: 204, 3 unique, [00 00 80 00], values: 00000000, 00008000, 00008001
+  0x35 / 8: 204, 5 unique, [46 49 4c 4d d1 07 00 00], values: 46494c4dcc070000, 46494c4dcd070000, 46494c4dd0070000, 46494c4dd1070000, 46494c4dd2070000
+  0x36 / 4: 204, 1 unique, [42 00 18 00], values: 42001800
+  0x37 / 4: 204, 6 unique, [ff 00 00 00], values: dc000000, ec000000, f0000000, f8000000, fb000000, ff000000
+  0x38 / 4: 204, 6 unique, [ff 00 00 00], values: 00000000, bd000000, d8000000, de000000, f0000000, ff000000
+  0x39 / 4: 204, 6 unique, [ff 00 00 00], values: 00000000, 14000000, 2c000000, 75000000, ac000000, ff000000
+  0x3a / 4: 204, 1 unique, [00 00 00 00], values: 00000000
+  0x3b / 4: 204, 1 unique, [00 00 80 3f], values: 0000803f
+  0x3c / 4: 204, 1 unique, [00 00 00 00], values: 00000000
+  0x3d / 4: 204, 1 unique, [00 00 00 00], values: 00000000
+  0x3e / 4: 204, 1 unique, [00 00 00 00], values: 00000000
+  0x3f / 4: 204, 1 unique, [00 00 00 00], values: 00000000
+  0x40 / 4: 204, 1 unique, [00 00 00 00], values: 00000000
+  0x41 / 4: 204, 1 unique, [00 00 80 3f], values: 0000803f
+  0x42 / 4: 204, 1 unique, [00 00 00 00], values: 00000000
+  0x43 / 4: 204, 1 unique, [00 00 00 00], values: 00000000
+  0x44 / 4: 204, 1 unique, [00 00 00 00], values: 00000000
+  0x45 / 4: 204, 5 unique, [00 00 00 00], values: 00000000, 64000000, a0000000, e6000000, ea000000
+  0x46 / 4: 204, 22 unique, [00 00 00 00], values: 00000000, 06000000, 0a000000, 0b000000, 10000000, 12000000, 20000000, 2e000000, ...
+  0x47 / 4: 204, 1 unique, [00 00 00 00], values: 00000000
+  0x48 / 4: 195, 1 unique, [00 00 00 00], values: 00000000
+  0x48 / 8: 1, 1 unique, [03 00 00 00 35 30 00 00], values: 0300000035300000
+  0x48 / 24: 1, 1 unique, [14 00 00 00 54 48 49 53 20 43 4f 4e], values: 140000005448495320434f4e54524f4c4c45522048415300
+  0x48 / 28: 2, 2 unique, [15 00 00 00 54 48 45 53 45 20 4a 4f], values: 150000004e4f5420544f20574f524b2050524f5045524c5900000000, 150000005448455345204a4f59535449434b53205345454d00000000
+  0x48 / 32: 1, 1 unique, [1c 00 00 00 4d 4f 56 45 20 54 48 45], values: 1c0000004d4f564520544845204a4f59535449434b5320544f20544845495200
+  0x48 / 36: 3, 3 unique, [20 00 00 00 41 4e 20 41 55 54 4f 4d], values: 1d00000043454e54455220504f534954494f4e205448454e205052455353205f00000000, 20000000414e204155544f4d415449432043414c4942524154494f4e2053595354454d00, 2000000041532046415220415320504f535349424c45205448454e205052455353205f00
+  0x48 / 44: 1, 1 unique, [25 00 00 00 4d 4f 56 45 20 54 48 45], values: 250000004d4f564520544845204a4f59535449434b5320494e20414c4c20444952454354494f4e5300000000
+  0x49 / 4: 204, 1 unique, [00 00 00 00], values: 00000000
+  0x4a / 4: 204, 105 unique, [0e 00 00 00], values: 00000000, 0a000000, 0e000000, 0f000000, 10000000, 11000000, 12000000, 13000000, ...
+  0x4b / 4: 204, 3 unique, [04 00 00 00], values: 00000200, 00080000, 04000000
+  0x4c / 4: 204, 3 unique, [0d 00 00 00], values: 0b000000, 0d000000, 0f000000
+  0x4d / 4: 204, 1 unique, [05 00 00 00], values: 05000000
+  0x4e / 4: 204, 3 unique, [00 00 00 00], values: 00000000, 01000000, 04000000
+  0x17e / 4: 204, 2 unique, [00 00 00 00], values: 00000000, 01000000
+  0x17f / 4: 204, 2 unique, [01 00 00 00], values: 00000000, 01000000
+  0x180 / 4: 204, 2 unique, [00 00 00 00], values: 00000000, 01000000
+  0x181 / 4: 204, 2 unique, [00 00 00 00], values: 00000000, 04000000
+  0x182 / 4: 204, 3 unique, [00 00 00 00], values: 00000000, 04000000, 06000000
+  0x183 / 4: 204, 3 unique, [04 00 00 00], values: 00000000, 04000000, 06000000
+WMenuSprite property shapes (property / payload bytes: count, unique values, samples):
+  0x1a / 4: 252, 2 unique, [12 60 04 10], values: 12000410, 12600410
+  0x1b / 48: 252, 1 unique, [00 00 80 3f 00 00 00 00 00 00 00 00], values: 0000803f0000000000000000000000000000803f0000000000000000000000000000803f000000000000000000000000
+  0x1d / 4: 252, 1 unique, [00 00 00 00], values: 00000000
+  0x1f / 4: 252, 2 unique, [00 00 80 00], values: 00000000, 00008000
+  0x9e / 8: 252, 65 unique, [47 4d 41 54 b7 02 00 00], values: 474d4154a2020000, 474d4154b7020000, 474d4154b8020000, 474d4154b9020000, 474d4154c3020000, 474d4154c4020000, 474d4154c5020000, 474d4154c6020000, ...
+  0x9f / 4: 252, 7 unique, [00 00 00 00], values: 00000000, 18010000, 24000000, 28000000, 64000000, 6e000000, a0000000
+  0xa0 / 4: 252, 26 unique, [00 00 00 00], values: 00000000, 0a000000, 1c000000, 1f000000, 20000000, 23000000, 3c000000, 3f000000, ...
+  0xa1 / 4: 252, 1 unique, [00 00 00 00], values: 00000000
+  0xa2 / 4: 252, 1 unique, [00 00 00 00], values: 00000000
+  0xa3 / 4: 252, 2 unique, [00 00 00 00], values: 00000000, 01000000
+  0xa4 / 4: 252, 1 unique, [42 00 18 00], values: 42001800
+  0xa5 / 4: 252, 2 unique, [80 00 00 00], values: 80000000, ff000000
+  0xa6 / 4: 252, 2 unique, [80 00 00 00], values: 80000000, ff000000
+  0xa7 / 4: 252, 2 unique, [80 00 00 00], values: 80000000, ff000000
+  0xa8 / 4: 252, 1 unique, [00 00 00 00], values: 00000000
+  0xa9 / 4: 252, 1 unique, [00 00 80 3f], values: 0000803f
+  0xaa / 4: 252, 1 unique, [00 00 00 00], values: 00000000
+  0x184 / 4: 252, 1 unique, [00 00 00 00], values: 00000000
+  0x185 / 4: 252, 2 unique, [01 00 00 00], values: 00000000, 01000000
+  0x186 / 4: 252, 2 unique, [00 00 00 00], values: 00000000, 01000000
+  0x187 / 4: 252, 2 unique, [05 00 00 00], values: 00000000, 05000000
+  0x188 / 4: 252, 1 unique, [00 00 00 00], values: 00000000
+  0x189 / 4: 252, 2 unique, [00 00 20 00], values: 00002000, 04000000
+Tagged visual/resource references (unique class/tag/id triples):
+  GDFilm2 -> FILQ 0x7cf
+  GDFilm -> FILM 0x7ce
+  GDPsText -> FILM 0x7d0
+  GDPsText -> FILM 0x7d1
+  WMenuText -> FILM 0x7cc
+  WMenuText -> FILM 0x7cd
+  WMenuText -> FILM 0x7d0
+  WMenuText -> FILM 0x7d1
+  WMenuText -> FILM 0x7d2
+  GDSprite -> GMAT 0x2a1
+  GDSprite -> GMAT 0x2a3
+  GDSprite -> GMAT 0x2a4
+  GDSprite -> GMAT 0x2a5
+  GDSprite -> GMAT 0x2a6
+  GDSprite -> GMAT 0x2a7
+  GDSprite -> GMAT 0x2a8
+  GDSprite -> GMAT 0x2a9
+  GDSprite -> GMAT 0x2aa
+  GDSprite -> GMAT 0x2ab
+  GDSprite -> GMAT 0x2ac
+  GDSprite -> GMAT 0x2ad
+  GDSprite -> GMAT 0x2ae
+  GDSprite -> GMAT 0x2af
+  GDSprite -> GMAT 0x2b0
+  GDSprite -> GMAT 0x2b1
+  GDSprite -> GMAT 0x2b2
+  GDSprite -> GMAT 0x2b5
+  GDSprite -> GMAT 0x2b6
+  GDSprite -> GMAT 0x2bc
+  GDSprite -> GMAT 0x2bd
+  GDSprite -> GMAT 0x2be
+  GDSprite -> GMAT 0x2bf
+  GDSprite -> GMAT 0x2c0
+  GDSprite -> GMAT 0x2c1
+  GDSprite -> GMAT 0x2c2
+  GDSprite -> GMAT 0x309
+  GDSprite -> GMAT 0x30a
+  GDSprite -> GMAT 0x3d3
+  GDSprite -> GMAT 0x3d4
+  GDSprite -> GMAT 0x3d5
+  GDSprite -> GMAT 0x3d6
+  WMenuSprite -> GMAT 0x2a2
+  WMenuSprite -> GMAT 0x2b7
+  WMenuSprite -> GMAT 0x2b8
+  WMenuSprite -> GMAT 0x2b9
+  WMenuSprite -> GMAT 0x2c3
+  WMenuSprite -> GMAT 0x2c4
+  WMenuSprite -> GMAT 0x2c5
+  WMenuSprite -> GMAT 0x2c6
+  WMenuSprite -> GMAT 0x2c7
+  WMenuSprite -> GMAT 0x2c8
+  WMenuSprite -> GMAT 0x2c9
+  WMenuSprite -> GMAT 0x2ca
+  WMenuSprite -> GMAT 0x2cb
+  WMenuSprite -> GMAT 0x2cc
+  WMenuSprite -> GMAT 0x2cd
+  WMenuSprite -> GMAT 0x2ce
+  WMenuSprite -> GMAT 0x2cf
+  WMenuSprite -> GMAT 0x2d0
+  WMenuSprite -> GMAT 0x2d1
+  WMenuSprite -> GMAT 0x2d2
+  WMenuSprite -> GMAT 0x2d3
+  WMenuSprite -> GMAT 0x2d4
+  WMenuSprite -> GMAT 0x2d5
+  WMenuSprite -> GMAT 0x2d6
+  WMenuSprite -> GMAT 0x2d7
+  WMenuSprite -> GMAT 0x2d8
+  WMenuSprite -> GMAT 0x2d9
+  WMenuSprite -> GMAT 0x2da
+  WMenuSprite -> GMAT 0x2db
+  WMenuSprite -> GMAT 0x2dc
+  WMenuSprite -> GMAT 0x2dd
+  WMenuSprite -> GMAT 0x2de
+  WMenuSprite -> GMAT 0x2df
+  WMenuSprite -> GMAT 0x2e0
+  WMenuSprite -> GMAT 0x2e1
+  WMenuSprite -> GMAT 0x2e2
+  WMenuSprite -> GMAT 0x2e3
+  WMenuSprite -> GMAT 0x2e4
+  WMenuSprite -> GMAT 0x2e5
+  WMenuSprite -> GMAT 0x2e6
+  WMenuSprite -> GMAT 0x2e7
+  WMenuSprite -> GMAT 0x2e8
+  WMenuSprite -> GMAT 0x2e9
+  WMenuSprite -> GMAT 0x2ea
+  WMenuSprite -> GMAT 0x2eb
+  WMenuSprite -> GMAT 0x2ec
+  WMenuSprite -> GMAT 0x2ed
+  WMenuSprite -> GMAT 0x2ee
+  WMenuSprite -> GMAT 0x2ef
+  WMenuSprite -> GMAT 0x2f0
+  WMenuSprite -> GMAT 0x2f1
+  WMenuSprite -> GMAT 0x2f2
+  WMenuSprite -> GMAT 0x2f3
+  WMenuSprite -> GMAT 0x2f4
+  WMenuSprite -> GMAT 0x2f5
+  WMenuSprite -> GMAT 0x2f6
+  WMenuSprite -> GMAT 0x2f7
+  WMenuSprite -> GMAT 0x2f8
+  WMenuSprite -> GMAT 0x2f9
+  WMenuSprite -> GMAT 0x2fa
+  WMenuSprite -> GMAT 0x2fb
+  WMenuSprite -> GMAT 0x2fc
+  WMenuSprite -> GMAT 0x2fd
+  WMenuSprite -> GMAT 0x2fe
+  WMenuSprite -> GMAT 0x2ff
+  GDModel -> GMDL 0x7a6
+  GDModel -> GMDL 0x7a7
+  GDModel -> GMDL 0x7a8
+  GDModel -> GMDL 0x7a9
+  GDModel -> GMDL 0x7aa
+  GDModel -> GMDL 0x7ab
+  GDModel -> GMDL 0x7ac
+  GDModel -> GMDL 0x7ad
+  GDModel -> GMDL 0x7af
+  GDModel -> GMDL 0x7b1
+  GDModel -> GMDL 0x7b2
+  GDModel -> GMDL 0x7b4
+  GDModel -> GMDL 0x7b5
+  GDModel -> GMDL 0x7b6
+  GDModel -> GMDL 0x7b7
+  GDModel -> GMDL 0x7b8
+  GDModel -> GMDL 0x7b9
+  GDModel -> GMDL 0x7ba
+  GDModel -> GMDL 0x7bb
+  GDModel -> GMDL 0x7be
+  GDModel -> GMDL 0x7bf
+  GDModel -> GMDL 0x7c0
+  GDModel -> GMDL 0x7c1
+  GDModel -> GMDL 0x7c2
+  GDModel -> GMDL 0x7c3
+  GDModel -> GMDL 0x7c4
+  GDModel -> GMDL 0x7c5
+  GDModel -> GMDL 0x7c7
+  GDModel -> GMDL 0x7c8
+  GDModel -> GMDL 0x7c9
+  GDModel -> GMDL 0x7ca
+  GDModel -> GMDL 0x7cb

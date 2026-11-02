@@ -1,0 +1,6 @@
+# Selected first-race file trace lines
+
+Source: temporary Wine `+file` trace `/tmp/wpc-runtime-20261022/race-live.log`.
+
+    0128:trace:file:CreateFileW L"Voice\\loadingpc1024.bmp" GENERIC_READ FILE_SHARE_READ FILE_SHARE_WRITE  creation 3 attributes 0x80
+    0128:trace:file:CreateFileW L"D:\\cc\\cc_t1.wgm" GENERIC_READ FILE_SHARE_READ FILE_SHARE_WRITE  creation 3 attributes 0x80
