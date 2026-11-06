@@ -249,7 +249,10 @@ void RaceSession::robot_items(size_t i) {
             case 0x11:case 0x12:case 0x13:case 0x15:case 0x17: it.weapon_state=5;break; // dropped at once
             default: {
                 const int t=target(tnt_angle,int(tnt_range));
-                if(t!=-2 && distance(t)>700 && (t<0 || !it.prefer_player) && (it.weapon_wait<1 || t<0)) {
+                // 0x4e5ea1: a brick's +0x1c7 = 3 (or 4) fires without the wait,
+                // and is cleared by firing (0x4e5ef5).
+                if(t!=-2 && distance(t)>700 && (t<0 || !it.prefer_player) && (it.weapon_wait<1 || t<0 || o.effect==3 || o.effect==4)) {
+                    if(o.effect==3 || o.effect==4) o.effect=0;
                     it.weapon_state=5;it.prefer_timer=0;
                     it.weapon_wait=random_.next()%100+100;
                 }
@@ -547,7 +550,7 @@ void RaceSession::update_bend_arrow() {
         // Components truncated to integers, as 0x4a6890's __ftol calls.
         const int dx=int(sign.position[0]-player_.position[0]),dy=int(sign.position[1]-player_.position[1]),dz=int(sign.position[2]-player_.position[2]);
         const int r=int(sign.radius);
-        if(dx*dx+dy*dy+dz*dz>r*r) continue;
+        if(int32_t(uint32_t(dx)*uint32_t(dx)+uint32_t(dy)*uint32_t(dy)+uint32_t(dz)*uint32_t(dz))>r*r) continue; // imul wraps
         // Headings atan2(-x,z) of the car's and the sign's forward axes.
         const float sign_heading=std::atan2(-sign.forward[0],sign.forward[2]);
         const float turn=wrap_angle(player_.yaw-sign_heading);
@@ -745,6 +748,9 @@ void RaceSession::drive_opponent(Opponent& o,Body& b,bool controlled) {
         // across sections, +0x2c5, is not traced).
         RaceTrack::Route here=track_.route(car.position);
         if(!here.hit) for(const int k:{1,-1}) {
+            // The one seam joins the last section's exit to the first's entry
+            // (dr_t3: a route gap in section 1 otherwise sent the robot 6000 back).
+            if(k>0?car.section!=int(track_.sections())-1:car.section!=0) continue;
             if(!track_.route(transform_point(k>0?track_.wrap():track_.unwrap(),car.position)).hit) continue;
             cross_seam(car,b,k,false);from=transform_point(k>0?track_.wrap():track_.unwrap(),from);here=track_.route(car.position);break;
         }
@@ -769,8 +775,14 @@ void RaceSession::drive_opponent(Opponent& o,Body& b,bool controlled) {
         {const RaceTrack::Route on=track_.route(car.position);
          const TrackSurface gr=ground(car.position[0],car.position[2],car.position[1]+step_height,car.position[1]-4000);
          if(on.hit) car.position[1]=on.y; else if(gr.hit) car.position[1]=gr.y;}
+        // Far motion leaves the angles alone (Wine, cc_t1 lap: +0x267 and +0x26f
+        // stay 0 and +0x26b frozen while y runs 562..1081). Level here, or a tilt
+        // aims the contact ray into the slope and holds the robot (cc_t4's fork
+        // at (-8817, -356, 28591), dr_t3 at (-218, 107, 18168)). Whether the
+        // original's far step runs a contact at all is not traced.
+        car.up={{0,1,0}};car.pitch=car.roll=0;
         const int loops=car.loops;
-        settle(car,b,false);
+        b.sliding=true;settle(car,b,false);b.sliding=false;
         if(car.loops!=loops) from=transform_point(car.loops>loops?track_.wrap():track_.unwrap(),from);
         crossings(car,b,from,false);
         // A far robot slides at its top speed, so a hold does not stop it
@@ -835,11 +847,25 @@ void RaceSession::drive_human(size_t i,const DriveInput& input) {
 void RaceSession::update_objects() {
     // The course objects run after the cars (provisional order). Car 0 is
     // the player, then the robots in grid order.
-    std::vector<CarProbe> cars{{player_.position,false}};
-    for(size_t i=0;i<opponents_.size();++i) cars.push_back({opponents_[i].car.position,true,opponent_bodies_[i].hidden});
+    std::vector<CarProbe> cars{{player_.position,false,false,body_.bridge,forward_of(player_.yaw),player_.section,body_.hit.active()}};
+    for(size_t i=0;i<opponents_.size();++i) cars.push_back({opponents_[i].car.position,!opponents_[i].human,opponent_bodies_[i].hidden,opponent_bodies_[i].bridge,forward_of(opponents_[i].car.yaw),opponents_[i].car.section,opponent_bodies_[i].hit.active()});
     object_effects_.resize(cars.size());
     for(size_t i=0;i<opponents_.size();++i) object_effects_[i+1]=opponents_[i].effect;
     objects_.update(cars,object_hits_,object_effects_,player_.section,track_.sections());
+    // 0x4cd9eb: a dynamite hole's blast.
+    for(const CarPush& p:objects_.pushes()) (p.car==0?body_:opponent_bodies_[p.car-1]).pushes.push_back({p.force,p.decay});
+    // 0x4c2547: the rolling log turns the cars on it.
+    for(const CarPlacement& m:objects_.rolled()) (m.car==0?player_:opponents_[m.car-1].car).position=m.position;
+    // 0x4c92cb: a car held by a geyser stops (+0x3ef, +0x403, its pushes).
+    for(const GeyserLift& l:objects_.lifts()) {
+        RaceCar& car=l.car==0?player_:opponents_[l.car-1].car;
+        Body& b=l.car==0?body_:opponent_bodies_[l.car-1];
+        car.speed.speed=0;b.pushes.clear();car.position=l.position;car.airtime=l.airtime;
+    }
+    for(const MistyBridge& m:objects_.bridges()) if(m.fork_section>=0)
+        for(Opponent& o:opponents_) o.robot.set_route_fork({m.fork_section,m.fork_polygon,m.fork_weight()});
+    for(const RouteWeight& w:objects_.route_weights())
+        for(Opponent& o:opponents_) o.robot.set_route_fork({w.section,w.polygon,w.weight,w.link});
     // 0x4cc69e: a car whose +0x89f is a log moves by that log's motion,
     // and +0x89f is cleared.
     const auto ride=[&](RaceCar& car,Body& b) {
@@ -1142,6 +1168,9 @@ void RaceSession::update_weapons() {
                 if(int(i)!=p.owner && !opponent_bodies_[i].hidden && spheres_touch(opponents_[i].car.position,p.position,car_sphere+p.radius)) p.struck=int(i);
         }
         p.travelled+=p.p.speed;
+        // 0x475908: a brick the projectile touches takes the hit (slot +0x34:
+        // WChiselCrossover, WRolling), and the projectile flies on.
+        objects_.projectile_hit(p.position,p.radius);
         if(p.struck!=-2 || grounded || p.travelled>=p.p.travel) {
             // 0x4762c0: the struck car takes the DragonBreath's type.
             if(p.struck!=-2 && hit(p.struck,p.type)) item_events_.push_back("projectile hit car "+std::to_string(p.struck));
@@ -1420,15 +1449,8 @@ void RaceSession::solid_contacts(RaceCar& car,Body& b) {
     // 0x46a768: the car's object query (0x4a5730, mask 0x79600) at the
     // start of its update; its first hit is an 0x10000 primitive (rocks,
     // 0x46a797) when the group has that bit. Natively only the cylinders.
-    for(const TrackCylinder& c:track_.cylinders()) {
-        if(!(c.sensor_group&0x10000) || !sphere_cylinder(car.position,car_sphere,c)) continue;
+    const auto contact=[&](const Vec3& n) {
         voice_events_.push_back({car.vehicle,5});   // 0x46a7c6, every update in contact
-        // 0x482403: the normal is down below the base, up above the top and
-        // otherwise the horizontal direction from the axis to the car.
-        Vec3 n{{0,-1,0}};
-        if(car.position[1]>=c.base[1]) n={{0,1,0}};
-        if(car.position[1]>=c.base[1] && car.position[1]<=c.base[1]+c.height)
-            n=unit({{car.position[0]-c.base[0],0,car.position[2]-c.base[2]}});
         if(car.grounded) {
             // 0x46a7d7 (+0x15a clear): above speed 0.2 the speed counts only
             // along the normal, through the last update's motion
@@ -1445,6 +1467,25 @@ void RaceSession::solid_contacts(RaceCar& car,Body& b) {
             car.speed.speed=0;
         } else car.speed.speed*=0.8f; // 0x46a9f6: in the air
         if(b.sound_timer==0) {b.sound_timer=30;++b.rock_sounds;}
+    };
+    bool touched=false;
+    for(const TrackCylinder& c:track_.cylinders()) {
+        if(!(c.sensor_group&0x10000) || !sphere_cylinder(car.position,car_sphere,c)) continue;
+        // 0x482403: the normal is down below the base, up above the top and
+        // otherwise the horizontal direction from the axis to the car.
+        Vec3 n{{0,-1,0}};
+        if(car.position[1]>=c.base[1]) n={{0,1,0}};
+        if(car.position[1]>=c.base[1] && car.position[1]<=c.base[1]+c.height)
+            n=unit({{car.position[0]-c.base[0],0,car.position[2]-c.base[2]}});
+        contact(n);touched=true;
+        break;
+    }
+    // A sphere primitive (0x482190): the normal runs from its centre to the
+    // car. A WRolling's handler refuses a car (0x4c7745) but keeps its timer.
+    if(!touched) for(const SolidSphere& s:objects_.solid_spheres()) {
+        if(!spheres_touch(car.position,s.centre,car_sphere+s.radius)) continue;
+        objects_.car_touched(s.rock);
+        contact(unit({{car.position[0]-s.centre[0],car.position[1]-s.centre[1],car.position[2]-s.centre[2]}}));
         break;
     }
 }
@@ -1505,13 +1546,10 @@ void RaceSession::car_contacts(RaceCar& car,Body& b,Vec3& move) {
     b.pushes.push_back(p);
 }
 void RaceSession::move(RaceCar& car,Body& b,const VehicleTuning& tuning,bool player) {
+    // Native safety, not in the original: a car thrown out of any course's
+    // range returns to the road rather than failing the ground queries.
+    for(const float c:car.position) if(!std::isfinite(c) || std::abs(c)>5e6f) {respawn(car,b,player);return;}
     if(glide(car,b)) return;
-    // 0x46b9a0/0x46ba57: the slots' pitch and roll steps turn the frame
-    // the probes and the move use (stored at 0x46c500).
-    if(b.tilt_pitch!=0 || b.tilt_roll!=0) {
-        car.pitch+=b.tilt_pitch;car.roll+=b.tilt_roll;b.tilt_pitch=b.tilt_roll=0;
-        car.up=tilted_up(car.yaw,car.pitch,car.roll);
-    }
     solid_contacts(car,b);
     b.last=car.position;b.has_last=true;
     Vec3 before=car.position;
@@ -1567,7 +1605,19 @@ void RaceSession::move(RaceCar& car,Body& b,const VehicleTuning& tuning,bool pla
     // one hangs at (-4028, 850, -3515) past the edge); its probes and wall
     // rays keep it, or it falls and returns (0x4a6730).
     car.position[0]+=move[0];car.position[2]+=move[2];
-    wall_contacts(car,b);
+    // Same native safety as above, for the update that throws the car: +0x8bf
+    // compounds on surfaces 0x470218 keeps (0x466df6, surface 1 on cc_t4), and
+    // the original's __ftol would not throw here.
+    for(const float c:car.position) if(!std::isfinite(c) || std::abs(c)>5e6f) {respawn(car,b,player);return;}
+    // 0x46b9a0/0x46ba57: the slots' pitch and roll steps turn the frame the
+    // wall rays and ground probes use (stored at 0x46c500). The step above
+    // used the last update's probes (Wine, sh_t1: pitch 0.0175 lifts the car
+    // from the next update).
+    if(b.tilt_pitch!=0 || b.tilt_roll!=0) {
+        car.pitch+=b.tilt_pitch;car.roll+=b.tilt_roll;b.tilt_pitch=b.tilt_roll=0;
+        car.up=tilted_up(car.yaw,car.pitch,car.roll);
+    }
+    wall_contacts(car,b,before);
     const int loops=car.loops;
     settle(car,b,player);
     // Compare the start-line crossing in the frame the car now occupies.
@@ -1576,7 +1626,7 @@ void RaceSession::move(RaceCar& car,Body& b,const VehicleTuning& tuning,bool pla
     if(b.respawns>0 && b.last_respawn==updates_) return;
     crossings(car,b,before,player);
 }
-void RaceSession::wall_contacts(RaceCar& car,Body& b) {
+void RaceSession::wall_contacts(RaceCar& car,Body& b,const Vec3& frame_position) {
     // 0x46bb..0x46c3f: after the move, 0x468280 mode 1 places four contact
     // probes (lateral -/+68, 24 up, -/+122 along; vehicle 0 88 and 190,
     // vehicle 6 180; the front one stretched above speed 0.4 as in mode 2).
@@ -1594,7 +1644,9 @@ void RaceSession::wall_contacts(RaceCar& car,Body& b) {
     const float lat[4]={-side,side,-side,side},lon[4]={along,along,-along,-along}; // FL FR RL RR
     for(size_t k=0;k<4;++k) for(size_t i=0;i<3;++i) probe[k][i]=car.position[i]+r[i]*lat[k]+u[i]*24+f[i]*lon[k];
     Vec3 centre{};
-    for(size_t i=0;i<3;++i) centre[i]=car.position[i]+u[i]*30;
+    // 0x46bab5: 0x404def reads the car's world frame, whose translation is
+    // still the last update's: this update's motion has only reached +0x288.
+    for(size_t i=0;i<3;++i) centre[i]=frame_position[i]+u[i]*30;
     centre[1]=(probe[0][1]+probe[3][1])*0.5f+u[1]*30;
     int hits=0;uint32_t flags=0;   // the hits' polygon flags, or-ed (0x46bdd1)
     std::array<Vec3,4> normal{},correction{};
@@ -1682,38 +1734,48 @@ void RaceSession::cross_seam(RaceCar& car,Body& b,int step,bool player) {
 }
 TrackSurface RaceSession::ground(float x,float z,float top,float bottom) const {
     TrackSurface s=track_.ground(x,z,top,bottom);
-    last_log_={{-1,-1}};
+    last_log_={{-1,-1}};last_bridge_=-1;
     const LogHit l=objects_.log_ground(x,z,top,bottom);
     if(l.hit && (!s.hit || l.y>s.y)) {
         // A log: plain ground flags (provisional), the static query's section.
         if(!s.hit) s.section=-1;
         s.hit=true;s.y=l.y;s.normal=l.normal;s.flags=0;s.point={{x,l.y,z}};
-        last_log_={{l.ride,l.log}};
+        last_log_={{l.ride,l.log}};last_bridge_=l.bridge;
         if(s.section<0) {const TrackSurface below=track_.ground(x,z,top,-1e6f);s.section=below.hit?below.section:0;}
     }
     return s;
 }
 TrackSurface RaceSession::ray(const Vec3& from,const Vec3& to) const {
     TrackSurface s=track_.ray(from,to);
-    last_log_={{-1,-1}};
+    last_log_={{-1,-1}};last_bridge_=-1;
     // The robots' ray runs along their up axis, nearly vertical: the logs
     // are tested vertically at the ray's start (provisional).
     const LogHit l=objects_.log_ground(from[0],from[2],from[1],to[1]);
     if(l.hit && (!s.hit || l.y>s.point[1])) {
         const int section=s.hit?s.section:0;
         s.hit=true;s.y=l.y;s.normal=l.normal;s.flags=0;s.point={{from[0],l.y,from[2]}};s.section=section;
-        last_log_={{l.ride,l.log}};
+        last_log_={{l.ride,l.log}};last_bridge_=l.bridge;
     }
     return s;
 }
 void RaceSession::settle(RaceCar& car,Body& b,bool player) {
     const float top=car.position[1]+step_height,bottom=car.position[1]-4000;
     TrackSurface center=ground(car.position[0],car.position[2],top,bottom);
-    b.log_ride=last_log_[0];b.log=last_log_[1]; // +0x89f
+    b.log_ride=last_log_[0];b.log=last_log_[1];b.bridge=last_bridge_; // +0x89f
+    // Sections overlap past their portals at the same height (dr_t4). A tie
+    // with the section before keeps the car's own, or a robot shown at a portal
+    // would count as that section and hide again at once; going on to the next
+    // stays free (provisional: the original changes row at the portal, 0x4a12a0).
+    if(center.hit && car.section>=0 && center.section!=car.section && last_log_[1]<0 && last_bridge_<0 &&
+       (center.section+1)%int(track_.sections())==car.section) {
+        const TrackSurface own=track_.ground_in(car.section,car.position[0],car.position[2],top,bottom);
+        if(own.hit && own.y>=center.y-1) center=own;
+    }
     if(!center.hit) {
         // Past the last portal the course continues in the first route; the
         // original renders/queries it through the WMOD loop transform.
         for(const int step:{1,-1}) {
+            if(step>0?car.section!=int(track_.sections())-1:car.section!=0) continue; // the seam's two sections
             const Matrix4& m=step>0?track_.wrap():track_.unwrap();
             const Vec3 high=transform_point(m,{{car.position[0],top,car.position[2]}});
             const float low=transform_point(m,{{car.position[0],bottom,car.position[2]}})[1];
@@ -1744,7 +1806,7 @@ void RaceSession::settle(RaceCar& car,Body& b,bool player) {
         Vec3 from{},to{};
         for(size_t i=0;i<3;++i) {from[i]=car.position[i]+up[i]*1.3f*ray_above*2;to[i]=car.position[i]-up[i]*1.3f*ray_below;}
         const TrackSurface g=ray(from,to);
-        if(g.hit) {b.log_ride=last_log_[0];b.log=last_log_[1];}
+        if(g.hit) {b.log_ride=last_log_[0];b.log=last_log_[1];b.bridge=last_bridge_;}
         if(g.hit) {
             contact=true;touched=g.flags;
             up_new=g.normal[1]<0?Vec3{{-g.normal[0],-g.normal[1],-g.normal[2]}}:g.normal;
@@ -1766,7 +1828,10 @@ void RaceSession::settle(RaceCar& car,Body& b,bool player) {
             const float lx=(i&1)?probe_across:-probe_across,lz=(i&2)?-along:along;
             Vec3 p{};
             for(size_t k=0;k<3;++k) p[k]=car.position[k]+side[k]*lx+fwd[k]*lz;
-            const TrackSurface g=ground(p[0],p[2],p[1]+ray_above,p[1]-ray_below);
+            // 0x46c7f6: the up axis x 1.3 (0x512a40) serves these rays too, so
+            // 104 above to 39 below (Wine, sh_t1: a car landing on the barrier
+            // 39 above the ground has airtime 1 at once).
+            const TrackSurface g=ground(p[0],p[2],p[1]+1.3f*ray_above,p[1]-1.3f*ray_below);
             if(g.hit) {
                 mask|=1<<i;hit[i]={{p[0],g.y,p[2]}};touched=g.flags;
                 if(g.flags&0x1000001) {b.glide=i+1;b.glide_dir=g.normal;++walls;}
@@ -1826,7 +1891,10 @@ void RaceSession::settle(RaceCar& car,Body& b,bool player) {
     }
     // +0x8bb takes the contact rays' flags (0x46ffxx), so only a car that
     // touches the deep river bed drowns, not one flying over it.
-    if(contact && RaceTrack::drowning_surface(car.surface)) {
+    // Provisional: a far robot only slides along the route, which can pass
+    // within the contact ray's reach of deep water (sh_t2's drop off the
+    // rolling log, 37 above it at z 94844), so it does not drown.
+    if(contact && !b.sliding && RaceTrack::drowning_surface(car.surface)) {
         b.drown=drown_delay;car.speed={};car.steer=0;return;
     }
 }
@@ -1850,16 +1918,30 @@ void RaceSession::respawn(RaceCar& car,Body& b,bool player) {
     settle(car,b,player);
 }
 void RaceSession::crossings(RaceCar& car,Body& b,const Vec3& before,bool player) {
-    const unsigned all=(1u<<track_.sections())-1;
     if(car.section>=0) b.visited|=1u<<car.section;
     const Matrix4& line=track_.start_line();
-    const Vec3 z{{line[8],line[9],line[10]}},x{{line[0],line[1],line[2]}},p{{line[12],line[13],line[14]}};
-    Vec3 from{},to{};
-    for(size_t i=0;i<3;++i) {from[i]=before[i]-p[i];to[i]=car.position[i]-p[i];}
-    // Lateral reach of the line (native; the original lap trigger is not
-    // recovered). cc_t1's shallow river beside the road crosses ~3000 out.
-    if(std::abs(dot(to,x))>5000) return;
-    if(dot(from,z)<0 && dot(to,z)>=0 && b.visited==all && car.section==0) count_lap(b,&b==&body_);
+    const float radius=track_.start_radius();
+    // 0x49a2f0: the current position within the line's radius (horizontally),
+    // then the side of the previous and current positions along its z axis:
+    // +1 forward, -1 backward.
+    const auto crossing=[&](const Vec3& from,const Vec3& to) {
+        const float x=to[0]-line[12],z=to[2]-line[14];
+        if(std::abs(x)>radius || std::abs(z)>radius || x*x+z*z>radius*radius) return 0;
+        const float now=x*line[8]+z*line[10],then=(from[0]-line[12])*line[8]+(from[2]-line[14])*line[10];
+        return now>0 && then<0?1:now<0 && then>0?-1:0;
+    };
+    // The native seam comes where the section's ground ends, which can lie
+    // past the line (cc_t3: 450 past it), where the original's comes at the
+    // portal (provisional): the last section is also tested through the wrap.
+    // The callers already carry before over a seam taken this update.
+    int r=crossing(before,car.position);
+    if(!r && car.section==int(track_.sections())-1) r=crossing(transform_point(track_.wrap(),before),transform_point(track_.wrap(),car.position));
+    // 0x4a4201..0x4a4284: the count, never below -1; past 0 it adds to the
+    // lap +0x19f and returns to 0. Both start at 0 (0x49f4c9), so the first
+    // crossing makes the shown lap 1 and four finish a three-lap race. Native
+    // laps are the completed ones: line starts at -1, so that crossing adds none.
+    b.line=std::max(b.line+r,-1);
+    if(b.line>0) {b.line=0;count_lap(b,&b==&body_);}
 }
 void RaceSession::count_lap(Body& b,bool player) {
     if(phase_!=Phase::Racing || mode_==1) return; // a battle has no laps
@@ -1894,8 +1976,16 @@ bool RaceSession::glide(RaceCar& car,Body& b) {
     if(!b.glide || (std::abs(b.glide_dir[0])<=0.1f && std::abs(b.glide_dir[2])<=0.1f)) return false;
     if(b.glide_count==0) {
         if(b.glide_timer!=0 || (std::abs(car.up[0])<=0.1f && std::abs(car.up[2])<=0.1f)) return false;
-        const float k=(b.glide_dir[1]+1)*20;
-        b.glide_dir[0]*=k;b.glide_dir[2]*=k;b.glide_dir[1]=0;
+        // Scale a unit push only: the port can re-enter with the direction of
+        // the last glide, already scaled, which grew by 20 each time up to
+        // 1e8 units (cc_t4; provisional: the original's rewrite of +0x23b
+        // between glides is not traced).
+        const float len=std::sqrt(dot(b.glide_dir,b.glide_dir));
+        if(len<=1.5f) {
+            const float k=(b.glide_dir[1]+1)*20;
+            b.glide_dir[0]*=k;b.glide_dir[2]*=k;
+        }
+        b.glide_dir[1]=0;
         b.glide_count=1;++b.glides;
     }
     // 0x4721f0: the car moves by +0x23b; a ray (mask 0x18000ff) from 250

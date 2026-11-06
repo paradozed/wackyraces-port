@@ -112,6 +112,11 @@ private:
     // CourseObjects order, drawn at the session's frames.
     std::vector<std::vector<WorldBatch>> crossing_trams_,movers_;
     std::vector<std::vector<std::vector<WorldBatch>>> logs_; // per WLogRide, per log
+    std::vector<std::array<std::vector<WorldBatch>,2>> bridges_; // per WMisty, its two halves
+    std::vector<std::array<std::vector<WorldBatch>,2>> geysers_; // per WGeyser, column and ring
+    std::vector<std::array<std::vector<WorldBatch>,2>> holes_;   // per WDynamiteHole, lid and fuse
+    std::vector<std::vector<std::vector<WorldBatch>>> chisels_,rocks_; // per object, per WBlowUp piece
+    std::vector<Matrix4> hole_fuses_;
     // The crossing lights (the WTram brick's second child, GDModel 0x3b1 on
     // dt_t1): their world batches and each vertex's serialized u, v.
     struct Lights {size_t crossing=0;uint32_t node=0;bool found=false;std::vector<std::pair<size_t,std::vector<std::array<float,2>>>> batches;};

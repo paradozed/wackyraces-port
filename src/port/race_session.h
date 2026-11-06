@@ -336,6 +336,7 @@ private:
     TrackSurface ground(float x,float z,float top,float bottom) const;
     TrackSurface ray(const Vec3& from,const Vec3& to) const;
     mutable std::array<int,2> last_log_{{-1,-1}};
+    mutable int last_bridge_=-1;
     std::vector<ObjectHit> object_hits_;std::vector<int> object_effects_;
     // The running weapon effect (+0x389): its id, the updates left and, for
     // WPU_Breath, the update its projectile leaves.
@@ -345,7 +346,10 @@ private:
     struct Body {
         int drown=0,respawns=0,impacts=0,laps=0;
         int frags=0; // +0x3a3: hits received (0x47d756), the battle count
+        bool sliding=false;     // settled from the far step (state 0x1000)
+        int line=-1;            // +0x183 less one before the first crossing (see crossings)
         int log_ride=-1,log=-1; // +0x89f: the WLogBase the car last stood on
+        int bridge=-1;          // +0x89f: the WMisty whose half it last stood on
         uint64_t last_respawn=0,finish_update=0;
         unsigned visited=1;
         bool finished=false;
@@ -439,7 +443,7 @@ private:
     void update_gadgets();
     void update_mines();
     void bomb_step(RaceCar& car,Body& b);
-    void wall_contacts(RaceCar& car,Body& b);
+    void wall_contacts(RaceCar& car,Body& b,const Vec3& frame_position);
 };
 }
 #endif

@@ -150,7 +150,7 @@ gives player 1 that weapon with a full charge.
   the vehicle's gadget/weapon icons, and the racer progress strip
   ([HUD](analysis/native-hud-20261028.md)). Power-up pickups spin on the
   course; taking one adds a charge and runs the gadget or weapon roulette, and
-  the MenuPrefs keys ('/' gadget, right Shift weapon by default; OPTIONS > JOUEUR 1 rebinds them) use it. The item effects are not ported yet
+  the MenuPrefs keys ('/' gadget, right Shift weapon by default; OPTIONS > JOUEUR 1 rebinds them) use it; the item effects are below
   ([power-ups](analysis/native-powerups-20261028.md)). Up/Down accelerate and brake/reverse, Left/Right steer, Escape
   leaves the race, and Enter after the finish returns to the menu. Opponents
   follow the recovered `WCtrlRoboCar` driver along the WGNR route layer
@@ -164,12 +164,16 @@ gives player 1 that weapon with a full charge.
   detour sign turns a car round, and the landmine (icon 19) drops behind the
   car and arms after 15 updates. A car that is hit is held
   for 25 updates (`WackyAutoBomba`, then a doubled acceleration;
-  [weapons](analysis/weapons-bomba-20261029.md)). Other power-up effects and
-  weapons are not ported. On dt_t1 the level-crossing tram runs on its light cycle and the
+  [weapons](analysis/weapons-bomba-20261029.md)). Every weapon icon now has an effect, some provisional, and FlyPower and
+  MonsterTires only partly (see `TODO.md`). On dt_t1 the level-crossing tram runs on its light cycle and the
   shuttle tram on its path; both squash the cars they touch, and robots wait at the red light
   (compared with Wine; like the original, each runs only while the player is in or next to a
   section whose WMOD row links it)
-  ([trams](analysis/trams-20261030.md)). Escape opens the original in-race pause menu
+  ([trams](analysis/trams-20261030.md)). On `cc_t2` the bascule bridge (`WMisty`) opens and shuts
+  at its sensors, carries cars and redirects the robots
+  ([bridge](analysis/misty-bridge-20261106.md)). `WGeyser`, `WFountain` (`dt_t2`), `WLogRollingB` (`sh_t2`, player cars only) and
+  `WDynamiteHole` (`dr_t1`) are ported too, as are `WRolling` and `WChiselCrossover` with `WBlowUp` (`cc_t4`, `ct_t2`, `dr_t4`; [note](analysis/rolling-chisel-blowup-20261106.md), `cc_t4` compared with Wine); the fountain and the log were compared with Wine
+  ([notes](analysis/lap-line-geyser-20261106.md)). Escape opens the original in-race pause menu
   (general.wgm's `WMenuBrick`) over the race: resume, volumes, restart and
   quit with its confirmation ([pause](analysis/pause-menu-20261030.md)). Race audio covers every car's engine and skid loop,
   placed in 3D around the follow camera (DirectSound's distance law with the
@@ -185,14 +189,17 @@ gives player 1 that weapon with a full charge.
   m_gravity × airtime² fall, the four contact rays), checked against a Wine
   capture of `sh_t1`'s ramps ([vertical](analysis/vertical-motion-20261030.md));
   the return trigger and progress field are provisional native rules (the
-  return point is the original's, Wine-checked). Of the other 16 course archives, all load except `cc_t4`,
-  `dr_t2` and `sh_t2`; they have not been driven. See
+  return point is the original's, Wine-checked). All 16 other course archives
+  load; `cc_t2`, `cc_t4`, `dr_t3`, `dt_t3` and `sh_t4` pass every `native_drive_test`
+  check, and the failures on the others are listed in `TODO.md`. Laps follow
+  the original's start line rule (`0x49a2f0`), and `cc_t3`'s geyser throws cars
+  up ([laps and geyser](analysis/lap-line-geyser-20261106.md)). See
   [native race](analysis/native-race-cc-t1-20261027.md) and
   [Championship I](analysis/native-championship-i-20261028.md).
 - Race worlds draw each course's own backdrop dome, scaled by its radius, and
   `GD3dSprite`/`WGndSprite` trees, cacti and signs turned toward the camera
   about the world up axis as `0x419b90` does ([sprites](analysis/sprites-20261029.md));
-  their colour is not yet matched. A same-input Wine comparison of
+  they draw at the texture's colour, Wine-checked. A same-input Wine comparison of
   Championship I races 2–4 is recorded in
   [Wine comparison](analysis/wine-comparison-championship-i-20261028.md).
 - Bounded GMDL/GHMS decoding, per-triangle materials and static segment poses.

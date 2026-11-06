@@ -104,6 +104,8 @@ RaceTrack::RaceTrack(const Archive& course,const Scene& scene,bool battle) {
     if(!battle) {
         if(!start) bad("route zero links no WStartLine");
         start_line_=unwrapped_scene_transform(scene.root(),*start);
+        start_radius_=scene.find(*start).real(0x1df,5000);
+        if(!(start_radius_>0)) bad("invalid WStartLine radius");
     } else {
         // Route 0's first row (the manager's +0x8d0 for route +0x8c4 = 0,
         // provisional: the route choice is not traced).
@@ -165,6 +167,42 @@ RaceTrack::RaceTrack(const Archive& course,const Scene& scene,bool battle) {
     objects_.load(scene);
     objects_.load_log_meshes(course,scene);
     objects_.link([this](uint32_t id) {const auto i=links_.find(id);return i==links_.end()?std::vector<int>{}:i->second;});
+    // 0x4c5962..0x4c59c3: the WMisty row's route nodes 14 and 40 (0x4856f0
+    // walks the nodes, each (links + 2) x 3 words long). The section is the
+    // one the first sensor stands on (provisional: +0x104 is not traced).
+    // 0x4d0089..0x4d011e: a WChiselCrossover's route node and its two next
+    // ones (section under the brick: provisional, as for WMisty).
+    for(ChiselCrossover& c:objects_.chisels()) {
+        if(c.route_node<0) continue;
+        const Route r=route(c.centre);
+        if(!r.hit) continue;
+        const auto node=[&](int n) {
+            uint32_t polygon=0;
+            for(int i=0;i<n;++i) {const RouteNode k=route_node(r.section,r.record,polygon);polygon+=uint32_t(k.forward.size()+k.backward.size()+2)*3;}
+            return polygon;
+        };
+        c.section=r.section;c.polygon=node(c.route_node);
+        const RouteNode here=route_node(r.section,r.record,c.polygon);
+        std::vector<RouteLink> links=here.forward;links.insert(links.end(),here.backward.begin(),here.backward.end());
+        const uint32_t one=node(c.route_node+1),two=node(c.route_node+2);
+        if(links.size()>0 && links[0].target==one) c.bits|=1;
+        if(links.size()>0 && links[0].target==two) c.bits|=2;
+        if(links.size()>1 && links[1].target==one) c.bits|=4;
+        if(links.size()>1 && links[1].target==two) c.bits|=8;
+    }
+    for(MistyBridge& b:objects_.bridges()) {
+        if(b.sensors.empty()) continue;
+        const Route r=route(b.sensors[0]);
+        if(!r.hit) continue;
+        const auto node=[&](int n) {
+            uint32_t polygon=0;
+            for(int i=0;i<n;++i) {const RouteNode k=route_node(r.section,r.record,polygon);polygon+=uint32_t(k.forward.size()+k.backward.size()+2)*3;}
+            return polygon;
+        };
+        b.fork_section=r.section;b.fork_polygon=node(14);
+        const RouteNode fork=route_node(r.section,r.record,b.fork_polygon);
+        b.fork_to_40=!fork.forward.empty() && fork.forward[0].target==node(40);
+    }
     const int laps=scene.root().integer(0x25,3); // GDWorld m_nLapNum
     if(laps<1 || laps>99) bad("invalid GDWorld lap count");
     laps_=laps;
@@ -207,6 +245,17 @@ bool RaceTrack::sheltered(const Vec3& p) const {
     for(const Shelter& z:shelters_)
         if(inside(z.frame,z.box) || inside(multiply_matrix(wrap_,z.frame),z.box) || inside(multiply_matrix(unwrap_,z.frame),z.box)) return true;
     return false;
+}
+TrackSurface RaceTrack::ground_in(int section,float x,float z,float top,float bottom) const {
+    TrackSurface out;
+    if(section<0 || size_t(section)>=sections_.size()) return out;
+    const auto& s=sections_[size_t(section)];
+    const GroundQueryResult q=s.ground.query_local(point(transform_point(s.inverse,{{x,top,z}})),point(transform_point(s.inverse,{{x,bottom,z}})),0x018000ff);
+    if(!q.hit) return out;
+    out.hit=true;out.y=transform_point(s.transform,vec(q.contact.point))[1];out.flags=q.contact.record_flags;out.section=section;
+    out.normal=unit(rotate(s.transform,vec(q.contact.normal)));
+    if(out.normal[1]<0) for(float& c:out.normal) c=-c;
+    return out;
 }
 TrackSurface RaceTrack::ray(const Vec3& from,const Vec3& to) const {
     TrackSurface best;float nearest=2;

@@ -19,7 +19,7 @@ bool same_side(float a,float b) {return (a>=0 && b>=0) || (a<=0 && b<=0);}
 // 0x52e600: route speed classes (route flags >> 24) times the top speed.
 constexpr float speed_class[11]={1.f,0.9f,0.8f,0.7f,0.6f,0.5f,0.4f,0.3f,0.2f,0.1f,0.f};
 }
-int choose_route_link(const RaceTrack& track,int section,uint32_t record,const RouteNode& node,MsvcRandom& random) {
+int choose_route_link(const RaceTrack& track,int section,uint32_t record,const RouteNode& node,MsvcRandom& random,const std::vector<RouteFork>& forks) {
     std::vector<RouteLink> links=node.forward;
     links.insert(links.end(),node.backward.begin(),node.backward.end());
     if(links.empty()) return -1;
@@ -30,7 +30,11 @@ int choose_route_link(const RaceTrack& track,int section,uint32_t record,const R
     uint32_t sum=0;int last=0;
     for(size_t i=0;i<links.size();++i) {
         if(links[i].target==0xffff) return last;
-        sum+=links[i].weight;
+        // A WMisty (0x4c5e9d) or WChiselCrossover (0x4d0143) writes its fork's
+        // link weights.
+        uint32_t weight=links[i].weight;
+        for(const RouteFork& f:forks) if(f.section==section && f.polygon==node.polygon && size_t(f.link)==i) weight=uint32_t(f.weight);
+        sum+=weight;
         const uint32_t flags=track.route_node(section,record,links[i].target).flags;
         if(flags&0xff0000) continue;
         last=int(i);
@@ -55,7 +59,7 @@ bool RoboDriver::update_goals(const RaceTrack& track,const RaceTrack::Route& mod
     // 0x4e9610's first loop keeps the link chosen in the previous module for
     // this polygon (+0x54); otherwise a weighted random forward link.
     link_=continued && next_link_>=0 && size_t(next_link_)<links.size()?next_link_:
-          choose_route_link(track,module.section,module.record,node,random);
+          choose_route_link(track,module.section,module.record,node,random,forks_);
     next_={};next_link_=-1;
     // No link at all: 0x4e9750 returns with the previous goals kept.
     if(link_<0) return goals_known_;
@@ -68,7 +72,7 @@ bool RoboDriver::update_goals(const RaceTrack& track,const RaceTrack::Route& mod
     if(link.target==0xffff) return true;
     next_={true,module.section,module.record,link.target};
     const RouteNode after=track.route_node(module.section,module.record,link.target);
-    next_link_=choose_route_link(track,module.section,module.record,after,random);
+    next_link_=choose_route_link(track,module.section,module.record,after,random,forks_);
     std::vector<RouteLink> later=after.forward;
     later.insert(later.end(),after.backward.begin(),after.backward.end());
     if(next_link_>=0) goal2_=track.route_point(module.section,later[size_t(next_link_)].point);
@@ -140,7 +144,7 @@ void pickup_turn(float& s,const RoboCarState& car) {
     for(int i=0;i<car.box_count && i<4;++i) {
         const Vec3& b=car.boxes[size_t(i)];
         const int dx=int(b[0]-car.position[0]),dy=int(b[1]-car.position[1]),dz=int(b[2]-car.position[2]);
-        const int d2=dx*dx+dy*dy+dz*dz;
+        const int d2=int32_t(uint32_t(dx)*uint32_t(dx)+uint32_t(dy)*uint32_t(dy)+uint32_t(dz)*uint32_t(dz)); // imul wraps
         if(d2>=0x895441) continue;
         const float alpha=wrap(h-toward(car.position,b));
         const float diff=std::abs(wrap(alpha-s)); // 0x496f90

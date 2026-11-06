@@ -24,3 +24,6 @@ __pycache__/
 # Decompiler exports and verbatim disassembly of WPC.EXE (kept locally).
 /analysis/decompilation/**/*.c
 /analysis/disassembly/*.txt
+
+# Extracted disc (game content, AGENTS.md).
+/iso_extract/

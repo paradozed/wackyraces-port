@@ -62,9 +62,15 @@ RaceTrack::Route next_polygon(const RaceTrack& track,const RaceTrack::Route& mod
 // and close to s by distance (80 degrees within 500, 60 within 1000, 40
 // within 2000, else 30), the one whose angle is nearest s.
 void pickup_turn(float& s,const RoboCarState& car);
+// A route node whose first link's weight a WMisty rewrites (0x4c5e9d).
+struct RouteFork {int section=-1;uint32_t polygon=0;int weight=0;int link=0;};
 class RoboDriver {
 public:
     explicit RoboDriver(const RoboParams& params={}):params_(params) {}
+    void set_route_fork(const RouteFork& fork) {
+        for(RouteFork& f:forks_) if(f.section==fork.section && f.polygon==fork.polygon && f.link==fork.link) {f.weight=fork.weight;return;}
+        forks_.push_back(fork);
+    }
     // Near the player: the route-following driver (0x4e5d..0x4e82cd).
     RoboControl drive(const RaceTrack& track,const RoboCarState& car,MsvcRandom& random);
     // Updates the goals when the module changes (0x4e9750); false off-route.
@@ -93,6 +99,7 @@ private:
     int state_=1;              // WackyAuto +0x2b1
     int stuck_=0;              // +0xa8: slow updates, then the unstick counter (low 16 bits) and side (bit 16)
     RaceTrack::Route module_{},next_{};   // +0x2c5 and +0x2c9
+    std::vector<RouteFork> forks_;
     int link_=-1,next_link_=-1;           // +0x50 in the module, +0x54 in the next polygon
     Vec3 goal_{},goal2_{},edge_{};        // +0x58, +0x64, +0x70
     uint32_t module_flags_=0;
@@ -126,6 +133,6 @@ bool course_indices(const std::string& file,int& environment,int& course);
 // 0x4e9610 with random choice: the current link when it belongs to the
 // node, else a forward link by cumulative weight against rand() x 2 - 1,
 // skipping targets whose route flags have bits 0xff0000.
-int choose_route_link(const RaceTrack& track,int section,uint32_t record,const RouteNode& node,MsvcRandom& random);
+int choose_route_link(const RaceTrack& track,int section,uint32_t record,const RouteNode& node,MsvcRandom& random,const std::vector<RouteFork>& forks={});
 }
 #endif

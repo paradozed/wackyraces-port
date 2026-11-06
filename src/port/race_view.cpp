@@ -67,6 +67,24 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
                 const LogRide& r=objects.log_rides()[i];logs_[i].resize(r.logs.size());
                 for(size_t k=0;k<r.logs.size();++k) take(r.logs[k],logs_[i][k]);
             }
+            bridges_.resize(objects.bridges().size());
+            for(size_t i=0;i<bridges_.size();++i) for(size_t k=0;k<2;++k) take(objects.bridges()[i].halves[k],bridges_[i][k]);
+            holes_.resize(objects.dynamite_holes().size());
+            for(size_t i=0;i<holes_.size();++i) {take(objects.dynamite_holes()[i].lid,holes_[i][0]);take(objects.dynamite_holes()[i].fuse,holes_[i][1]);}
+            hole_fuses_.clear();
+            for(const DynamiteHole& d:objects.dynamite_holes()) hole_fuses_.push_back(unwrapped_scene_transform(course.root(),d.fuse));
+            geysers_.resize(objects.geysers().size());
+            for(size_t i=0;i<geysers_.size();++i) {take(objects.geysers()[i].column,geysers_[i][0]);if(objects.geysers()[i].ring) take(objects.geysers()[i].ring,geysers_[i][1]);}
+            chisels_.resize(objects.chisels().size());
+            for(size_t i=0;i<chisels_.size();++i) {
+                const auto& pieces=objects.chisels()[i].blow.pieces;chisels_[i].resize(pieces.size());
+                for(size_t k=0;k<pieces.size();++k) take(pieces[k].node,chisels_[i][k]);
+            }
+            rocks_.resize(objects.rocks().size());
+            for(size_t i=0;i<rocks_.size();++i) {
+                const auto& pieces=objects.rocks()[i].blow.pieces;rocks_[i].resize(pieces.size());
+                for(size_t k=0;k<pieces.size();++k) take(pieces[k].node,rocks_[i][k]);
+            }
             // The lights model's batches are found at the first draw, once
             // the power-ups have left world_.batches.
             for(size_t i=0;i<objects.crossings().size();++i) {
@@ -219,6 +237,9 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
         for(const auto& t:crossing_trams_) group(t);
         for(const auto& m:movers_) group(m);
         for(const auto& r:logs_) for(const auto& l:r) group(l);
+        for(const auto& b:bridges_) for(const auto& h:b) group(h);
+        for(const auto& g:geysers_) for(const auto& h:g) group(h);
+        for(const auto& d:holes_) for(const auto& h:d) group(h);
         for(const auto& [v,c]:cars_) {group(c.batches);group(shadows_.at(v).batches);}
         group(splash_column_);group(splash_ring_);group(ripple_);group(landmine_);group(tnt_);group(detour_);group(oil_);group(wall_);group(tree_);group(hive_);
         for(const auto& [id,b]:projectiles_) group(b);
@@ -552,6 +573,25 @@ void RaceView::draw_view(int human,int width,int height) {
         for(size_t i=0;i<crossing_trams_.size();++i) if(objects.crossings()[i].active) submit(crossing_trams_[i],vp,view,objects.crossings()[i].tram_frame());
         for(size_t i=0;i<movers_.size();++i) if(objects.movers()[i].active) submit(movers_[i],vp,view,objects.movers()[i].placed);
         for(size_t i=0;i<logs_.size();++i) for(size_t k=0;k<logs_[i].size();++k) submit(logs_[i][k],vp,view,objects.log_rides()[i].frames[k]);
+        for(size_t i=0;i<bridges_.size();++i) for(size_t k=0;k<2;++k) submit(bridges_[i][k],vp,view,objects.bridges()[i].frames[k]);
+        for(size_t i=0;i<holes_.size();++i) {
+            const DynamiteHole& d=objects.dynamite_holes()[i];
+            submit(holes_[i][0],vp,view,d.lid_frame());
+            if(d.armed) submit(holes_[i][1],vp,view,hole_fuses_[i]);
+        }
+        for(size_t i=0;i<chisels_.size();++i) {
+            const ChiselCrossover& c=objects.chisels()[i];
+            if(c.active) for(size_t k=0;k<chisels_[i].size();++k) submit(chisels_[i][k],vp,view,multiply_matrix(c.log_world,c.blow.pieces[k].local));
+        }
+        for(size_t i=0;i<rocks_.size();++i) {
+            const RollingRock& r=objects.rocks()[i];
+            if(r.active) {const Matrix4 w=r.world();for(size_t k=0;k<rocks_[i].size();++k) submit(rocks_[i][k],vp,view,multiply_matrix(w,r.blow.pieces[k].local));}
+        }
+        for(size_t i=0;i<geysers_.size();++i) if(objects.geysers()[i].active) {
+            const Geyser& g=objects.geysers()[i];
+            if(g.top()>0) submit(geysers_[i][0],vp,view,g.column_frame());
+            if(g.ring_scale>0) submit(geysers_[i][1],vp,view,g.ring_frame());
+        }
     }
     for(size_t i=0;i<session_.opponents().size();++i) {
         // A hidden robot (flag 0x100, 0x4a27b2) is not drawn.

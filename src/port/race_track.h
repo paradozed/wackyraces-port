@@ -68,6 +68,8 @@ public:
     // Vertical WGNR query (mask 0x018000ff, as the spawn writer uses):
     // the highest surface between top and bottom.
     TrackSurface ground(float x,float z,float top,float bottom) const;
+    // The same query in one section's WGNR only.
+    TrackSurface ground_in(int section,float x,float z,float top,float bottom) const;
     // The same mask along any segment: the hit nearest from (0x46c97e, the
     // robots' ray along the car's up axis).
     TrackSurface ray(const Vec3& from,const Vec3& to) const;
@@ -87,6 +89,7 @@ public:
     Vec3 route_point(int section,const GroundPoint& local) const;
     Vec3 route_vertex(int section,uint32_t record,uint16_t index) const;
     const Matrix4& start_line() const {return start_line_;}
+    float start_radius() const {return start_radius_;} // WStartLine m_rRadius (0x1df)
     // A battle arena (*_b.wgm; sh_b alone has a WStartLine). 0x49eb70 mode 1: the
     // player takes the frame of the start row's +0x48 object moved 300
     // along its z axis; the opponent the +0x50 object's, its x and z axes
@@ -164,6 +167,7 @@ private:
     std::vector<Section> sections_;
     std::unordered_map<uint32_t,std::vector<int>> links_;  // node id -> sections whose rows link it
     Matrix4 start_line_{};
+    float start_radius_=5000;
     bool battle_=false;
     std::array<Matrix4,2> battle_frames_{};
     struct Shelter {Matrix4 frame{};std::array<float,6> box{};};

@@ -100,9 +100,16 @@ After a feature lands, update together:
   breath, tank gun, boomerang, TNT, storm cloud, detour sign, landmine),
 - trams on `dt_t1`, pause in course, profiles/saves (8 slots), two players in
   split-screen, battle on `*_b.wgm` arenas.
-- Not ported: remaining power-up effects/weapons, joysticks, complete race-world
-  rendering (lighting, culling, billboard orientation, animation), demos,
-  replays, full credits. The port is not a complete or playable game.
+- Course objects: dt_t1's trams, sh_t3's WLogRide, cc_t2's WMisty bridge
+  (`analysis/misty-bridge-20261106.md`), WGeyser, WFountain, WLogRollingB,
+  WDynamiteHole, WRolling, WChiselCrossover and WBlowUp
+  (`analysis/rolling-chisel-blowup-20261106.md`); other courses' classes are in
+  `TODO.md`. Laps follow the original's start line rule `0x49a2f0`
+  (`analysis/lap-line-geyser-20261106.md`).
+- Not ported: joysticks, parts of the power-up effects and their visuals, part
+  of the race-world rendering, sh_t3's WLogJam. Of the 16 courses outside
+  Championship I, cc_t2, cc_t4, dr_t3, dt_t3 and sh_t4 pass `native_drive_test`. The port is not a
+  complete game; see `TODO.md`.
 
 See `README.md` for the full implemented/remaining list and verification
 commands.
