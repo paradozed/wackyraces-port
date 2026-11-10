@@ -56,9 +56,9 @@ struct WpcWindow {
     std::array<VkSampler,8> samplers{};
     VkPipelineLayout pipeline_layout{};
     VkPipeline sprites{}, lines{};
-    // Material triangles by culling (bit 0), WPC_DRAW_ADDITIVE (bit 1) and
-    // WPC_DRAW_NO_DEPTH_WRITE (bit 2).
-    std::array<VkPipeline,8> materials{};
+    // Material triangles by culling (bit 0), WPC_DRAW_ADDITIVE (bit 1),
+    // WPC_DRAW_NO_DEPTH_WRITE (bit 2) and WPC_DRAW_INVERSE (bit 3).
+    std::array<VkPipeline,16> materials{};
     uint32_t draw_mode = 0;
     int brightness = 50; // MenuPrefs +0x20 (LUMINOSITE), 0x6f4588
     VkFormat depth_format{};
@@ -127,7 +127,7 @@ static VkImageView image_view(WpcWindow *w, VkImage image, VkFormat format, VkIm
     return view;
 }
 static VkPipeline pipeline(WpcWindow *w, VkPrimitiveTopology topology, bool depth_test=false, bool cull_back=false,
-                           bool additive=false, bool depth_write=true) {
+                           bool additive=false, bool depth_write=true, bool inverse=false) {
     VkShaderModule vert{}, frag{};
     try {
         VkShaderModuleCreateInfo module{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -164,8 +164,9 @@ static VkPipeline pipeline(WpcWindow *w, VkPrimitiveTopology topology, bool dept
         VkPipelineColorBlendAttachmentState attachment{};
         attachment.colorWriteMask = 15; attachment.blendEnable = VK_TRUE;
         // WPC's SRCALPHA/INVSRCALPHA default; draw flag 0x8000 sets ONE/ONE (0x4b3630).
-        attachment.srcColorBlendFactor = additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_SRC_ALPHA;
-        attachment.dstColorBlendFactor = additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        // 0x4b5550's mode bit 0x2 sets INVSRCALPHA/INVSRCCOLOR for the draw.
+        attachment.srcColorBlendFactor = additive ? VK_BLEND_FACTOR_ONE : inverse ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA : VK_BLEND_FACTOR_SRC_ALPHA;
+        attachment.dstColorBlendFactor = additive ? VK_BLEND_FACTOR_ONE : inverse ? VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         attachment.colorBlendOp = attachment.alphaBlendOp = VK_BLEND_OP_ADD;
         attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
         attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
@@ -308,7 +309,7 @@ static void swapchain(WpcWindow *w) {
     w->sprites = pipeline(w, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
     w->lines = pipeline(w, VK_PRIMITIVE_TOPOLOGY_LINE_LIST);
     for (uint32_t i = 0; i < w->materials.size(); ++i)
-        w->materials[i] = pipeline(w, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, true, i&1, (i&2)!=0, (i&4)==0);
+        w->materials[i] = pipeline(w, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, true, i&1, (i&2)!=0, (i&4)==0, (i&8)!=0);
     w->resize = false;
 }
 
@@ -759,7 +760,7 @@ void wpc_vk_draw_texture_tinted(WpcWindow *w, int x, int y, int width, int heigh
                                WpcTexture *texture, float r,float g,float b,float a) {
     rect(w,x,y,width,height,texture,r,g,b,a);
 }
-void wpc_vk_set_draw_mode(WpcWindow *w, uint32_t mode) { if (w) w->draw_mode = mode & (WPC_DRAW_ADDITIVE|WPC_DRAW_NO_DEPTH_WRITE); }
+void wpc_vk_set_draw_mode(WpcWindow *w, uint32_t mode) { if (w) w->draw_mode = mode & (WPC_DRAW_ADDITIVE|WPC_DRAW_NO_DEPTH_WRITE|WPC_DRAW_INVERSE); }
 void wpc_vk_set_mvp(WpcWindow *w, const float mvp[16]) { if (w && mvp) memcpy(w->mvp,mvp,64); }
 void wpc_vk_set_fog(WpcWindow *w, float r, float g, float b, float start, float end) {
     if (!w) return;
@@ -780,7 +781,7 @@ void wpc_vk_draw_textured_triangles(WpcWindow *w, WpcTexture *texture, const Wpc
 }
 void wpc_vk_draw_material_triangles(WpcWindow *w, WpcTexture *texture, const WpcTexturedVertex3D *vertices, uint32_t count, uint32_t clamp_axes, int two_sided) {
     if (!w || !vertices || !texture || count%3) return;
-    VkPipeline pipeline = w->materials[(two_sided ? 0 : 1) | (w->draw_mode & 6)];
+    VkPipeline pipeline = w->materials[(two_sided ? 0 : 1) | (w->draw_mode & 14)];
     draw(w,vertices,count,texture,pipeline,w->mvp,(clamp_axes&3)|4,true);
 }
 void wpc_vk_set_brightness(WpcWindow *w, int value) { if (w) w->brightness = std::clamp(value,0,100); }

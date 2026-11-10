@@ -1,4 +1,5 @@
 #include "game_motion.h"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -141,7 +142,7 @@ void MotionController::update(int32_t dt,MotionPairs* pairs) {
     accumulate(*pairs);
 }
 
-void pose_mesh(Mesh& mesh,const MotionPairs& pairs) {
+void pose_mesh(Mesh& mesh,const MotionPairs& pairs,std::vector<std::array<float,12>>* segments) {
     const size_t n=mesh.segments.size();
     if(pairs.size()!=n*9) bad("motion pairs do not match the segments");
     if(mesh.rest.size()!=mesh.vertices.size() || mesh.vertex_segment.size()!=mesh.vertices.size()) bad("mesh has no segment rest pose");
@@ -178,6 +179,10 @@ void pose_mesh(Mesh& mesh,const MotionPairs& pairs) {
         }
         world[s]=m;
     }
+    if(segments) {
+        segments->resize(n);
+        for(size_t s=0;s<n;++s) {for(size_t i=0;i<9;++i) (*segments)[s][i]=world[s].r[i];for(size_t i=0;i<3;++i) (*segments)[s][9+i]=world[s].t[i];}
+    }
     for(size_t i=0;i<mesh.vertices.size();++i) {
         // 0x43b900: v x basis + translation.
         const M& m=world[mesh.vertex_segment[i]];
@@ -186,6 +191,53 @@ void pose_mesh(Mesh& mesh,const MotionPairs& pairs) {
         out.x=r[0]*m.r[0]+r[1]*m.r[3]+r[2]*m.r[6]+m.t[0];
         out.y=r[0]*m.r[1]+r[1]*m.r[4]+r[2]*m.r[7]+m.t[1];
         out.z=r[0]*m.r[2]+r[1]*m.r[5]+r[2]*m.r[8]+m.t[2];
+    }
+}
+
+std::array<float,3> body_sway_gains(int vehicle) {
+    // Wine (cc_t1, vehicle 3): [car +0x24f] +0x17e = (0.7, 0.25, 0.25).
+    static const std::array<float,3> table[7]={{{0.6f,0.25f,0.3f}},{{0.7f,0.25f,0.4f}},{{0.7f,0.25f,0.4f}},{{0.7f,0.25f,0.25f}},
+                                               {{0.7f,0.25f,0.6f}},{{0.7f,0.25f,0.4f}},{{0.7f,0.25f,0.3f}}};
+    if(vehicle<0 || vehicle>=7) return {{0.25f,0.25f,0.5f}};
+    return table[vehicle];
+}
+SwayController::Biquad::Biquad(float gain,float alpha,float omega) {
+    // 0x440ab0: c0 = 2 a cos w, c1 = -a^2, b0 = (1 - c0 - c1) x gain x
+    // 0.28985509, b1 = 1.8 b0, b2 = 0.65 b0 (unit gain at rest x gain).
+    c0=2*alpha*std::cos(omega);c1=-alpha*alpha;
+    b0=(1-c0-c1)*gain*0.28985509f;b1=b0*1.8f;b2=b0*0.65f;
+}
+float SwayController::Biquad::step(float x) {
+    // 0x440b40: w = c1 s1 + c0 s0 + x; y = b1 s0 + b2 s1 + b0 w.
+    const float w=c1*s1+c0*s0+x,y=b1*s0+b2*s1+b0*w;
+    s1=s0;s0=w;return y;
+}
+SwayController::SwayController(const std::array<float,3>& r) {
+    // 0x440d40 with the gains of 0x440be0: (gain, alpha, omega) per filter.
+    filters_={{Biquad(0.1f,0.2f,0.35f),Biquad(0.8f,0.6f,0.3f),Biquad(0.1f,0.3f,0.3f),
+               Biquad(r[0],0.7f,0.4f),Biquad(r[1],0.9f,0.5f),Biquad(r[2],0.9f,0.4f),
+               Biquad(0.1f,0.9f,0.6f)}};
+}
+void SwayController::update(const std::array<float,16>& m,MotionPairs& pairs) {
+    const std::array<float,3> p{{m[12],m[13],m[14]}};
+    if(!started_) {position_=p;started_=true;}   // 0x440be0 takes the position, velocity 0
+    std::array<float,3> v{},a{};
+    for(size_t i=0;i<3;++i) {v[i]=p[i]-position_[i];a[i]=v[i]-velocity_[i];}
+    position_=p;velocity_=v;
+    // 0x43ba80: into model space.
+    const std::array<float,3> l{{m[0]*a[0]+m[1]*a[1]+m[2]*a[2],m[4]*a[0]+m[5]*a[1]+m[6]*a[2],m[8]*a[0]+m[9]*a[1]+m[10]*a[2]}};
+    // 0x452ed0: (0, 1, 0.2) x l.
+    const std::array<float,3> r{{1*l[2]-0.2f*l[1],0.2f*l[0]-0*l[2],0*l[1]-1*l[0]}};
+    float in[6]={-l[0],-l[1],-l[2],r[0],r[1],r[2]};
+    for(size_t i=0;i<6;++i) {in[i]=std::clamp(in[i],-15.f,15.f);values_[i]=filters_[i].step(in[i]);}
+    values_[6]=0;values_[8]=0;
+    values_[7]=filters_[6].step(std::clamp(l[1]*-0.01f,-20.f,20.f));
+    // 0x4410f1: every segment, weight +0x20 = 1.
+    for(size_t seg=0;seg+1<=pairs.size()/9;++seg) for(size_t k=0;k<9;++k) {
+        auto& pr=pairs[seg*9+k];const float x=values_[k];
+        if(pr[0]==-1.f) continue;
+        if(x>0) {if(x>pr[0]) pr[0]=x;}
+        else if(x<pr[1]) pr[1]=x;
     }
 }
 }

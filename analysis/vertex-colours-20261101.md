@@ -105,4 +105,22 @@ Wine (scratch prefix, Xvfb :77) and native (Xvfb :79) were compared at `ct_t1`'s
   |---|---|---|
   | 231,234,239 | 154,158,159 | 222,228,228 |
 
-- Not compared: the splash and WalkOnWater (additive, now darker by TRAN × VCOL), and the colour of untextured parts under Direct3D.
+- Not compared: the splash and WalkOnWater (additive, now darker by TRAN × VCOL).
+
+## Untextured parts with VCOL (2026-11-07)
+
+Under Direct3D (LIGHTING 0, no material colour) the diffuse vertex colour is the only colour source, so
+untextured parts that keep VCOL use the same rule as textured ones (ftol(VCOL × 255), `0x4b2633` path).
+`game_world` now does this; untextured parts without VCOL still use COLS[1] (Glide path, not compared).
+
+Checked against Wine on `sh_t4`'s WGoldenGate doors (material 115, untextured; `WPC_PLACE=-11527,22747,1.5708`,
+same framing in both builds):
+
+| | Mean rgb of the door frame |
+|---|---|
+| Mesh VCOL × 255 | 96, 65, 22 |
+| Wine | 112, 84, 21 |
+| Native before (COLS[1]) | 255, 234, 0 |
+| Native after | brown, visually matching Wine |
+
+Other untextured VCOL geometry was not framed under Wine.

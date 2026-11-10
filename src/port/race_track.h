@@ -107,6 +107,10 @@ public:
     size_t shelters() const {return shelters_.size();}
     const Matrix4& wrap() const {return wrap_;}
     const Matrix4& unwrap() const {return unwrap_;}
+    // The sections whose enabling (0x4a8680) activates a node: the rows' +0x58
+    // brick and the top-level nodes their links name, with their subtrees
+    // (empty: no section, always drawn).
+    const std::vector<int>& node_sections(uint32_t id) const {static const std::vector<int> none;const auto i=node_sections_.find(id);return i==node_sections_.end()?none:i->second;}
     int laps() const {return laps_;}
     const std::vector<BendSign>& bend_signs(int section) const {return sections_.at(size_t(section)).signs;}
     const std::vector<PowerUpSpot>& power_ups() const {return power_ups_;}
@@ -114,8 +118,8 @@ public:
     // The moving course objects at their initial state (dt_t1's trams).
     const CourseObjects& objects() const {return objects_;}
     size_t sections() const {return sections_.size();}
-    // A section's route length (+0x34; provisional: the entry node's distance
-    // in the section's distance field).
+    // The entry node's distance in the section's distance field (native;
+    // the original's progress uses row_length, +0x34).
     float section_length(int section) const {return sections_.at(size_t(section)).entry_distance;}
     // A section's brick frame (local -> world); the original keeps car
     // positions (+0x288) in their section's local frame.
@@ -137,6 +141,12 @@ public:
     // (+0x34), for robots outside the player's rows (0x4a1c8b).
     const Matrix4& entry_frame(int section) const {return sections_.at(size_t(section)).entry_frame;}
     int row_length(int section) const {return sections_.at(size_t(section)).row_length;}
+    // The row's box (+0x1c min, +0x28 max, world), which 0x4a89c0 copies into
+    // an enabled row's slot (+0x78): 0x4a6d20/0x4a6b30 test x and z only,
+    // bounds included.
+    bool row_box_holds(int section,float x,float z) const {
+        const float* b=sections_.at(size_t(section)).box;return x>=b[0] && x<=b[2] && z>=b[1] && z<=b[3];
+    }
     const Vec3& exit(int section) const {return sections_.at(size_t(section)).exit;}
     // The WGNR record flags' low byte is a surface type, all inside the
     // 0x018000ff ground mask: cc_t1 uses 0x1 banks, 0x2 road/sand and 0x4 the
@@ -151,6 +161,7 @@ private:
         Matrix4 transform{},inverse{};
         Vec3 entry{},exit{};
         Matrix4 entry_frame{};int row_length=1;
+        float box[4]{};   // row +0x1c..+0x30: min x, min z, max x, max z (world)
         std::vector<BendSign> signs;
         // Progress field: nodes are the drivable surfaces of each 150-unit
         // column (first[c]..first[c+1]), with distances to the exit portal,
@@ -166,6 +177,7 @@ private:
     long cell(const Section& s,const Vec3& p) const;
     std::vector<Section> sections_;
     std::unordered_map<uint32_t,std::vector<int>> links_;  // node id -> sections whose rows link it
+    std::unordered_map<uint32_t,std::vector<int>> node_sections_;  // node id -> sections whose enabling draws it (0x4a8680)
     Matrix4 start_line_{};
     float start_radius_=5000;
     bool battle_=false;

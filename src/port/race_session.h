@@ -132,6 +132,9 @@ public:
     bool camera_near(int human=0) const {return cameras_[two_players() && human?1:0].near();}
     // The general.wgm members the camera keeps (follow_camera_members).
     void set_camera_members(const FollowCameraMembers& m);
+    // The robots' item aims (general.wgm's WPowerUpSprites; default_item_aims otherwise).
+    void set_item_aims(const ItemAims& a) {aims_=a;}
+    const ItemAims& item_aims() const {return aims_;}
     int lap2() const {return two_players()?std::min(opponent_bodies_[0].laps+1,track_.laps()):0;}
     int rank2() const {return two_players()?race_rank(0):0;}
     uint64_t updates() const {return updates_;}
@@ -153,6 +156,7 @@ public:
         bool rank_boosted=false; // +0x30
         int rank_scale=0;       // the last 0x4e4d30 result
         int effect=0;           // +0x1c7: 5 waits at a WTram crossing
+        int side_timer=0;       // +0x1cb: a WSaw's 3 updates aside
         VehicleTuning base;     // +0x21b, +0x21f, +0x223: the unscaled rows
         // The robot's items: 0x4679d0's slots for m_isrobotauto (no
         // roulette: a pickup draws the icon and the slot waits, 0xff, for
@@ -193,6 +197,8 @@ public:
     // +0x1a7 (0x4a3d20): (lap - 1) x the lap length + the sections passed +
     // the distance into this one; a car -1 is the player.
     int race_distance(int car) const;
+    // A section's length in the race distance (see progress_length in the .cpp).
+    float progress_length(int section) const;
     // +0x1af: 1 for the leader.
     int race_rank(int car) const;
     int opponent_laps(size_t i) const {return opponent_bodies_.at(i).laps;}
@@ -219,6 +225,8 @@ public:
     int pickup_sounds() const {return body_.pickup_sounds;}
     // Debug (WPC_WEAPON): player 1 holds weapon icon 11..25 with a full charge.
     void give_weapon(int icon) {if(icon>=0x0b && icon<=0x19) {items_.weapon=icon;items_.weapon_state=3;items_.charge=3;}}
+    // Debug (WPC_GADGET): player 1 holds gadget icon 0..10 with a full charge.
+    void give_gadget(int icon) {if(icon>=0 && icon<=10) {items_.gadget=icon;items_.gadget_state=3;items_.charge=3;}}
     int hit_sounds() const {return body_.hit_sounds;} // WackyAutoBomba activations heard (+0x3e3)
     int oil_sounds() const {return body_.oil_sounds;}
     // +0x25b: braking or sliding (skid marks on surface 2).
@@ -248,15 +256,32 @@ public:
     const std::vector<Tnt>& tnts() const {return tnts_;}
     const std::vector<Storm>& storms() const {return storms_;}
     int weapon_effect() const {return body_.weapon.id;}
-    void use_weapon_now(int icon,int car=-1) {use_weapon(icon,car);} // tests
+    void use_weapon_now(int icon,int car=-1,bool backward=false) {use_backward_=backward;use_weapon(icon,car);use_backward_=false;} // tests
     int player_effect() const {return body_.effect;}
     bool turbo() const {return body_.turbo>0;}
     bool shielded() const {return body_.shielded;}
     void use_gadget_now(int icon,int car=-1) {use_gadget(icon,car);} // tests
     // A car's running effects (-1 the player).
     int gadget_effect(int car) const {return (car<0?body_:opponent_bodies_.at(size_t(car))).effect;}
+    // FlyPower's counter (+0x64) while the vehicle's own gadget runs, else 0.
+    int flying(int car) const {return (car<0?body_:opponent_bodies_.at(size_t(car))).fly;}
+    // The tank's turret yaw (+0x3ab).
+    float turret(int car) const {return (car<0?body_:opponent_bodies_.at(size_t(car))).turret;}
+    // The steering angle (+0x403).
+    float steer(int car) const {return car<0?player_.steer:opponents_.at(size_t(car)).car.steer;}
+    // The wheels' roll angle (+0x2a4).
+    float wheel_spin(int car) const {return (car<0?body_:opponent_bodies_.at(size_t(car))).wheel_spin;}
+    // MonsterTires' tyre scale (+0x6c) while it runs, else 0.
+    float monster_scale(int car) const {const Body& b=car<0?body_:opponent_bodies_.at(size_t(car));return b.monster>0?b.monster_scale:0.f;}
     int weapon_effect(int car) const {return (car<0?body_:opponent_bodies_.at(size_t(car))).weapon.id;}
+    // The running weapon's icon and timer (the action's counter, e.g. WPU_Breath +0x38).
+    int running_weapon(int car) const {return (car<0?body_:opponent_bodies_.at(size_t(car))).weapon.icon;}
+    int weapon_timer(int car) const {return (car<0?body_:opponent_bodies_.at(size_t(car))).weapon.timer;}
+    // The running weapon's action +0x5c (used with look-back held).
+    bool weapon_backward(int car) const {return (car<0?body_:opponent_bodies_.at(size_t(car))).weapon.backward;}
     void drop_mine(int car,bool detour=false,bool oil=false);
+    // 0x4a6d20: the first enabled row whose box holds (x, z), or -1.
+    int slot_section(const Vec3& p) const;
     // WPU_OilSpill's trap (0x4ddfd1): the car slides on its own motion and spins.
     void slip(int car); // WPU_Landmine (or WPU_Detour) from the player (-1) or an opponent
     const SurfaceGrip& grip() const {return body_.grip;}
@@ -265,6 +290,8 @@ public:
     const std::vector<uint32_t>& knocked_objects() const {return knocked_objects_;}
     // Race-order progress: route sections passed plus the current fraction.
     float player_progress() const {return progress(player_.position,player_.section,player_.loops);}
+    // The original's measure (route cursor, 0x4a3937), which the standings use.
+    float player_route_progress() const {return float(player_.loops*int(track_.sections())+player_.section)+fraction(-1);}
 private:
     float progress(const Vec3& position,int section,int loops) const;
     float opponent_progress(size_t i) const;
@@ -282,6 +309,9 @@ private:
     void car_contacts(RaceCar& car,Body& b,Vec3& move);
     void settle(RaceCar& car,Body& b,bool player);
     void cross_seam(RaceCar& car,Body& b,int step,bool player);
+    // A flying weapon across the seam (0x4a23c2, 0x4a25b5): its point and
+    // the given directions through the loop transform. Returns the step.
+    int carry_across_seam(Vec3& at,int& section,std::initializer_list<Vec3*> along={}) const;
     void other_cars(size_t self,RoboCarState& state) const;
     void respawn(RaceCar& car,Body& b,bool player);
     void crossings(RaceCar& car,Body& b,const Vec3& before,bool player);
@@ -317,6 +347,7 @@ private:
         bool weapon_preview=false; // +0x395
     };
     Items items_,items2_; // player 1's; player 2's (two players)
+    ItemAims aims_=default_item_aims();
     void human_items(Items& it,int vehicle,int place,Body& body,bool can_use,const DriveInput& input,int car);
     std::vector<PowerUpState> power_ups_;
     float spin_=0;
@@ -340,7 +371,9 @@ private:
     std::vector<ObjectHit> object_hits_;std::vector<int> object_effects_;
     // The running weapon effect (+0x389): its id, the updates left and, for
     // WPU_Breath, the update its projectile leaves.
-    struct WeaponEffect {int id=-1,timer=0,fire_at=-1,icon=-1;};
+    // backward: the action's +0x5c, set by the use (0x4d2970 <- 0x4d24f0) when a
+    // human holds look-back (input 0x4, 0x52aad4); robots never.
+    struct WeaponEffect {int id=-1,timer=0,fire_at=-1,icon=-1;bool backward=false;};
     // Per-car simulation state beside the RaceCar: returns, drowning, laps
     // and the start-line sections visited.
     struct Body {
@@ -379,6 +412,7 @@ private:
         // (0x472890): 0.4 for rocks, 0.8 for the slide start.
         // yaw: the slot's rotation step (+0x10), decaying by yaw_decay (+0x1c;
         // < 0: by decay, as the car contacts' slots are ported).
+        bool hover=false;                  // +0x93b = 0, on a WRotoHill
         struct Push {Vec3 force; float decay; float yaw=0; float yaw_decay=-1;};
         std::vector<Push> pushes;
         Vec3 last{};bool has_last=false; // +0x423: the position an update ago
@@ -387,7 +421,10 @@ private:
         int hit_sounds=0; // +0x3e3 played on a hit's activation (0x47d768)
         int oil_sounds=0; // +0x3cb played by an oil spill (0x4de12c)
         int siren=0;      // WPU_FireSiren's life left (+0x38)
-        int monster=0;    // MonsterTires' updates left
+        int monster=0;    // MonsterTires running (its +0x68 stage + 1), 0 when off
+        int monster_count=0;float monster_scale=1;   // its +0x64 and +0x6c
+        float wheel_spin=0;   // +0x2a4
+        float turret=0;       // +0x3ab: vehicle 5's turret yaw
         int fly=0;float fly_gravity=0,fly_top=0; // FlyPower's counter (+0x64) and the saved rows (+0x6c)
         int cursor=-1,cursor_section=-1; // +0x2c5's +0x17 (remaining, 1/256) and its section
         int follow_lock=0; // +0x89b: 10 (robot) or 2 (player) after a car contact (0x46b64c)
@@ -406,6 +443,7 @@ private:
     DriveInput input1_{},input2_{};
     std::vector<Opponent> opponents_;
     bool robots_near_=false,robots_enabled_=true;
+    bool use_backward_=false;   // look-back held by the human using an item (0x4d24f0)
     std::vector<Body> opponent_bodies_;
     bool raining_=false,snowing_=false;
     int mode_=0;
@@ -428,6 +466,39 @@ private:
     // moving spd (200) a step, reaches it (provisional timing), if no hit runs;
     // voice events 6 (user) and 5 (target).
     struct Strike {int owner=-1,target=-2;uint16_t type=0;int wait=0;};
+public:
+    // WPU_BootKicker's arm (init 0x4d8830, update 0x4d8aa0, placement
+    // 0x4d8710): the boot GDHModel (general.wgm 0x32d, sphere radius 100) on a
+    // brick at the car model's (0, 20, 190), or (0, 20, -160) backward
+    // (0x2ab10b0), turned about y by the aim (+0x88), its segment 1 moved by
+    // the extension +0x68 (0x4381a0).
+    struct Kick {
+        int owner=-1,target=-2;bool backward=false;
+        int state=0,count=0;   // +0x84, +0x3c
+        Vec3 ext{},vel{{0,0,200}};   // +0x68, +0x74
+        float angle=0;         // +0x88
+        bool done=false;
+        Matrix4 brick=identity_matrix();   // the brick's frame (last placement)
+    };
+    const std::vector<Kick>& kicks() const {return kicks_;}
+    // WPU_Flipper's arm (init 0x4d9a20, update 0x4d9c90, placement 0x4d9890):
+    // GDHModel 0x337 on a brick at the car model's (0, 20, 100), or (0, 20,
+    // -100) backward (0x2ab11e8), turned about y by +0x7c; its segment 1 at
+    // (0, 0, reach +0x70), segment 2 scaled by min(1, +0x80) and segment 4 by
+    // +0x80; its clip 0 is held at time 51 while the arm reaches out.
+    struct Flip {
+        int owner=-1,target=-2;bool backward=false;
+        int state=1;            // +0x78
+        float reach=0,angle=0,scale=0;   // +0x70, +0x7c, +0x80
+        int time=11;            // the clip controller's +0x2c
+        bool struck=false,done=false;   // +0x3c
+        Matrix4 brick=identity_matrix();
+    };
+    const std::vector<Flip>& flips() const {return flips_;}
+private:
+    std::vector<Kick> kicks_;
+    std::vector<Flip> flips_;
+    void update_kicks();
     std::vector<Strike> strikes_;
     void update_strikes();
     std::vector<Barrier> barriers_;
@@ -437,7 +508,7 @@ private:
     // 0x4a71e0 / 0x403d69 (provisional): the nearest car but skip within
     // range and within angle of heading, -2 when none.
     void use_weapon(int icon,int car=-1);
-    void fire(int icon,int owner);
+    void fire(int icon,int owner,bool backward=false);
     void update_weapons();
     void use_gadget(int icon,int car=-1);
     void update_gadgets();

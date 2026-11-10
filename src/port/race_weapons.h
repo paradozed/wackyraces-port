@@ -7,17 +7,30 @@ namespace wpc {
 using Vec3=std::array<float,3>;
 // 0x47d890(r, g, b, n), the hit's vertex colour sequence for the car model
 // (+0x3e, +0x42 vertices; the start colours saved at +0x56): mode +0x4a 0
-// steps every vertex 1/13 (0x513010) toward the target and goes on once
-// every step is below 2/255 (0x51300c); 1 sets the target; 2 holds it for
-// n + 1 updates (+0x46); 3 steps back toward the saved colours the same way;
-// 4 restores them; 5 returns 1. Every vertex is lerp(start, target, f), so
-// the steps depend only on spread, each channel's largest |target - start|.
+// steps every vertex 1/13 toward the target and goes on once every step is
+// small; 1 sets the target; 2 holds it for n + 1 updates (+0x46); 3 steps
+// back toward the saved colours (+0x56) the same way; 4 restores them; 5
+// returns 1.
+// Renderer 1 (0x6f5958 = 1, as under Wine): the colours are packed bytes and
+// a step is (target - c) / 13 truncated toward zero (0x47d906, the 0x4ec4ec4f
+// division), the mode going on once every channel's largest |step| is below
+// 2. (Renderer 2's float path, 0x47dc92, steps by x 0x513010 against 2/255.)
+// The truncating step keeps the vertices in order, so each channel's two
+// extreme vertices (the model's darkest and lightest) decide the modes.
+// target: the 0..1 colour; f: 0 at rest, 1 on the target (an approximation
+// for callers; tint_colour gives a vertex's colour); steps: the fading steps
+// taken in the current mode.
 struct Tint {
     std::array<float,3> target{};
     float f=0;
     int mode=0,hold=0;
+    bool started=false,from_target=false;
+    std::array<std::array<int,2>,3> rest{},cur{};   // per channel: lo, hi
+    int steps=0;
 };
-bool step_tint(Tint& t,const std::array<float,3>& spread,int n=10);
+bool step_tint(Tint& t,const std::array<float,3>& lo,const std::array<float,3>& hi,int n=10);
+// A vertex's colour under the tint, from its own rest colour (0..1).
+std::array<float,3> tint_colour(const Tint& t,const std::array<float,3>& rest);
 
 // WackyAutoBomba (factory 0x47c950, update 0x47e220, the car's +0x36d): a
 // car's reaction to a hit. A weapon writes the hit type into +0x2c only
@@ -40,6 +53,28 @@ struct BombHit {
     float scale_y=1;    // 0x43b190(1, +0x66, 1), type 0x200's squash
     float squash_v=0;   // +0x62
     int sub=0;          // +0x28
+    // Types 0x10/0x100 (0x47ebea): the clone of m_BoomerangHit (+0x4e,
+    // general.wgm GDModel 0x391, cloned by 0x47d525) over the car. Its basis is
+    // the template's times scale (or the identity's, from_identity, after the
+    // reset 0x43b090), then turned about y by turn (0x43b4a0).
+    struct SpinModel {bool shown=false,from_identity=false;int stage=0;float scale=1,turn=0;};
+    SpinModel spin;     // stage +0x3a
+    // Type 4 (0x47ea3b): the clone of m_bluepool (+0x52, general.wgm GDModel
+    // 0x1c1, cloned with an identity basis by 0x47d5e5). car: the car's frame
+    // at stage 0, whose body model's frame (+0x32 = car +0x24f) the pool takes;
+    // scale multiplies its x, y and z axes (0x43b190).
+    struct PaintPool {bool shown=false;int stage=0;std::array<float,3> scale{{1,1,1}};std::array<float,16> car{};};
+    PaintPool pool;     // stage +0x3a
+    // Type 2 (0x47e277, stages 0x47f230): the clone of m_TankGunHit (+0x5a,
+    // general.wgm GDModel 0x392, a container, with GDHModel 0x393: GHMS
+    // 0x102f1, six segments, no MTNL). frame: the car's frame taken while
+    // following (axes at stages 0..1, the position through stage 2); scale
+    // multiplies its axes (0x402027); segments: the scale overrides of
+    // segments 1, 3, 4 and 5 (0x437f70 flag 1) while override is set.
+    // car_hidden: the car, its wheels (+0x273..+0x27f) and +0x32 carry 0x100.
+    struct TankHit {bool shown=false,car_hidden=false,override=false;int stage=0;
+                    std::array<float,3> scale{{1,1,1}};std::array<std::array<float,3>,4> segments{};std::array<float,16> frame{};};
+    TankHit tank;       // stage +0x3a, counter +0x28 (sub)
     bool done=false;    // +0x36
     bool active() const {return type!=0;}
 };
@@ -47,7 +82,14 @@ struct BombHit {
 // hit; guard 2 cancels it and becomes 1, or 8 for paint (type 4). Returns
 // whether the hit takes; the cancelled action clears +0x2c (0x47f690).
 bool start_bomb(BombHit& hit,uint16_t type);
-struct BombStep {bool hold=false;bool boost=false;};
+// smoke: types 8, 0x40 and 0x80 clone m_smokeparticle this update (0x47ed6e:
+// +0x28 counts every update of the hit, and every 5th clones it); flip: the
+// 10th ones negate the clone's spin (its flamesmoke +0x40).
+// pool: type 4's stage 0 takes the car's frame this update (BombHit::pool.car).
+// tank_axes / tank_position: type 2 takes the car's frame (axes and position,
+// or the position alone) into BombHit::tank.frame this update.
+// tank_chunks: type 2's stage 3 clones its eleven m_Particle this update.
+struct BombStep {bool hold=false;bool boost=false;bool smoke=false,flip=false,pool=false;bool tank_axes=false,tank_position=false,tank_chunks=false;};
 // What the activation (0x47d66f..) adds to the car: types & 0xda a hop, a
 // +0x48b slot (0, 50, 0) decaying by 0.9; types & 0x3fc a 4 pi spin; 0x1000
 // a -pi turn and 0x800 a +pi turn (WPU_Detour).
@@ -110,10 +152,25 @@ struct Projectile {
     int struck=-2;       // +0x40, the car hit
     float travelled=0;   // +0x38
     float radius=150;    // the DragonBreath's PRIM sphere
-    int section=0;       // +0x104, for the loop seam in 0x4a71e0
+    int section=0;       // +0x104 (the slot row's at fire, 0x4a6b30), for the loop seam in 0x4a71e0
     uint32_t object=0;   // the cloned DragonBreath
     bool done=false;
+    // WRocketTail (record 0x2ab1a30, instance vtable 0x516b8c; init 0x4ea7d0,
+    // update 0x4ea960): the last m_Length (16 in every template) positions,
+    // newest first, with the frame's up and x axes; k is m_Width's factor (1 for
+    // the init's copies, 3 = 0x511894 for the update's). phase: +0xcef, 0.3 an
+    // update (0x516c30); updates: the tail's updates so far (+0x28 = 12 after one).
+    struct TailPoint {Vec3 position{},up{},side{};float k=1;};
+    std::array<TailPoint,16> tail{};
+    float tail_phase=0;
+    int tail_updates=0;
+    // The breath's GD3DFilm (0x39d: m_AnimType 2, m_Speed 1, frames 0..7;
+    // 0x430110): its accumulator +0x196.
+    float film=0;
 };
+// The tail's update (0x4ea960): with m_Tick 0 the points shift back every
+// update and point 0 takes the new frame.
+void update_tail(Projectile& p,const Vec3& up,const Vec3& side);
 // The weapons that clone one: icon 25 WPU_Missile (DragonBreath 0x38c, type
 // 8), 14 WPU_Breath (0x39a, type 8, maneuverspd 20), 16 WPU_TankGun (0x3a8,
 // type 2, aimed at once), 15 WPU_Boomerang (0x3a1, type 0x10, aimed at
@@ -144,11 +201,20 @@ struct Tnt {
     float speed=300;            // +0x74
     int bounces=0;              // +0x64
     int owner=-1;               // +0x28
-    int section=0;              // the object's +0x104, the thrower's at first
+    int section=0;              // the object's +0x104: its slot row's at fire (0x4a6b30), else the thrower's
     int life=300;               // m_nLifeTime (provisional: not read here)
     bool done=false;
 };
 constexpr float tnt_forward=300,tnt_rise=25,tnt_gravity=4,tnt_reducer=0.8f,tnt_radius=150,tnt_range=5000,tnt_angle=1.0472f;
+// An item's aim for the robots (0x4e5b0a, gadget 9 at 0x4e5b61, battle mode
+// 0x4e5d77): the object query 0x403d69 with range ftol(+0xf8) and angle +0x100
+// of the record of its icon's WPowerUpSprite (the HUD table 0x2ab078c[icon],
+// which car +0x375 holds): m_range (0x284) and m_visangle (0x285).
+struct ItemAim {float range=5000,angle=1.0471976f;};
+using ItemAims=std::array<ItemAim,27>;
+// general.wgm's 27 WPowerUpSprites in tree order (read under Wine on cc_t1:
+// icons 0..26 are runtime nodes 0x36b..0x385 with the same values).
+ItemAims default_item_aims();
 // 0x4dcac0: the car's frame lifted by 100; at a target (0x4a71e0, 60
 // degrees, 5000) the velocity is the unit direction x 300 plus 25 up,
 // otherwise the car's (0, 25, 300).
@@ -167,7 +233,8 @@ bool bounce_tnt(Tnt& t,const Vec3& hit,const Vec3& normal,const Vec3* target);
 // direction) is struck once (the +0x90 vehicle mask, the thrower's bit
 // set at the start) with type 0x400, written unconditionally, and followed
 // for 30 updates (2 when its guard is not 1); past its life it rises by 4
-// per update and fades for 40 updates.
+// per update for 40 updates, its sprite turning back from 1 radian (not a
+// fade: the original's alpha stays).
 struct Storm {
     Vec3 position{},velocity{},waypoint{};
     int state=0;        // +0x34: 0 roaming, 1 over a car, 2 fading
@@ -175,8 +242,13 @@ struct Storm {
     int timer=0;        // +0x3c
     unsigned mask=0;    // +0x90
     int owner=-1,target=-2;
-    int section=-1;uint32_t polygon=0xffffffff; // +0x8c, the last route polygon
-    float fade=1;       // +0x152
+    bool backward=false; // the action's +0x5c: backward links (0x4e14e0)
+    int section=-1;uint32_t polygon=0xffffffff; // the slot row's at fire (0x4a6b30), then the last route polygon's (+0x8c)
+    // The GD3dSprite's +0x152 (property 0x0f, 8 before m_RenderSetting
+    // +0x15a): its angle about the view axis in radians (the sprite draw
+    // 0x419eef -> 0x43b690). Only state 2 writes it: timer x 0.025
+    // (0x4e196a, 0x5169e0); before, the template's 0.
+    float angle=0;
     bool done=false;
 };
 constexpr float storm_speed=250,storm_height=400,storm_range=700;
@@ -193,7 +265,7 @@ struct Landmine {
     int life=300;   // +0x38, counted down every update
     int lifetime=300; // m_nLifeTime, for the unlock test
     int owner=-1;   // +0x28: the car that dropped it (-1 the player)
-    int section=0;  // the object's +0x104 (provisional: the dropper's)
+    int section=0;  // the object's +0x104: its slot row's (0x4a6d20), else the dropper's
     uint16_t type=0x80;
     float gravity=50,trap=200;
     bool detour=false;
@@ -224,8 +296,8 @@ Landmine drop_hive(const Vec3& position,float yaw,int owner);
 struct Barrier {
     Vec3 position{};
     float yaw=0;
-    int owner=-1,section=0;
-    bool tree=false,landed=false,done=false;
+    int owner=-1,section=0;   // +0x104: its slot row's (0x4a6d20), else the ground's at landing
+    bool tree=false,landed=false,done=false,filed=false;
     int life=150,fade=0,scale_num=3;
     uint32_t stopped=0;
 };
@@ -239,8 +311,8 @@ constexpr int landmine_unlock=15;
 // m_rGravity 100, m_nUnlockTime 15; on landing rand() % 100 < 50 picks
 // type 0x1000, else 0x800 (the sign turned round); armed, the car the
 // 0x4a71e0 query finds (0x4e373a: owner excluded, 2 pi, flag 1, range
-// +0x2c, provisional: m_rTrapRange's 150), idle and strictly within 150 in
-// 3D (0x51493c), takes the type.
+// +0x2c: the icon's WPowerUpSprite m_range, 5000, set by the session), idle
+// and strictly within 150 in 3D (0x51493c), takes the type.
 Landmine drop_detour(const Vec3& position,float yaw,int owner,bool left);
 }
 #endif

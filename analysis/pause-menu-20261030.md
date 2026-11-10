@@ -170,3 +170,28 @@ The MenuPrefs control table follows (`0x40c73e`, when the device `0x6f4580` is â
 - The trigger `0x432b15..0x432b79`: unless the manager state `+0xf30` is 5, 6, 7 or 10, player 1's pressed bit `0x800` (`0x6e42b0`) gives player 0; in two players (`app+0x1a64` = 1) player 2's (`0x6e42b2`) gives 1 and wins. With `0x6e457f` and `0x6e4585` clear, the pause brick (`+0xc` |= 2) gets the player in `+0x12b` (constructor `0x490130` sets 0); `0x4903da..0x490419` copy it into the pause nodes' `+0xc0`.
 - `0x490950` then shows 198 (player 0) or 199 for text 179. English: PAUSE / GAME PAUSED / GAME PAUSED; the other languages use the same text for all three.
 - Native: `MenuController::text_override` (two players), `set_pause_player(0)` (the port pauses on player 1's Escape). Checked in `native_menu_test general.wgm`.
+
+## Player 2's pause key (2026-11-08)
+
+- **Bindings.** `0x40645b` is called with (device, list, DIK, device bit). In list 1 (the race),
+  device bit `0x2000` (input `0x800`) is bound only to Escape (DIK 1) for player 1's keyboard
+  (`0x40c87d` with the MenuPrefs keys, `0x40c9ce` with the fixed keys used when player 1 has a
+  joystick).
+- **Player 2.** Its lists (`0x40ca65..0x40cc79` from MenuPrefs, `0x40ccb7..0x40cd9e` fixed: V, N, G,
+  B, left Shift, A, X, Z, and `0x40ce03..0x40cf22`) bind the eight controls only.
+- **So:** on the keyboard only player 1 pauses. Player 2's trigger (`0x6e42b2`, `0x432b15`) needs a
+  joystick button on device bit `0x2000`; the joystick bindings are not traced.
+- **Native:** it pauses on player 1's Escape (`set_pause_player(0)`), which matches.
+- A static reading of the binding calls; not checked under Wine.
+
+## RETOUR DE FORCE's availability (2026-11-08)
+
+- The controls page's class has vtable `0x513e48` (constructor `0x48e77a`). Its slots `+0x38`,
+  `+0x3c` and `+0x40` (`0x48e810`, `0x48e850`, `0x48e890`) call `0x48eff0`.
+- `0x48eff0` reads the player's device (`0x6f4580[player]`, the MenuPrefs `+0x18`/`+0x1c`):
+  - **âˆ’1, keyboard:** two `0x48cec0` calls (the rows' grey levels), then `+0x50` = `0x48cd80`(8).
+    It clears row 8's availability, RETOUR DE FORCE.
+  - **A joystick:** two other `0x48cec0` calls. If the device entry (`0x54190c[device]`) has bit
+    `0x100` at `+0x36f` (force feedback), it calls `+0x60` = `0x48cd10`(2, 8).
+- This is the caller the earlier note left open. Natively, `MenuController::availability` gives 0
+  for that row (keyboard only), as the original does with a keyboard.

@@ -465,3 +465,66 @@ Native replay of the Wine placement: the same yaw steps on the ground and in the
 | `ct_t1` | 108.6 s | 1 lap |
 
 Not compared: the right-hand ramp lane (x ≈ 23300) in near mode.
+
+## The barrier settled against Wine (20261106)
+
+Corrects the two sections of 20261031 above. Harness: sh_t1, vehicle 3, the
+player written in one process (`hops`: 2 to 3 lines at speed 0, 30 ms apart, then
+the speed; pitch and roll 0), logged every 10 ms, with jump hooks on all 20
+writes that can zero `+0x3ef` appending to a ring. The native run holds the same
+state (position, yaw, speed 0, pitch and roll 0) for the same updates.
+
+**Three causes, all in the original's code:**
+
+1. **Wall rays' centre.** `0x46bab5` takes C from `0x404def` (the car's world
+   frame). At that point the update's motion has only reached `+0x288`
+   (`0x46ba3f`), so C.x and C.z are the **last update's** position. The rays run
+   from that centre + 20 % to the new probes. Native: `wall_contacts(.., before)`.
+   Contact turn on the first hit: Wine -2.8400 -> -2.8155; old native -2.8370; now
+   -2.8157. This probably also explains the "native push lifts more than the
+   original's" mystery above (not re-measured).
+2. **Player's ground rays.** `0x46c7f6` scales the up axis by 1.3 (`0x512a40`)
+   **before** the robot/player branch at `0x46c82a`, so the player's rays
+   (`0x46d7f4`) also run from 104 above to 39 below, not 80 and 30. Landing on the
+   barrier: Wine airtime 1 on the hit's update; old native one update later and
+   4.6 lower for the rest of the slide; now the same update and height.
+3. **Slot tilt.** The step uses the last update's probes, so the slots' pitch and
+   roll (`0x46b9a0`, stored at `0x46c500`) reach it one update later. Native
+   applied them before the step. Wine y 947.35, 947.31, 948.44; native now the same.
+
+**Fall** (-15100, 960, -2850, yaw -2.84, 0.442, no throttle), update: Wine / native
+
+| Update | x, y, z | yaw | speed | airtime |
+|---|---|---|---|---|
+| 5 | -14935.36, 947.35, -3273.49 / -14935.66, 947.35, -3273.39 | -2.8155 / -2.8157 | 0.3925 both | 1 both |
+| 7 | -14844.32, 948.44, -3340.19 / -14844.65, 948.44, -3340.15 | -2.7741 both | 0.3365 both | 1 both |
+| 12 | -14667.45, 965.83, -3471.24 / -14667.29, 965.47, -3472.92 | -2.7207 / -2.7204 | 0.2191 both | 2 both |
+| 19 | -14520.32, 982.04, -3573.36 / -14518.54, 981.14, -3576.19 | -2.6992 / -2.6987 | 0.1158 both | 9, `+0x157` = 1 both |
+| 23 | -14474.62, 915.72, -3504.61 / -14472.85, 916.23, -3507.44 | -2.6921 / -2.6987 | 0 both | 9 both, `+0x247` = 7 both |
+
+**Corrections to the earlier sections:**
+
+- **A glide does occur under Wine**, here and in all 11 traced falls, and ends at
+  `0x472490` as in the native code.
+- **The dead stop (0.411 -> 0) did not reproduce** in 11 traced falls with 3 to 12
+  holds, with and without the throttle. Its likely source is the placement, not
+  proven: a car placed 16 inside the ramp (-15156.5, 782.7, -2597.7 with pitch 0;
+  ground 798.4) was thrown 56 up and stopped.
+- **The take-off is gone.** Run from the flat (-15637.6, 725, -2100.4, yaw -2.6,
+  0.44, Up held): neither build takes off, both keep airtime 1 and rub the barrier
+  from about update 21. Speeds are identical to 4 digits through update 13 (0.4449
+  ... 0.3884); Wine then takes one wall hit more at update 14 (0.3743, native
+  0.3940), and the runs drift apart by tens of units.
+
+**Second course, cc_t4** (16339, 137.5, -10533.8, yaw -1.026, 0.563, Up held; a
+wall slope in section 0, where the test driver landed after the seam). Both builds
+throw the car 80 up and stop it dead, then count `+0x237` and set `+0x157` on the
+same updates, within about 1 unit at first and 7 by update 25; one airtime differs
+(update 7: Wine 2, native 1). Not compared: arriving there with the seam's own
+pitch and speed (`hops` writes pitch 0 and speed 0 first).
+
+**Course results:** after these fixes the test driver alone fell to 8 of 20 (was 9).
+Its failures were not physics: on `cc_t4` it crossed the seam 1800 off the robots'
+line (Wine robots cross near (-21600, 32780)), landed on that slope and glided
+below the course, returning past the start line, so laps went uncounted; on `sh_t4`
+the geodesic field stalled it. With the test driver's changes in `TODO.md`: 16 of 20.

@@ -77,8 +77,9 @@ needle (66013), winged gauge (66012), the `WModMngrFilm` (FILM 66334), then
   them per 33 ms HUD frame.
 - Power-ups are not ported, so the charge stays 0: dimmed icons and the needle
   at −56°, as Wine shows before any pickup.
-- The lap fraction comes from the progress field (route sections), not
-  `car+0x1a3`.
+- The lap fraction is the race distance into the lap over the lap length, as `0x499d90` divides
+  `+0x1a3` by `+0xf38` (2026-11-08). Both use the rows' `+0x34` (`0x4a3ba0`). The fraction inside a
+  row is the cursor's or the native field's.
 - Opponents stay on the grid, so their heads stay near the start.
 
 ## Wine comparison (`sh_t1`)

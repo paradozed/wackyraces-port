@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <set>
 #include <stdexcept>
 
 namespace wpc {
@@ -34,6 +35,15 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
     :window_(window),general_(general),strings_(strings),session_(session) {
     try {
         world_=load_world(archives,course.root(),course.screen());
+        rain_dim_=session_.raining() && !session_.snowing();
+        if(rain_dim_) {
+            // 0x4ae364: with rain the clear and fog colour (D3DRS_FOGCOLOR 0x22)
+            // is (R >> 2, G >> 2, B x 192 >> 9). Wine, cc_t1 (METEO 1): the sky
+            // (255, 231, 115) clear becomes (58, 57, 41) in rain.
+            const auto byte=[](float c){return int(std::lround(std::clamp(c,0.f,1.f)*255));};
+            const int r=byte(world_.clear[0]),g=byte(world_.clear[1]),b=byte(world_.clear[2]);
+            world_.clear[0]=float(r>>2)/255.f;world_.clear[1]=float(g>>2)/255.f;world_.clear[2]=float((b*192)>>9)/255.f;
+        }
         upload(world_.textures);
         // GDViewport m_BackDrop (0xc8): cc_t1's sky dome GDModel 0x19.
         if(const Node* viewport=find_class(course.screen(),"GDViewport")) {
@@ -42,9 +52,19 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
                 [&](const WorldBatch& b){return b.node_id!=backdrop;});
             backdrop_.assign(std::make_move_iterator(split),std::make_move_iterator(world_.batches.end()));
             world_.batches.erase(split,world_.batches.end());
+            // The dome is drawn in its node's frame less the translation: dr_t2's
+            // sits at (8898, 20, 60420), cc_t3's at (0, 262, 1464).
             // Dome radius: 2505 on cc_t1, about 5000 on sh_t1/ct_t1, 6420 on dt_t1.
+            if(!backdrop_.empty()) {
+                const Matrix4 m=unwrapped_scene_transform(course.root(),backdrop);
+                backdrop_origin_={{m[12],m[13],m[14]}};
+            }
             for(const auto& b:backdrop_) for(const auto& v:b.vertices)
-                backdrop_radius_=std::max({backdrop_radius_,std::abs(v.x),std::abs(v.z)});
+                backdrop_radius_=std::max({backdrop_radius_,std::abs(v.x-backdrop_origin_[0]),std::abs(v.z-backdrop_origin_[2])});
+            // 0x4b4347 (the backdrop's draw 0x4b41a0): with rain every vertex
+            // colour is B 0xc0, G 0x80, R 0x80, its alpha kept. Wine, cc_t1: the
+            // dome's (255, 231, 115) becomes (58, 57, 41) with the halved texture.
+            if(rain_dim_) for(auto& b:backdrop_) for(auto& v:b.vertices) {v.r=128/255.f;v.g=128/255.f;v.b=192/255.f;}
         }
         // The moving course objects leave the static world with their
         // subtrees and are drawn from their root-local models.
@@ -84,6 +104,61 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
             for(size_t i=0;i<rocks_.size();++i) {
                 const auto& pieces=objects.rocks()[i].blow.pieces;rocks_[i].resize(pieces.size());
                 for(size_t k=0;k<pieces.size();++k) take(pieces[k].node,rocks_[i][k]);
+            }
+            dicks_.resize(objects.dicks_roads().size());
+            for(size_t i=0;i<dicks_.size();++i) for(size_t k=0;k<3;++k) take(objects.dicks_roads()[i].pieces[k],dicks_[i][k]);
+            golden_.resize(objects.golden_gates().size());
+            for(size_t i=0;i<golden_.size();++i) {
+                const GoldenGate& g=objects.golden_gates()[i];
+                for(size_t k=0;k<9;++k) take(g.doors[k].node,golden_[i][k]);
+                take(g.marker,golden_[i][9]);
+            }
+            cranes_.resize(objects.cranes().size());
+            for(size_t i=0;i<cranes_.size();++i) {
+                // The group's batches, by the deepest arm that holds each.
+                std::vector<WorldBatch> all;take(objects.cranes()[i].arms[0],all);
+                const Node& a0=course.find(objects.cranes()[i].arms[0]);
+                std::vector<uint32_t> below1,below2;
+                const auto gather=[&](const auto& self,const Node& n,std::vector<uint32_t>& out)->void {out.push_back(n.id);for(const auto& c:n.children) self(self,c,out);};
+                (void)a0;
+                gather(gather,course.find(objects.cranes()[i].arms[1]),below1);
+                gather(gather,course.find(objects.cranes()[i].arms[2]),below2);
+                for(WorldBatch& b:all) {
+                    const size_t k=std::find(below2.begin(),below2.end(),b.node_id)!=below2.end()?2:(std::find(below1.begin(),below1.end(),b.node_id)!=below1.end()?1:0);
+                    cranes_[i][k].push_back(std::move(b));
+                }
+            }
+            shifted_.resize(objects.shifted_roads().size());
+            for(size_t i=0;i<shifted_.size();++i) for(size_t k=0;k<6;++k) take(objects.shifted_roads()[i].kids[k],shifted_[i][k]);
+            saws_.resize(objects.saws().size());
+            for(size_t i=0;i<saws_.size();++i) {
+                // The spinner's group holds the sliding owner: its batches move apart.
+                std::vector<WorldBatch> all;take(objects.saws()[i].spinner,all);
+                for(WorldBatch& b:all) saws_[i][b.node_id==objects.saws()[i].node?1:0].push_back(std::move(b));
+            }
+            bumps_.resize(objects.bum_steers().size());
+            for(size_t i=0;i<bumps_.size();++i) {
+                const BumSteer& b=objects.bum_steers()[i];bumps_[i].resize(4);
+                for(size_t k=0;k<2;++k) {take(b.gates[k],bumps_[i][k]);take(b.runners[k],bumps_[i][2+k]);}
+            }
+            spins_.resize(objects.model_spins().size());
+            for(size_t i=0;i<spins_.size();++i) take(objects.model_spins()[i].node,spins_[i]);
+            jams_.resize(objects.log_jams().size());
+            for(size_t i=0;i<jams_.size();++i) {
+                const auto& logs=objects.log_jams()[i].logs;jams_[i].resize(logs.size());
+                for(size_t k=0;k<logs.size();++k) take(logs[k].node,jams_[i][k]);
+            }
+            // 0x463e90: UVScroll on a model's vertices. Its batches are found at
+            // the first draw, like the lights' below.
+            {
+                const auto walk=[&](const auto& self,const Node& n)->void {
+                    for(const Node& a:n.actions) if(a.class_name=="UVScroll" && a.integer(0xeb)!=0) {
+                        Scroll u;u.node=n.id;u.along_u=a.integer(0xea)==1;u.units=a.integer(0xeb);
+                        scrolls_.push_back(std::move(u));
+                    }
+                    for(const Node& c:n.children) self(self,c);
+                };
+                walk(walk,course.root());
             }
             // The lights model's batches are found at the first draw, once
             // the power-ups have left world_.batches.
@@ -130,6 +205,54 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
                 blast_.x=blast_.y=-s.width/2;
             }
             if(kids[3].class_name=="WKBumm") bumm_frames_=film(kids[3].link(0x35,"FILM"));
+            // WackyAutoBomba's m_smokeparticle (0x153): a GDStdBrick whose first
+            // child is the flamesmoke GD3DFilm (general.wgm 0x1be, 0x1bf).
+            if(const Node* car=find_class(shared.root(),"WackyAuto")) for(const Node& a:car->actions) if(a.class_name=="WackyAutoBomba") {
+                const Node& brick=shared.find(uint32_t(a.integer(0x153)));
+                if(brick.children.empty() || brick.children[0].class_name!="GD3DFilm") bad("m_smokeparticle has no GD3DFilm");
+                hit_smoke_frames_=film(brick.children[0].link(0x35,"FILM"));
+                // m_BoomerangHit (0x152): the GDModel types 0x10/0x100 spin.
+                const Node& spin=shared.find(uint32_t(a.integer(0x152)));
+                WorldData d=load_model_group(archives,spin);upload(d.textures);spin_hit_=std::move(d.batches);
+                spin_hit_basis_=node_transform(spin);
+                // m_bluepool (0x154): the GDModel of the paint hit (type 4).
+                WorldData pool=load_model_group(archives,shared.find(uint32_t(a.integer(0x154))));upload(pool.textures);paint_pool_=std::move(pool.batches);
+                // FlyPower's template: vehicle 3's wings are member 0x292's first child.
+                if(const Node* fly=[&]()->const Node* {
+                       std::function<const Node*(const Node&)> f=[&](const Node& n)->const Node* {
+                           for(const auto& ac:n.actions) if(ac.class_name=="FlyPower") return &ac;
+                           for(const auto& c:n.children) if(const Node* r=f(c)) return r;
+                           return nullptr;};
+                       return f(shared.root());}()) {
+                    const Node& brick=shared.find(uint32_t(fly->integer(0x292)));
+                    if(!brick.children.empty()) fly_wings_=load_animated(archives,brick.children[0]);
+                    const Node& v4=shared.find(uint32_t(fly->integer(0x290)));
+                    if(v4.class_name=="GDHModel") fly_v4_=load_animated(archives,v4);
+                    // Vehicle 5 (0x4d5602): member 0x293, a GDHModel cloned itself.
+                    const Node& chute=shared.find(uint32_t(fly->integer(0x293)));
+                    if(chute.class_name=="GDHModel") {fly_chute_=load_animated(archives,chute);fly_chute_local_=node_transform(chute);}
+                    // Vehicle 6 (0x4d523f): member 0x291's brick and its GDHModel child.
+                    const Node& prop=shared.find(uint32_t(fly->integer(0x291)));
+                    for(const Node& k:prop.children) if(k.class_name=="GDHModel") {
+                        fly_prop_=load_animated(archives,k);
+                        fly_prop_brick_=node_transform(prop);fly_prop_local_=node_transform(k);
+                        for(const Node& a:k.actions) if(a.class_name=="WRot") {
+                            if(a.integer(0x1d5)!=2) bad("propeller WRot is not type 2");
+                            for(size_t i=0;i<3;++i) {fly_prop_step_[i]=a.real(0x1d2+uint32_t(i));if(!std::isfinite(fly_prop_step_[i])) bad("nonfinite propeller WRot step");}
+                        }
+                        if(fly_prop_.mesh.segments.size()<4) bad("propeller GDHModel has fewer than 4 segments");
+                        break;
+                    }
+                }
+                // m_TankGunHit (0x14f, +0x24): a GDModel whose child GDHModel
+                // the type 2 hit poses (0x47e60d).
+                const Node& tank=shared.find(uint32_t(a.integer(0x14f)));
+                if(tank.children.empty() || tank.children[0].class_name!="GDHModel") bad("m_TankGunHit has no GDHModel");
+                tank_hit_=load_animated(archives,tank.children[0]);
+                // m_Particle (0x151, +0x34): the GDModel of the tank hit's chunks.
+                WorldData chunk=load_model_group(archives,shared.find(uint32_t(a.integer(0x151))));upload(chunk.textures);chunk_model_=std::move(chunk.batches);
+                break;
+            }
             std::vector<const Node*> models;
             for(const auto& c:kids[2].children) if(c.class_name=="GDModel") models.push_back(&c);
             if(models.size()!=2) bad("WSplash needs two models");
@@ -140,12 +263,31 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
         }
         // The weapon templates follow WFirstPowerUp in the world (0x483a20).
         // The WBreath projectiles' models: the GDModel under each DragonBreath
-        // (0x39a, the breath, is a GD3DFilm and is not drawn).
+        // (0x39a, the breath, is a GD3DFilm, drawn with the films).
         for(const uint32_t id:{0x38cu,0x3a8u,0x3a1u}) {
             const Node& breath=shared.find(id);
             for(const auto& c:breath.children) if(c.class_name=="GDModel") {
                 WorldData d=load_model_group(archives,c);upload(d.textures);projectiles_[id]=std::move(d.batches);
                 break;
+            }
+        }
+        for(const uint32_t id:{0x38cu,0x39au,0x3a1u,0x3a8u}) {
+            const Node& breath=shared.find(id);
+            for(const auto& a:breath.actions) if(a.class_name=="WRocketTail")
+                tails_[id]={std::clamp(a.integer(0x2ec,16),2,16),a.integer(0x2ed,100),(a.integer(0x2f7)&1)!=0};
+            if(id==0x39a) for(const auto& c:breath.children) if(c.class_name=="GD3DFilm") breath_film_=film(c.link(0x35,"FILM"));
+        }
+        // WPU_Breath's template (the brick holding the action): its GDModel
+        // and GDHModel are cloned onto the car while the weapon runs.
+        if(const Node* brick=[&]()->const Node* {
+               std::function<const Node*(const Node&)> f=[&](const Node& n)->const Node* {
+                   for(const auto& a:n.actions) if(a.class_name=="WPU_Breath") return &n;
+                   for(const auto& c:n.children) if(const Node* r=f(c)) return r;
+                   return nullptr;};
+               return f(shared.root());}()) {
+            for(const auto& c:brick->children) {
+                if(c.class_name=="GDModel") {WorldData d=load_model_group(archives,c);upload(d.textures);breath_static_=std::move(d.batches);}
+                else if(c.class_name=="GDHModel") breath_head_=load_animated(archives,c);
             }
         }
         // The paint shot (0x396) is itself the GDModel carrying WPaintShot.
@@ -177,12 +319,108 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
             upload(cars_[v].textures);upload(shadows_[v].textures);
         }
         for(const auto& r:session_.grid()) car_vertices+=cars_.at(r.racer.vehicle).vertex_count+shadows_.at(r.racer.vehicle).vertex_count;
+        // MonsterTires (0x469ebc: the wheels are the model root's first four
+        // children; 0x4d6380: the template's four tyre GDModels).
+        for(int v:vehicles) {
+            if(wheel_masks_.count(v)) continue;
+            const Node& root=shared.find(templates.vehicles.at(size_t(v)).model_ids[0]);
+            std::set<uint32_t> ids;
+            std::function<void(const Node&)> all=[&](const Node& n){ids.insert(n.id);for(const auto& c:n.children) all(c);};
+            const auto& b=cars_.at(v).batches;
+            std::array<Wheel,4> w;
+            for(size_t k=0;k<4 && k<root.children.size();++k) {
+                ids.clear();all(root.children[k]);
+                w[k].mask.assign(b.size(),0);
+                for(size_t i=0;i<b.size();++i) if(ids.count(b[i].node_id)) w[k].mask[i]=1;
+                w[k].node=node_transform(root.children[k]);w[k].inverse=inverse_affine_matrix(w[k].node);
+            }
+            std::vector<char> m(b.size(),1);
+            for(size_t k=0;k<4;++k) for(size_t i=0;i<w[k].mask.size();++i) if(w[k].mask[i]) m[i]=0;
+            wheel_masks_.emplace(v,std::move(m));wheels_.emplace(v,std::move(w));
+        }
+        if(boot_.batches.empty()) {
+            std::function<const Node*(const Node&)> f=[&](const Node& n)->const Node* {
+                for(const auto& ac:n.actions) if(ac.class_name=="WPU_BootKicker") return &n;
+                for(const auto& c:n.children) if(const Node* r=f(c)) return r;
+                return nullptr;};
+            if(const Node* brick=f(shared.root())) for(const auto& c:brick->children) if(c.class_name=="GDHModel") {
+                boot_=load_animated(archives,c);boot_local_=node_transform(c);break;
+            }
+        }
+        if(tyres_[0].empty()) {
+            std::function<const Node*(const Node&)> f=[&](const Node& n)->const Node* {
+                for(const auto& ac:n.actions) if(ac.class_name=="MonsterTires") return &n;
+                for(const auto& c:n.children) if(const Node* r=f(c)) return r;
+                return nullptr;};
+            if(const Node* brick=f(shared.root())) {
+                for(const auto& ac:brick->actions) if(ac.class_name=="MonsterTires") tyre_radius_=ac.real(0x295,50);
+                size_t k=0;
+                for(const auto& c:brick->children) if(c.class_name=="GDModel" && k<4) {
+                    WorldData d=load_model_group(archives,c);upload(d.textures);tyres_[k++]=std::move(d.batches);
+                }
+            }
+        }
+        // Controller 0's body (0x440be0 on the car's GDHModel): the group's first
+        // GDHModel (vehicle 3: 0x8d), at the transform WorldBuilder gives it
+        // (the root's own left out, each child's node transform composed).
+        for(int v:vehicles) {
+            if(bodies_.count(v)) continue;
+            const Node& root=shared.find(templates.vehicles.at(size_t(v)).model_ids[0]);
+            std::function<bool(const Node&,const Matrix4&)> find=[&](const Node& n,const Matrix4& at)->bool {
+                const auto link=n.properties.find(0x67);
+                if(n.class_name=="GDHModel" && link!=n.properties.end() && link->second.size()==8 && !std::memcmp(link->second.data(),"GHMS",4)) {
+                    CarBody b;b.node=n.id;b.chain=at;b.model=load_animated(archives,n);
+                    const auto& all=cars_.at(v).batches;
+                    b.mask.assign(all.size(),1);
+                    for(size_t i=0;i<all.size();++i) if(all[i].node_id==n.id) b.mask[i]=0;
+                    bodies_.emplace(v,std::move(b));
+                    return true;
+                }
+                for(const auto& c:n.children) if(find(c,multiply_matrix(at,node_transform(c)))) return true;
+                return false;
+            };
+            find(root,identity_matrix());
+        }
+        // The body's first GDHModel and its segment 1 at rest (no rotation,
+        // the SEGS translations along its parents): where WPU_Breath's clone
+        // sits (0x4dacba: [car +0x24f] +0x15e -> +0xc is the posed segment
+        // array, 0x34 bytes a segment, so +0x34 is segment 1; read under Wine).
+        // The body's procedural pose (controller 0) is not ported: rest pose.
+        for(int v:vehicles) {
+            if(body_segment_.count(v)) continue;
+            const Node& root=shared.find(templates.vehicles.at(size_t(v)).model_ids[0]);
+            std::function<bool(const Node&,const Matrix4&)> find=[&](const Node& n,const Matrix4& at) {
+                const auto link=n.properties.find(0x67);
+                if(n.class_name=="GDHModel" && link!=n.properties.end() && link->second.size()==8 && !std::memcmp(link->second.data(),"GHMS",4)) {
+                    uint32_t id;std::memcpy(&id,link->second.data()+4,4);
+                    const Mesh mesh=load_mesh(archives,"GHMS",id);
+                    Matrix4 seg=identity_matrix();
+                    for(uint32_t k=1;k<mesh.segments.size() && k!=UINT32_MAX;k=mesh.segments[k].parent) {
+                        seg[12]+=mesh.segments[k].x;seg[13]+=mesh.segments[k].y;seg[14]+=mesh.segments[k].z;
+                        if(mesh.segments.size()<2) break;
+                    }
+                    // Wine (cc_t1, vehicle 3): the record at +0x34 holds segment 1's
+                    // posed matrix (identity rotation, (12.3, 8.1, 4.9)), and it is
+                    // multiplied by car +0x14, the model root (the actor + 20 up),
+                    // not by the body's own frame.
+                    (void)at;body_segment_[v]=seg;
+                    return true;
+                }
+                for(const auto& c:n.children) if(find(c,multiply_matrix(at,node_transform(c)))) return true;
+                return false;
+            };
+            if(!find(root,identity_matrix())) body_segment_[v]=identity_matrix();
+        }
         // Shared WFollowCamera_2 parent camera: FOV 55 degrees, near 50, far 20000.
         const Node& follow=shared.find(templates.camera_ids[0]);
         projection_=camera_projection(follow);
-        // 0x4ae060: linear fog from half the camera far plane to the far plane,
-        // colored by the viewport background (Glide 0x433930 path likewise).
-        fog_end_=follow.real(0x2f);fog_start_=fog_end_*0.5f;
+        // 0x4ae060: linear fog to the camera far plane, colored by the viewport
+        // background (Glide 0x433930 path likewise). With table and W fog in the
+        // device's raster caps (+0x44 bits 0x100, 0x100000; 0x4b1c65) it is
+        // table fog from far - 3000 (0x514d7c); otherwise vertex fog from
+        // far x 0.5. Wine reports both caps: dr_t2's tunnel, 11000-14000 away,
+        // stays black there. The native fog is per pixel by clip w, like W fog.
+        fog_end_=follow.real(0x2f);fog_start_=fog_end_-3000.f;
         const uint8_t pixel[]={255,255,255,255};
         white_=wpc_vk_texture_create(window_,1,1,pixel);
         if(!white_) bad("flat material upload failed");
@@ -236,6 +474,18 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
         for(const auto& p:pickups_) group(p);
         for(const auto& t:crossing_trams_) group(t);
         for(const auto& m:movers_) group(m);
+        // The objects ported since WRolling: each group of batches drawn by submit
+        // must be registered here, or submit's lookup throws.
+        for(const auto& c:chisels_) for(const auto& p:c) group(p);
+        for(const auto& r:rocks_) for(const auto& p:r) group(p);
+        for(const auto& j:jams_) for(const auto& p:j) group(p);
+        for(const auto& b:bumps_) for(const auto& p:b) group(p);
+        for(const auto& p:spins_) group(p);
+        for(const auto& w:saws_) for(const auto& p:w) group(p);
+        for(const auto& c:cranes_) for(const auto& p:c) group(p);
+        for(const auto& r:shifted_) for(const auto& p:r) group(p);
+        for(const auto& g:golden_) for(const auto& p:g) group(p);
+        for(const auto& d:dicks_) for(const auto& p:d) group(p);
         for(const auto& r:logs_) for(const auto& l:r) group(l);
         for(const auto& b:bridges_) for(const auto& h:b) group(h);
         for(const auto& g:geysers_) for(const auto& h:g) group(h);
@@ -243,14 +493,38 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
         for(const auto& [v,c]:cars_) {group(c.batches);group(shadows_.at(v).batches);}
         group(splash_column_);group(splash_ring_);group(ripple_);group(landmine_);group(tnt_);group(detour_);group(oil_);group(wall_);group(tree_);group(hive_);
         for(const auto& [id,b]:projectiles_) group(b);
+        // Each batch's sections: those whose enabling (0x4a8680) activates its
+        // node (RaceTrack::node_sections); none: always drawn. Its group for the
+        // loop seam is that section (one per node on the shipped courses;
+        // -1 when none, the start banner: group 0xffff, Wine dr_t3 #728).
+        {
+            const RaceTrack& track=session.track();
+            batch_sections_.assign(world_.batches.size(),0);
+            batch_group_.assign(world_.batches.size(),-1);
+            for(size_t i=0;i<world_.batches.size();++i) {
+                const std::vector<int>& in=track.node_sections(world_.batches[i].node_id);
+                for(int s:in) if(s>=0 && s<32) batch_sections_[i]|=1u<<s;
+                if(!in.empty()) batch_group_[i]=in.front();
+            }
+            drawn_.assign(world_.batches.size(),1);
+            for(size_t k=0;k<2;++k) seam_[k].assign(world_.batches.size(),0);
+        }
         wpc_log("Race view: %zu world batches, %zu world vertices, %zu car models, %zu textures, %zu translucent models",
                 world_.batches.size(),world_.vertex_count,cars_.size(),textures_.size(),translucent);
         world_.textures.clear();
     } catch(...) {release();throw;}
 }
+void RaceView::dim(Image& image) const {
+    // The divisors doubled: each colour channel at half (the original then
+    // quantises to its 16-bit formats: 255 -> 123 under Wine; native 127).
+    if(!rain_dim_) return;
+    for(size_t i=0;i+3<image.rgba.size();i+=4) for(size_t k=0;k<3;++k) image.rgba[i+k]=uint8_t(image.rgba[i+k]>>1);
+}
 void RaceView::upload(std::map<uint32_t,Image>& images) {
     for(auto& [id,image]:images) {
+        texture_sizes_[id]={{image.width,image.height}};
         if(textures_.count(id)) continue;
+        dim(image);
         WpcTexture* t=wpc_vk_texture_create(window_,image.width,image.height,image.rgba.data());
         if(!t) bad("texture upload failed: "+std::to_string(id));
         textures_.emplace(id,t);owned_.push_back(t);
@@ -271,20 +545,79 @@ std::vector<RaceView::Glyph> RaceView::film(uint32_t id,uint32_t index) {
         Glyph g;g.x=half(reel,at);g.y=half(reel,at+2);
         const uint32_t material=word(reel,at+8);
         const Sprite s=sprite(material);
-        for(const auto& field:general_.children(general_.find("GMAT",material)))
-            if(field.tag=="SMOO") {const ByteView b=general_.payload(field);g.smooth=b.size>=4 && word(b,0)!=0;}
+        for(const auto& field:general_.children(general_.find("GMAT",material))) {
+            const ByteView b=general_.payload(field);
+            if(field.tag=="SMOO") g.smooth=b.size>=4 && word(b,0)!=0;
+            if(field.tag=="SILL") g.sill=b.size>=4 && (word(b,0)&0x7fffffffu)!=0; // a float, +0x5c
+        }
+        g.film=true;
         g.texture=s.texture;g.width=s.width;g.height=s.height;
         frames.push_back(g);
     }
     return frames;
 }
+RaceView::AnimatedModel RaceView::load_animated(const ArchivePool& archives,const Node& node) {
+    AnimatedModel m;
+    const auto link=node.properties.find(0x67);
+    if(link==node.properties.end() || link->second.size()!=8 || std::memcmp(link->second.data(),"GHMS",4))
+        bad("animated model needs a GHMS link: "+std::to_string(node.id));
+    uint32_t id;std::memcpy(&id,link->second.data()+4,4);
+    m.mesh=load_mesh(archives,"GHMS",id);
+    WorldData d=load_model_group(archives,node);upload(d.textures);m.batches=std::move(d.batches);
+    // load_model_group's order: per triangle, its material's batch (first
+    // seen order), three vertices each.
+    std::map<uint32_t,uint32_t> index;std::vector<uint32_t> fill(m.batches.size(),0);
+    for(const auto& t:m.mesh.triangles) {
+        auto found=index.find(t.material);
+        if(found==index.end()) found=index.emplace(t.material,uint32_t(index.size())).first;
+        const uint32_t b=found->second;
+        if(b>=m.batches.size() || m.batches[b].material_id!=t.material) bad("animated model batches do not follow its triangles");
+        for(uint32_t v:{t.a,t.b,t.c}) m.corners.push_back({b,fill[b]++,v});
+    }
+    for(size_t b=0;b<m.batches.size();++b) if(fill[b]!=m.batches[b].vertices.size()) bad("animated model batch sizes differ");
+    const auto motion=node.properties.find(0x65);
+    if(motion!=node.properties.end() && motion->second.size()==8 && !std::memcmp(motion->second.data(),"MTNL",4)) {
+        uint32_t mid;std::memcpy(&mid,motion->second.data()+4,4);
+        auto lib=motions_.find(mid);
+        if(lib==motions_.end()) lib=motions_.emplace(mid,parse_motion(archives,mid)).first;
+        if(lib->second.segments!=m.mesh.segments.size()) bad("motion segment count differs from its mesh");
+        m.lib=&lib->second;
+    }
+    return m;
+}
+void RaceView::pose(AnimatedInstance& a) {
+    const uint64_t now=session_.updates();
+    const int steps=a.posed==0?1:int(std::min<uint64_t>(now-a.posed,5));
+    a.posed=now;
+    if(steps<=0) return;
+    MotionPairs pairs(a.model.mesh.segments.size()*9,{0.f,0.f});
+    for(int i=0;i<steps;++i) {
+        std::fill(pairs.begin(),pairs.end(),std::array<float,2>{0.f,0.f});
+        if(a.controller.active()) a.controller.update(10,&pairs);
+    }
+    for(const auto& [seg,sc]:a.overrides) if(seg<a.model.mesh.segments.size()) for(size_t i=0;i<3;++i) pairs[seg*9+6+i]={-1.f,sc[i]-1};
+    for(const auto& [seg,t]:a.moves) if(seg<a.model.mesh.segments.size()) for(size_t i=0;i<3;++i) pairs[seg*9+i]={-1.f,t[i]};
+    apply_pose(a,pairs);
+}
+void RaceView::apply_pose(AnimatedInstance& a,const MotionPairs& pairs) {
+    pose_mesh(a.model.mesh,pairs,&a.segments);
+    const Matrix4 w=affine_matrix(a.model.mesh.matrix);
+    for(const auto& c:a.model.corners) {
+        const MeshVertex& v=a.model.mesh.vertices[c.vertex];
+        auto& out=a.model.batches[c.batch].vertices[c.slot];
+        out.x=w[0]*v.x+w[4]*v.y+w[8]*v.z+w[12];
+        out.y=w[1]*v.x+w[5]*v.y+w[9]*v.z+w[13];
+        out.z=w[2]*v.x+w[6]*v.y+w[10]*v.z+w[14];
+    }
+}
 RaceView::Sprite RaceView::sprite(uint32_t material) {
     const uint32_t id=general_.material_texture(material);
-    const Image image=general_.texture(id);
+    Image image=general_.texture(id);
     Sprite s;s.width=int(image.width);s.height=int(image.height);
     if(image.rgba.empty()) return s;
     auto found=textures_.find(id);
     if(found==textures_.end()) {
+        dim(image);
         WpcTexture* t=wpc_vk_texture_create(window_,image.width,image.height,image.rgba.data());
         if(!t) bad("HUD texture upload failed");
         found=textures_.emplace(id,t).first;owned_.push_back(t);
@@ -304,17 +637,22 @@ void RaceView::draw_batches(const std::vector<WorldBatch>& batches,const Matrix4
         wpc_vk_draw_material_triangles(window_,texture(b.material),b.vertices.data(),uint32_t(b.vertices.size()),
                                        b.material.clamp_axes,b.material.two_sided?1:0);
 }
-void RaceView::submit(const std::vector<WorldBatch>& batches,const Matrix4& vp,const Matrix4& view,const Matrix4& model) {
+void RaceView::submit(const std::vector<WorldBatch>& batches,const Matrix4& vp,const Matrix4& view,const Matrix4& model,const std::vector<char>* mask) {
     const Matrix4 mvp=multiply_matrix(vp,model);
     wpc_vk_set_mvp(window_,mvp.data());
-    for(const auto& b:batches) if(!b.translucent && !b.hidden)
+    for(size_t i=0;i<batches.size();++i) if(const auto& b=batches[i];!b.translucent && !b.hidden && (!mask || (*mask)[i]))
         wpc_vk_draw_material_triangles(window_,texture(b.material),b.vertices.data(),uint32_t(b.vertices.size()),
                                        b.material.clamp_axes,b.material.two_sided?1:0);
     const Matrix4 mv=multiply_matrix(view,model);
-    for(const auto& m:translucent_.at(&batches)) {
+    // A group not registered at load (a new object's) is registered here rather
+    // than failing the frame.
+    auto found=translucent_.find(&batches);
+    if(found==translucent_.end()) found=translucent_.emplace(&batches,translucent_models(batches)).first;
+    for(const auto& m:found->second) {
+        if(mask && std::none_of(m.batches.begin(),m.batches.end(),[&](size_t b){return (*mask)[b]!=0;})) continue;
         const auto& o=m.origin;
         queue_.add(m.draw_flags,mv[2]*o[0]+mv[6]*o[1]+mv[10]*o[2]+mv[14],queued_.size());
-        queued_.push_back({&batches,&m,mvp});
+        queued_.push_back({&batches,&m,mvp,mask});
     }
 }
 void RaceView::model_colours(int vehicle,std::array<float,3>& lo,std::array<float,3>& hi) const {
@@ -326,30 +664,452 @@ void RaceView::model_colours(int vehicle,std::array<float,3>& lo,std::array<floa
     }
     if(!any) {lo={{1,1,1}};hi=lo;}
 }
-void RaceView::submit_car(int vehicle,const BombHit& hit,const Matrix4& vp,const Matrix4& view,const Matrix4& frame) {
+void RaceView::body_gadgets(int car,CarSway& w) {
+    // TurboSpeed (init table 0x4d70a8, end table 0x4d7378) and FlyPower (init
+    // table 0x4d5354, update 0x4d5b8c, end 0x4d5ba8) on the body [car +0x24f].
+    const int effect=session_.gadget_effect(car),fly=session_.flying(car),v=w.vehicle;
+    MotionController& clip=w.body->controller;
+    const bool clips=w.body->model.lib!=nullptr;
+    const auto set_scale=[&](size_t seg,std::array<float,3> s) {   // 0x437f70(seg, s, 1)
+        w.locked=true;
+        for(auto& l:w.scale_locks) if(l.first==seg) {l.second=s;return;}
+        w.scale_locks.push_back({seg,s});
+    };
+    const auto set_turn=[&](size_t seg,std::array<float,3> r) {    // 0x4383b0(seg, r, 1)
+        w.locked=true;
+        for(auto& l:w.turn_locks) if(l.first==seg) {l.second=r;return;}
+        w.turn_locks.push_back({seg,r});
+    };
+    const auto unlock=[&]{w.locked=false;w.scale_locks.clear();w.turn_locks.clear();};   // flag -1: +0x17a bit 0 cleared
+    if(effect==8 && w.last_effect!=8) {
+        if(v==1) set_scale(1,{1,1,1});            // 0x4d6ff4 (and the action's +0x70 = 1, not traced)
+        if(v==4 && clips) clip.play(0);           // 0x4d6fcf: 0x440970(0, 0, 1, -1)
+    }
+    if(w.last_effect==8 && effect!=8 && v==4 && clips) clip.play(2);   // 0x4d7295
+    if(fly>0 && w.last_fly==0) {
+        if((v==0 || v==1) && clips) clip.play(0); // 0x4d4f26, 0x4d520f
+        if(v==5) set_turn(6,{35,0,0});            // 0x4d504b
+    }
+    if(fly>0 && v==2) set_turn(5,{0,0,153.f*float(fly)});   // 0x4d5309, 0x4d59ff: 153 x +0x64 degrees
+    if(fly==0 && w.last_fly>0 && (v==2 || v==5)) unlock();  // 0x4d5b20, 0x4d5aae
+    // 0x469a84: vehicle 5's turret, body segment 2 turned about y by +0x3ab
+    // in degrees (0x512a20), locked each update (0x4383b0(2, 0, a, 0, 1)).
+    if(v==5) set_turn(2,{0,session_.turret(car)*57.29578f,0});
+    w.last_effect=effect;w.last_fly=fly;
+}
+void RaceView::submit_car(int car,int vehicle,const BombHit& hit,const Matrix4& vp,const Matrix4& view,const Matrix4& frame) {
     Matrix4 model=initial_vehicle_model_frame(frame);
+    // MonsterTires (0x4d68a6): the model's height +0x92f = (s - 1) x
+    // m_tireradius x 0.5 + 20, at least 20.
+    const float tyre_scale=session_.monster_scale(car);
+    if(tyre_scale>0) {
+        const float lift=std::max(0.f,(tyre_scale-1)*tyre_radius_*0.5f);
+        for(size_t r=0;r<3;++r) model[12+r]+=lift*frame[4+r];
+    }
     if(hit.active() && hit.scale_y!=1) for(size_t i=4;i<8;++i) model[i]*=hit.scale_y; // the local up axis
     const auto& batches=cars_.at(vehicle).batches;
     const float f=hit.active()?hit.tint.f:0;
-    if(f<=0) {submit(batches,vp,view,model);return;}
-    // 0x47d890 rewrites the model's vertex colours; translucent batches keep
-    // theirs (provisional).
-    const Matrix4 mvp=multiply_matrix(vp,model);
-    wpc_vk_set_mvp(window_,mvp.data());
-    for(const auto& b:batches) if(!b.translucent && !b.hidden) {
-        tinted_=b.vertices;
-        for(auto& w:tinted_) {
-            w.r+=(hit.tint.target[0]-w.r)*f;w.g+=(hit.tint.target[1]-w.g)*f;w.b+=(hit.tint.target[2]-w.b)*f;
+    // The body GDHModel swayed by controller 0, stepped once per race update
+    // (the original steps it per draw, 0x437d00; provisional), from the
+    // world matrix it is drawn with.
+    const std::vector<char>* mask=nullptr;
+    const auto body=bodies_.find(vehicle);
+    if(body!=bodies_.end()) {
+        CarSway& w=sways_[car];
+        static const MotionLib none;
+        if(!w.body || w.vehicle!=vehicle) {
+            if(w.body) {translucent_.erase(&w.body->model.batches);translucent_.erase(&w.tinted);}
+            w=CarSway{};w.vehicle=vehicle;w.sway=SwayController(body_sway_gains(vehicle));
+            w.body=std::make_unique<AnimatedInstance>(body->second.model,body->second.model.lib?*body->second.model.lib:none);
         }
-        wpc_vk_draw_material_triangles(window_,texture(b.material),tinted_.data(),uint32_t(tinted_.size()),
-                                       b.material.clamp_axes,b.material.two_sided?1:0);
+        const Matrix4 world=multiply_matrix(model,body->second.chain);
+        const uint64_t now=session_.updates();
+        if(w.stepped!=now) {
+            const int steps=w.stepped==~uint64_t(0)?1:int(std::min<uint64_t>(now-w.stepped,5));
+            MotionPairs pairs(w.body->model.mesh.segments.size()*9,{0.f,0.f});
+            body_gadgets(car,w);
+            for(int i=0;i<steps;++i) {
+                std::fill(pairs.begin(),pairs.end(),std::array<float,2>{0.f,0.f});
+                w.sway.update(world,pairs);
+                if(w.body->controller.active()) w.body->controller.update(10,&pairs);
+            }
+            if(w.locked) {
+                const size_t n=w.body->model.mesh.segments.size();
+                for(const auto& [seg,v]:w.scale_locks) if(seg<n) for(size_t k=0;k<3;++k) pairs[seg*9+6+k]={-1.f,v[k]-1};
+                for(const auto& [seg,v]:w.turn_locks) if(seg<n) for(size_t k=0;k<3;++k) pairs[seg*9+3+k]={-1.f,v[k]};
+            }
+            apply_pose(*w.body,pairs);
+            w.stepped=now;
+        }
+        mask=&body->second.mask;
+        const std::vector<WorldBatch>* drawn=&w.body->model.batches;
+        if(f>0) {
+            // 0x47d890 rewrites the body's vertex colours too.
+            if(w.tinted.size()!=w.body->model.batches.size()) {translucent_.erase(&w.tinted);w.tinted=w.body->model.batches;}
+            for(size_t i=0;i<w.tinted.size();++i) {
+                const auto& in=w.body->model.batches[i].vertices;auto& out=w.tinted[i].vertices;
+                for(size_t k=0;k<in.size() && k<out.size();++k) {
+                    out[k]=in[k];
+                    const std::array<float,3> c=tint_colour(hit.tint,{{in[k].r,in[k].g,in[k].b}});
+                    out[k].r=c[0];out[k].g=c[1];out[k].b=c[2];
+                }
+            }
+            drawn=&w.tinted;
+        }
+        submit(*drawn,vp,view,world);
     }
-    const Matrix4 mv=multiply_matrix(view,model);
-    for(const auto& m:translucent_.at(&batches)) {
-        const auto& o=m.origin;
-        queue_.add(m.draw_flags,mv[2]*o[0]+mv[6]*o[1]+mv[10]*o[2]+mv[14],queued_.size());
-        queued_.push_back({&batches,&m,mvp});
+    // The wheels (+0x273..+0x27f) are drawn apart from the rest of the model.
+    const std::vector<char>* const mask_in=mask;
+    const float spin=session_.wheel_spin(car);
+    const auto turn_x=[](Matrix4& m,float a) {   // 0x405e8e -> 0x43b2b0 on the axes
+        const float c=std::cos(a),s=std::sin(a);
+        for(size_t r=0;r<3;++r) {const float y=m[4+r],z=m[8+r];m[4+r]=c*y-s*z;m[8+r]=s*y+c*z;}
+    };
+    {
+        auto& m=masks_[car];
+        m=wheel_masks_.at(vehicle);
+        if(mask) for(size_t i=0;i<m.size() && i<mask->size();++i) m[i]=m[i]&&(*mask)[i];
+        mask=&m;
     }
+    std::array<Matrix4,4> wheel_at{};
+    if(tyre_scale>0) {
+        // The wheels hidden (flag 0x100, 0x4d648a); the tyres take the car's
+        // frame (0x404def) with, each, the scale s turned about x by the
+        // wheel spin +0x2a4 x 2.5 (0x51629c) at m_monstertires11/12/21/22's
+        // translation (0x4d671d..0x4d68a1).
+        const auto at=vehicle_wheels(vehicle);
+        for(size_t k=0;k<4;++k) {
+            if(tyres_[k].empty()) continue;
+            Matrix4 t=identity_matrix();
+            for(size_t a=0;a<3;++a) t[a*4+a]=tyre_scale;
+            turn_x(t,spin*2.5f);
+            t[12]=at[k][0];t[13]=0;t[14]=at[k][1];
+            submit(tyres_[k],vp,view,multiply_matrix(frame,t));
+        }
+    } else {
+        // 0x46b15b..: wheel 0 takes 0x43c250(+0x2a4, steer +0x403, 0) at its
+        // translation, wheel 1 a copy of wheel 0's axes; wheels 2 and 3 the
+        // identity turned about x by +0x2a4 (0x405e8e).
+        const float sa=std::sin(spin),ca=std::cos(spin),st=session_.steer(car),sb=std::sin(st),cb=std::cos(st);
+        Matrix4 front=identity_matrix();   // 0x43c250(a, b, 0): rows x, y, z
+        front[0]=cb;front[1]=0;front[2]=sb;
+        front[4]=sb*sa;front[5]=ca;front[6]=-cb*sa;
+        front[8]=-sb*ca;front[9]=sa;front[10]=cb*ca;
+        Matrix4 rear=identity_matrix();turn_x(rear,spin);
+        for(size_t k=0;k<4;++k) wheel_at[k]=k<2?front:rear;
+    }
+    const auto draw_wheels=[&](const std::vector<WorldBatch>& bs) {
+        if(tyre_scale>0) return;
+        const auto& w=wheels_.at(vehicle);
+        auto& dm=wheel_draw_masks_[car];
+        for(size_t k=0;k<4;++k) {
+            dm[k]=w[k].mask;
+            if(mask_in) for(size_t i=0;i<dm[k].size() && i<mask_in->size();++i) dm[k][i]=dm[k][i]&&(*mask_in)[i];
+            Matrix4 l=wheel_at[k];
+            for(size_t r=0;r<3;++r) l[12+r]=w[k].node[12+r];
+            submit(bs,vp,view,multiply_matrix(model,multiply_matrix(l,w[k].inverse)),&dm[k]);
+        }
+    };
+    if(f<=0) {submit(batches,vp,view,model,mask);draw_wheels(batches);return;}
+    // 0x47d890 rewrites every vertex colour of the car model (+0x3e, count
+    // +0x42), its translucent parts too (Wine, cc_t1, type 0x80: the whole
+    // car turns black). The copy is drawn like the model itself.
+    TintedModel& t=tinted_models_[&hit];
+    if(t.vehicle!=vehicle || t.batches.size()!=batches.size()) {
+        translucent_.erase(&t.batches);
+        t.vehicle=vehicle;t.batches=batches;
+        translucent_[&t.batches]=translucent_models(t.batches);
+    }
+    for(size_t i=0;i<batches.size();++i) {
+        const auto& in=batches[i].vertices;auto& out=t.batches[i].vertices;
+        for(size_t k=0;k<in.size() && k<out.size();++k) {
+            const std::array<float,3> c=tint_colour(hit.tint,{{in[k].r,in[k].g,in[k].b}});
+            out[k].r=c[0];out[k].g=c[1];out[k].b=c[2];
+        }
+    }
+    submit(t.batches,vp,view,model,mask);
+    draw_wheels(t.batches);
+}
+void RaceView::submit_breath_head(int car,const RaceCar& c,const Matrix4& vp,const Matrix4& view,const Matrix4& placed) {
+    // WPU_Breath (init 0x4dab40, update 0x4dac70): while its counter (+0x38,
+    // 33 down to 0) runs, the template's clone sits on the body's segment
+    // frame times the car model's frame, and its GDHModel plays clip 2
+    // (0x440970(2, 0, 1, -1)), chained by the MTNL.
+    const bool on=session_.running_weapon(car)==14 && session_.weapon_effect(car)==0xe && session_.weapon_timer(car)>=0;
+    auto found=breath_heads_.find(car);
+    if(!on) {
+        if(found!=breath_heads_.end()) {translucent_.erase(&found->second->model.batches);breath_heads_.erase(found);}
+        return;
+    }
+    if(!breath_head_.lib || breath_head_.batches.empty()) return;
+    if(found==breath_heads_.end()) {
+        found=breath_heads_.emplace(car,std::make_unique<AnimatedInstance>(breath_head_,*breath_head_.lib)).first;
+        found->second->controller.play(2);
+    }
+    AnimatedInstance& a=*found->second;
+    pose(a);
+    // 0x4dac70: the body's posed segment 1 ([car +0x24f] +0x15e -> +0xc, +0x34)
+    // when its sway instance is drawn, else segment 1 at rest.
+    const auto seg=body_segment_.find(c.vehicle);
+    Matrix4 at=seg==body_segment_.end()?identity_matrix():seg->second;
+    if(const auto w=sways_.find(car);w!=sways_.end() && w->second.body && w->second.vehicle==c.vehicle && w->second.body->segments.size()>1) {
+        const auto& s1=w->second.body->segments[1];
+        at=identity_matrix();
+        for(size_t row=0;row<3;++row) for(size_t k=0;k<3;++k) at[row*4+k]=s1[row*3+k];
+        for(size_t k=0;k<3;++k) at[12+k]=s1[9+k];
+    }
+    Matrix4 frame=multiply_matrix(placed,multiply_matrix(initial_vehicle_model_frame(c.frame()),at));
+    // 0x4dacea: with the action's +0x5c (look-back held at the use) the frame
+    // turns by pi about its y axis (0x403279), facing backward.
+    if(session_.weapon_backward(car)) {Matrix4 r=identity_matrix();r[0]=r[10]=-1;frame=multiply_matrix(frame,r);}
+    if(!breath_static_.empty()) submit(breath_static_,vp,view,frame);
+    submit(a.model.batches,vp,view,frame);
+    if(std::getenv("WPC_DEBUG_BREATH")) {
+        float lo[3]={1e9f,1e9f,1e9f},hi[3]={-1e9f,-1e9f,-1e9f};size_t n=0;
+        for(const auto& b:a.model.batches) for(const auto& v:b.vertices) {
+            const float w[3]={frame[0]*v.x+frame[4]*v.y+frame[8]*v.z+frame[12],frame[1]*v.x+frame[5]*v.y+frame[9]*v.z+frame[13],frame[2]*v.x+frame[6]*v.y+frame[10]*v.z+frame[14]};
+            for(int k=0;k<3;++k) {lo[k]=std::min(lo[k],w[k]);hi[k]=std::max(hi[k],w[k]);}++n;
+        }
+        wpc_log("Breath head car %d timer %d: %zu batches %zu vertices, car (%.0f %.0f %.0f), box x %.0f..%.0f y %.0f..%.0f z %.0f..%.0f",car,session_.weapon_timer(car),
+                a.model.batches.size(),n,c.position[0],c.position[1],c.position[2],lo[0],hi[0],lo[1],hi[1],lo[2],hi[2]);
+    }
+}
+void RaceView::submit_spin_hit(const BombHit& hit,const RaceCar& car,const Matrix4& vp,const Matrix4& view,const Matrix4& placed) {
+    if(hit.active() && hit.pool.shown && !paint_pool_.empty()) {
+        // 0x47ea59: the car model's frame (as submit_car draws it) with its
+        // axes scaled.
+        Matrix4 m=initial_vehicle_model_frame(Matrix4(hit.pool.car));
+        for(size_t a=0;a<3;++a) for(size_t r=0;r<3;++r) m[a*4+r]*=hit.pool.scale[a];
+        submit(paint_pool_,vp,view,multiply_matrix(placed,m));
+    }
+    if(!hit.active() || !hit.spin.shown || spin_hit_.empty()) return;
+    // 0x47ecb4..0x47ed05: the basis (template or identity) x scale, turned
+    // about y (0x43b4a0: x' = c x + s z, z' = c z - s x), at the car's
+    // position plus 120 in y.
+    Matrix4 m=hit.spin.from_identity?identity_matrix():spin_hit_basis_;
+    for(size_t i=0;i<12;++i) if(i%4!=3) m[i]*=hit.spin.scale;
+    const float c=std::cos(hit.spin.turn),sn=std::sin(hit.spin.turn);
+    for(size_t r=0;r<3;++r) {const float u=m[r],v=m[8+r];m[r]=c*u+sn*v;m[8+r]=c*v-sn*u;}
+    m[12]=car.position[0];m[13]=car.position[1]+120;m[14]=car.position[2];m[15]=1;
+    submit(spin_hit_,vp,view,multiply_matrix(placed,m));
+}
+void RaceView::submit_fly(int car,const RaceCar& c,const Matrix4& vp,const Matrix4& view,const Matrix4& placed) {
+    // FlyPower, vehicle 3 (init 0x4d4e19, update 0x4d596f): a clone of the
+    // template's +0x4c whose child (GDDoubleHModel 0x1cb) takes the local
+    // matrix identity (0x43b090) x 2.5 (0x402027), turned 30 degrees about x
+    // (0x43b2b0, 0x3f060a92), at (-30, 150, -10) (0x40150a), and plays clip 0
+    // (0x405e1b(0, 0, 1, -1)). Each update the clone takes the car's local
+    // matrix (+0x2c) and group. Vehicles 4 and 6: below. Others are not drawn.
+    const AnimatedModel& model=c.vehicle==4?fly_v4_:c.vehicle==5?fly_chute_:c.vehicle==6?fly_prop_:fly_wings_;
+    const int counter=session_.flying(car);   // FlyPower's +0x64
+    const bool on=(c.vehicle==3 || c.vehicle==4 || c.vehicle==6 || (c.vehicle==5 && counter>=10)) && counter>0 && !model.batches.empty();
+    auto found=fly_instances_.find(car);
+    if(!on) {
+        if(found!=fly_instances_.end()) {translucent_.erase(&found->second->model.batches);fly_instances_.erase(found);}
+        if(const auto m=fly_mirrors_.find(car);m!=fly_mirrors_.end()) {translucent_.erase(&m->second);fly_mirrors_.erase(m);}
+        fly_props_.erase(car);
+        return;
+    }
+    static const MotionLib none;
+    if(found==fly_instances_.end()) {
+        found=fly_instances_.emplace(car,std::make_unique<AnimatedInstance>(model,model.lib?*model.lib:none)).first;
+        AnimatedInstance& a=*found->second;
+        if(c.vehicle==6) {
+            // 0x4d52bb: segment 1 locked to the scale (0, 1, 0) (0x437f70, flag
+            // 1); 0x4d52d5: clip 0 (0x440970(0, 0, 1, -1)); 0x4d52eb: command 2
+            // on its controller (0x4409f0 -> 0x440290), frozen at the end.
+            a.overrides={{1,{0.f,1.f,0.f}}};
+            if(model.lib) {a.controller.play(0);a.controller.freeze_at_end();}
+            fly_props_[car]=FlyProp{0,session_.updates(),{}};
+        } else if(c.vehicle==5) {
+            // 0x4d5660..0x4d568f: clip 0 (0x440970(0, 0, 1, -1)), frozen at
+            // its end (0x4409f0(0, 2, -1)).
+            if(model.lib) {a.controller.play(0);a.controller.freeze_at_end();}
+        } else if(model.lib) a.controller.play(0);
+    }
+    AnimatedInstance& a=*found->second;
+    if(c.vehicle==6) {
+        // Update 0x4d56da. Before update 20 (0x4d5783), once clip 0 is frozen
+        // (controller 1's +0x28 bit 4): the controller stops (bit 0 cleared),
+        // segment 1 shows at full scale and segments 2 and 3 are squashed to
+        // 0. At update 70 (0x4d57ef): bit 0 again, segment 1 back to (0, 1, 0),
+        // 2 and 3 to 1, clip 2 plays (0x440970(2, 0, 1, -1)) frozen at its end.
+        FlyProp& p=fly_props_[car];
+        if(p.stage==0 && counter<20 && a.controller.frozen()) {
+            a.controller.set_active(false);
+            a.overrides={{1,{1.f,1.f,1.f}},{2,{0.f,0.f,0.f}},{3,{0.f,0.f,0.f}}};
+            p.stage=1;
+        }
+        if(p.stage<2 && counter>=70) {
+            a.controller.set_active(true);
+            a.overrides={{1,{0.f,1.f,0.f}},{2,{1.f,1.f,1.f}},{3,{1.f,1.f,1.f}}};
+            if(model.lib) {a.controller.play(2);a.controller.freeze_at_end();}
+            p.stage=2;
+        }
+        // The child's WRot (0x497b00 type 2): m_StepRotDeg{X,Y,Z} added each
+        // update, wrapped to [0, 2 pi), turning its saved local frame.
+        const uint64_t now=session_.updates();
+        for(;p.spun<now;++p.spun) for(size_t k=0;k<3;++k) {
+            p.angle[k]+=fly_prop_step_[k];
+            if(p.angle[k]>6.2831855f) p.angle[k]-=6.2831855f;
+            if(p.angle[k]<0) p.angle[k]+=6.2831855f;
+        }
+        pose(a);
+        Matrix4 l=fly_prop_local_;
+        const auto turn=[&](size_t i,size_t j,float t){
+            if(t==0) return;
+            const float cs=std::cos(t),sn=std::sin(t);
+            for(size_t r=0;r<3;++r) {const float u=l[i*4+r],v=l[j*4+r];l[i*4+r]=cs*u+sn*v;l[j*4+r]=cs*v-sn*u;}
+        };
+        turn(2,1,p.angle[0]);turn(0,2,p.angle[1]);turn(1,0,p.angle[2]);
+        // 0x4d56fd..0x4d5741: the brick keeps its own axes, at the car's
+        // position (+0x288) plus 100 (0x510414) in y.
+        Matrix4 b=fly_prop_brick_;
+        b[12]=c.position[0];b[13]=c.position[1]+100;b[14]=c.position[2];
+        submit(a.model.batches,vp,view,multiply_matrix(placed,multiply_matrix(b,l)));
+        return;
+    }
+    pose(a);
+    if(c.vehicle==5) {
+        // Update 0x4d5555: the clone keeps its axes, at the car's position
+        // (+0x288) plus 100 (0x510414) in y, as vehicle 6's rotor.
+        Matrix4 m=fly_chute_local_;
+        m[12]=c.position[0];m[13]=c.position[1]+100;m[14]=c.position[2];
+        submit(a.model.batches,vp,view,multiply_matrix(placed,m));
+        return;
+    }
+    if(c.vehicle==4) {
+        // 0x4d5172 / 0x4d58a1: the GDHModel itself, clip 0, at the car's local
+        // matrix with its translation 160 (0x512a90) higher.
+        Matrix4 m=c.frame();m[13]+=160;
+        submit(a.model.batches,vp,view,multiply_matrix(placed,m));
+        return;
+    }
+    Matrix4 l=identity_matrix();
+    for(size_t ax=0;ax<3;++ax) for(size_t r=0;r<3;++r) l[ax*4+r]*=2.5f;
+    {
+        const float cs=std::cos(0.5235988f),sn=std::sin(0.5235988f);
+        for(size_t r=0;r<3;++r) {const float y=l[4+r],z=l[8+r];l[4+r]=cs*y-sn*z;l[8+r]=sn*y+cs*z;}
+    }
+    l[12]=-30;l[13]=150;l[14]=-10;
+    submit(a.model.batches,vp,view,multiply_matrix(placed,multiply_matrix(c.frame(),l)));
+    // A GDDoubleHModel draws a second copy mirrored across the car's x axis
+    // (Wine, cc_t1: two symmetric wings; the class's own draw is not traced):
+    // x negated in the model, the triangles' order reversed, at x +30.
+    auto& mirror=fly_mirrors_[car];
+    mirror=a.model.batches;
+    for(auto& b:mirror) {
+        for(auto& v:b.vertices) v.x=-v.x;
+        for(size_t t=0;t+2<b.vertices.size();t+=3) std::swap(b.vertices[t+1],b.vertices[t+2]);
+    }
+    Matrix4 r=l;r[12]=30;
+    submit(mirror,vp,view,multiply_matrix(placed,multiply_matrix(c.frame(),r)));
+}
+void RaceView::submit_fires(int car,const RaceCar& c,const Matrix4& placed) {
+    // Which WFire siblings of the body (car model 0x6b's 0x71/0x72, 0xd7's 0xdd,
+    // 0xa0's 0xa9/0xaa, 0x86's 0x8c) are shown, with their members +0x11e
+    // (length), +0x122 (width), +0x126 (spread) and local frame: turned about
+    // x (0x402626 -> 0x43c250(a, 0, 0)) and moved (0x40150a).
+    struct Fire {float x,y,z;int length,width,spread;float turn;};
+    static const Fire none[1]={};
+    const Fire* fires=none;size_t count=0;
+    const int effect=session_.gadget_effect(car);
+    if(effect==8) {
+        // TurboSpeed's init by vehicle (table 0x4d70a8); its end (table
+        // 0x4d7378) hides them again with the effect.
+        static const Fire v0[2]={{-40,15,-140,150,18,80,3.1415927f},{37,15,-140,150,18,80,3.1415927f}};  // 0x4d6df5
+        static const Fire v2[1]={{0,20,-120,100,40,80,3.1415927f}};                                         // 0x4d7022
+        static const Fire v5[2]={{-50,55,-100,70,20,100,3.1415927f},{50,55,-100,70,20,100,3.1415927f}};   // 0x4d6ee2
+        static const Fire v6[1]={{0,50,-170,100,40,80,3.1415927f}};                                         // 0x4d6d9e
+        switch(c.vehicle) {
+            case 0: fires=v0;count=2;break; case 2: fires=v2;count=1;break;
+            case 5: fires=v5;count=2;break; case 6: fires=v6;count=1;break;
+            default: break;
+        }
+    } else if(session_.flying(car)>0) {
+        // FlyPower: vehicle 0 (0x4d4f26), vehicle 5 (0x4d504b, turned by
+        // 0x405f66f3 = 3.4907); hidden by the ends 0x4d5a75 and 0x4d5aae.
+        static const Fire v0[2]={{-55,30,-130,100,40,80,3.1415927f},{50,30,-130,100,40,80,3.1415927f}};
+        static const Fire v5[2]={{-40,65,-80,100,40,80,3.4906585f},{40,65,-80,100,40,80,3.4906585f}};
+        if(c.vehicle==0) {fires=v0;count=2;} else if(c.vehicle==5) {fires=v5;count=2;}
+    }
+    if(!count) return;
+    const Matrix4 model=multiply_matrix(placed,initial_vehicle_model_frame(c.frame()));
+    const auto rand15=[&]{fire_random_=fire_random_*214013u+2531011u;return int((fire_random_>>16)&0x7fff);};
+    for(size_t k=0;k<count;++k) {
+        const Fire& f=fires[k];
+        Matrix4 local=identity_matrix();
+        const float cs=std::cos(f.turn),sn=std::sin(f.turn);
+        local[5]=cs;local[6]=-sn;local[9]=sn;local[10]=cs;   // 0x43c250 with (a, 0, 0)
+        local[12]=f.x;local[13]=f.y;local[14]=f.z;
+        const Matrix4 m=multiply_matrix(model,local);
+        // 0x481390: W = rand % (spread / 16 + 1) + width, L = rand % spread +
+        // length + 1; ten points (0x6f2908): the origin, (0, W/2, 0), (W/2, 0,
+        // 0), (0, -W/2, 0), (-W/2, 0, 0), the ring (0, W), (W, 0), (0, -W),
+        // (-W, 0) at L/4, and the tip (0, 0, L).
+        const float W=float(rand15()%(f.spread/16+1)+f.width);
+        const float L=float(rand15()%f.spread+f.length+1);
+        const std::array<Vec3,10> p{{{{0,0,0}},{{0,W*0.5f,0}},{{W*0.5f,0,0}},{{0,-W*0.5f,0}},{{-W*0.5f,0,0}},
+                                     {{0,W,L*0.25f}},{{W,0,L*0.25f}},{{0,-W,L*0.25f}},{{-W,0,L*0.25f}},{{0,0,L}}}};
+        // The first corner's colour: red 255, green 128..255 (rand & 0x7f +
+        // 0x80), blue 0, alpha 170..249 (rand % 80 + 0xaa); the others 0.
+        const float g=float((rand15()&0x7f)+0x80)/255.f;
+        const float a=float(rand15()%80+0xaa)/255.f;
+        // The triangles (0x52b518): (0, 9, 5..8), (0, 1..4, 5..8).
+        static const uint8_t tri[8][3]={{0,9,5},{0,9,6},{0,9,7},{0,9,8},{0,1,5},{0,2,6},{0,3,7},{0,4,8}};
+        for(const auto& t:tri) for(size_t i=0;i<3;++i) {
+            const Vec3& v=p[t[i]];
+            WpcTexturedVertex3D w{};
+            w.x=m[0]*v[0]+m[4]*v[1]+m[8]*v[2]+m[12];
+            w.y=m[1]*v[0]+m[5]*v[1]+m[9]*v[2]+m[13];
+            w.z=m[2]*v[0]+m[6]*v[1]+m[10]*v[2]+m[14];
+            if(i==0) {w.r=1;w.g=g;w.b=0;w.a=a;}
+            fire_tris_.push_back(w);
+        }
+    }
+}
+void RaceView::submit_kicks(const Matrix4& vp,const Matrix4& view,const std::function<Matrix4(int)>& place) {
+    // 0x4d8710: the boot's GDHModel turned about y by +0x88 (0x43c380) under
+    // the brick; its segment 1's scale locked at 1 (0x4d88b5) and its
+    // translation at the extension +0x68 (0x4381a0(1, ext, 1)).
+    const auto& kicks=session_.kicks();
+    if(boot_.batches.empty()) return;
+    static const MotionLib none;
+    while(boots_.size()<kicks.size()) boots_.push_back(std::make_unique<AnimatedInstance>(boot_,boot_.lib?*boot_.lib:none));
+    for(size_t i=0;i<kicks.size();++i) {
+        const auto& k=kicks[i];
+        AnimatedInstance& a=*boots_[i];
+        a.overrides={{1,{1.f,1.f,1.f}}};a.moves={{1,{k.ext[0],k.ext[1],k.ext[2]}}};
+        a.posed=0;pose(a);
+        const RaceCar& user=k.owner<0?session_.player():session_.opponents().at(size_t(k.owner)).car;
+        Matrix4 g=identity_matrix();   // 0x4d88fc: reset, then turned
+        const float c=std::cos(k.angle),s=std::sin(k.angle);
+        g[0]=c;g[1]=0;g[2]=s;g[4]=0;g[5]=1;g[6]=0;g[8]=-s;g[9]=0;g[10]=c;
+        submit(a.model.batches,vp,view,multiply_matrix(place(user.section),multiply_matrix(k.brick,g)));
+    }
+}
+void RaceView::submit_tank_hit(int car,const BombHit& hit,const CarEffects& fx,const Matrix4& vp,const Matrix4& view,const Matrix4& placed) {
+    // The chunks (WReszecske clones of m_Particle) outlive the hit.
+    if(!chunk_model_.empty()) for(const auto& c:fx.chunks()) submit(chunk_model_,vp,view,multiply_matrix(placed,c.frame));
+    // Type 2 (0x47e277): the GDHModel at the frame the hit took from the car,
+    // its axes scaled (0x402027), segments 1, 3, 4 and 5 scaled by the
+    // overrides of stage 2 (0x437f70).
+    const bool on=hit.active() && hit.type==2 && hit.tank.shown && !tank_hit_.batches.empty();
+    auto found=tank_hits_.find(car);
+    if(!on) {if(found!=tank_hits_.end()) tank_hits_.erase(found);return;}
+    static const MotionLib none;
+    if(found==tank_hits_.end()) found=tank_hits_.emplace(car,std::make_unique<AnimatedInstance>(tank_hit_,tank_hit_.lib?*tank_hit_.lib:none)).first;
+    AnimatedInstance& a=*found->second;
+    a.overrides.clear();
+    if(hit.tank.override) {
+        const size_t segs[4]={1,3,4,5};
+        for(size_t k=0;k<4;++k) a.overrides.push_back({segs[k],hit.tank.segments[k]});
+    }
+    a.posed=0;   // the overrides change each update: pose every draw
+    pose(a);
+    Matrix4 m(hit.tank.frame);
+    for(size_t ax=0;ax<3;++ax) for(size_t r=0;r<3;++r) m[ax*4+r]*=hit.tank.scale[ax];
+    submit(a.model.batches,vp,view,multiply_matrix(placed,m));
 }
 bool RaceView::shadow_frame(size_t slot,const RaceCar& car,Matrix4& out) {
     // From 403.7 above the car to 1000 below; f is the hit's fraction of that
@@ -376,9 +1136,18 @@ bool RaceView::shadow_frame(size_t slot,const RaceCar& car,Matrix4& out) {
     if(found==shadow_frames_.end()) return false;
     out=found->second;return true;
 }
-void RaceView::effects(const Matrix4& vp,const Matrix4& view,const Matrix4& camera_frame) {
+void RaceView::effects(const Matrix4& vp,const Matrix4& view,const Matrix4& camera_frame,const std::function<Matrix4(int)>& place,uint32_t enabled) {
     std::vector<const CarEffects*> cars{&session_.effects()};
-    for(size_t i=0;i<session_.opponents().size();++i) cars.push_back(&session_.opponent_effects(i));
+    std::vector<int> car_sections{session_.player().section};
+    for(size_t i=0;i<session_.opponents().size();++i) {cars.push_back(&session_.opponent_effects(i));car_sections.push_back(session_.opponents()[i].car.section);}
+    // Groups (+0x104): a car's effects copy its group (WSplash 0x472d00,
+    // WalkOnWater 0x47c680); a fired or thrown weapon takes its tracker row's
+    // section (0x4a6b30, kept by the manager 0x4a1c40); a dropped one goes
+    // into the power-up table of the row whose box holds it (0x4a6d20 ->
+    // 0x49c890) and is enabled with that row (0x4a8680). The skid marks
+    // (0x47a7c0) stay in place (their matrix is not traced).
+    const auto on=[&](int section) {return section<0 || section>31 || (enabled>>unsigned(section)&1u);};
+    const auto at_frame=[&](int section,const Matrix4& m) {return multiply_matrix(place(section),m);};
     // 0x47a7c0 (Direct3D path, 0x6f5958 = 2): for each wheel, two triangles
     // per pair of active segments, untextured (FVF 0x42), vertex colour
     // (fade << 24 | shade x 0x010101), mode 0x18: alpha blended, no culling,
@@ -405,21 +1174,95 @@ void RaceView::effects(const Matrix4& vp,const Matrix4& view,const Matrix4& came
     }
     for(const Tnt& t:session_.tnts()) {
         RaceCar at;at.position=t.position;at.yaw=std::atan2(-t.velocity[0],t.velocity[2]);
-        submit(tnt_,vp,view,at.frame());
+        submit(tnt_,vp,view,at_frame(t.section,at.frame()));
     }
     for(const Projectile& p:session_.projectiles()) {
         const auto it=projectiles_.find(p.object);
         if(it==projectiles_.end()) continue;
         RaceCar at;at.position=p.position;at.yaw=std::atan2(-p.velocity[0],p.velocity[2]);
-        submit(it->second,vp,view,at.frame());
+        submit(it->second,vp,view,at_frame(p.section,at.frame()));
+    }
+    // WRocketTail's draw (0x4eacf1, Direct3D path): blending on, no culling,
+    // no depth write (0x4b5550 mode 9, 0x4b44e0).
+    for(const Projectile& p:session_.projectiles()) {
+        const auto style=tails_.find(p.object);
+        if(style==tails_.end()) continue;
+        const Matrix4 m=place(p.section);
+        const auto at=[&](const Vec3& v) {return Vec3{{m[0]*v[0]+m[4]*v[1]+m[8]*v[2]+m[12],m[1]*v[0]+m[5]*v[1]+m[9]*v[2]+m[13],m[2]*v[0]+m[6]*v[1]+m[10]*v[2]+m[14]}};};
+        const int length=style->second.length;
+        std::vector<WpcTexturedVertex3D> tris;
+        const auto vertex=[](const Vec3& v,float r,float g,float b,float a) {
+            WpcTexturedVertex3D w{};w.x=v[0];w.y=v[1];w.z=v[2];w.r=r;w.g=g;w.b=b;w.a=a;return w;
+        };
+        if(style->second.fins) {
+            // Points 1..L-1 relative to the head; the taper s starts at 1 and
+            // loses 1/L a point (to 0), the corners are c +/- s x up and
+            // +/- s x side, each axis x m_Width x k. Four fins (0x4eb260 with
+            // corners 1..4) run from the centre line, alpha 255 - (255 / L)
+            // per segment, to the corner, alpha 0, in (232, 223, 172)
+            // (0xffe8dfac). 0x4b5550 is given L triangles: L / 2 segments.
+            std::vector<float> taper(size_t(length),0);
+            float s=1;
+            for(int i=1;i<length;++i) {taper[size_t(i)]=s;s=s>1.f/float(length)?s-1.f/float(length):0;}
+            const int step=255/length;
+            for(int fin=0;fin<4;++fin) {
+                int alpha=255;
+                for(int j=0;j<length/2 && j+2<length;++j) {
+                    const auto corner=[&](int i) {
+                        const auto& t=p.tail[size_t(i)];
+                        const Vec3& axis=fin%2==0?t.up:t.side;
+                        const float d=(fin<2?1.f:-1.f)*taper[size_t(i)]*t.k*float(style->second.width);
+                        return at({{t.position[0]+axis[0]*d,t.position[1]+axis[1]*d,t.position[2]+axis[2]*d}});
+                    };
+                    const Vec3 a0=at(p.tail[size_t(j+1)].position),a1=at(p.tail[size_t(j+2)].position),b0=corner(j+1),b1=corner(j+2);
+                    const float r=232/255.f,g=223/255.f,bl=172/255.f,al0=float(alpha)/255.f;
+                    alpha=std::max(alpha-step,0);
+                    const float al1=float(alpha)/255.f;
+                    for(const auto& v:{vertex(b0,r,g,bl,0),vertex(b1,r,g,bl,0),vertex(a0,r,g,bl,al0),
+                                       vertex(b1,r,g,bl,0),vertex(a1,r,g,bl,al1),vertex(a0,r,g,bl,al0)}) tris.push_back(v);
+                }
+            }
+        }
+        // 0x4b44e0: once the tail has run (+0x28 = 12), a disc of +0x6a = 8
+        // segments facing the camera at the head, radius +0x68 = 300 + 30 cos,
+        // centre colour (240 + 15 sin, 150 + 50 sin, 120, 200 + 50 cos) of the
+        // phase, its rim transparent.
+        if(p.tail_updates>0) {
+            const float c=std::cos(p.tail_phase),sn=std::sin(p.tail_phase);
+            const float radius=float(int(300+30*c));
+            const float r=float(int(240+15*sn))/255.f,g=float(int(150+50*sn))/255.f,bl=120/255.f,al=float(int(200+50*c))/255.f;
+            const Vec3 head=at(p.tail[0].position);
+            const Vec3 x{{camera_frame[0],camera_frame[1],camera_frame[2]}},y{{camera_frame[4],camera_frame[5],camera_frame[6]}};
+            const auto rim=[&](int k) {
+                const float a=float(2*k)*3.14159265f/8.f;
+                const float u=std::sin(a)*radius,v=std::cos(a)*radius;
+                return vertex({{head[0]+x[0]*u+y[0]*v,head[1]+x[1]*u+y[1]*v,head[2]+x[2]*u+y[2]*v}},r,g,bl,0);
+            };
+            for(int k=0;k<8;++k) {tris.push_back(vertex(head,r,g,bl,al));tris.push_back(rim(k));tris.push_back(rim(k+1));}
+        }
+        if(!tris.empty()) {
+            wpc_vk_set_mvp(window_,vp.data());
+            wpc_vk_set_draw_mode(window_,WPC_DRAW_NO_DEPTH_WRITE);
+            wpc_vk_draw_material_triangles(window_,white_,tris.data(),uint32_t(tris.size()),3,1);
+            wpc_vk_set_draw_mode(window_,0);
+        }
+    }
+    // WFire's draw (0x481390, renderer 1: 0x4b5550 mode 8): the default
+    // blend, culling on (no bit 0x10), no depth write.
+    if(!fire_tris_.empty()) {
+        wpc_vk_set_mvp(window_,vp.data());
+        wpc_vk_set_draw_mode(window_,WPC_DRAW_NO_DEPTH_WRITE);
+        wpc_vk_draw_material_triangles(window_,white_,fire_tris_.data(),uint32_t(fire_tris_.size()),3,0);
+        wpc_vk_set_draw_mode(window_,0);
+        fire_tris_.clear();
     }
     for(const Landmine& m:session_.mines()) {
+        if(!on(m.section)) continue;
         RaceCar at;at.position=m.position;at.yaw=m.yaw;at.up=m.normal;
-        submit(m.detour?detour_:m.oil?oil_:m.hive?hive_:landmine_,vp,view,at.frame());
+        submit(m.detour?detour_:m.oil?oil_:m.hive?hive_:landmine_,vp,view,at_frame(m.section,at.frame()));
     }
     // The storm cloud: the sprite at the cloud, faced to the camera
-    // (0x419b90, type 0), its alpha the fade +0x152 (provisional: the
-    // sprite's own draw of +0x152 is not traced).
+    // (0x419b90, type 0), turned by its +0x152 angle.
     for(const auto& shown:storm_shown_) translucent_.erase(&shown);
     storm_shown_.resize(session_.storms().size());
     for(size_t i=0;i<session_.storms().size();++i) {
@@ -429,27 +1272,37 @@ void RaceView::effects(const Matrix4& vp,const Matrix4& view,const Matrix4& came
         if(st.done) {shown.clear();continue;}
         for(WorldBatch& b:shown) {
             if(!b.billboard) continue;
-            b.anchor=st.position;
-            for(auto& v:b.vertices) v.a*=std::clamp(st.fade,0.f,1.f);
+            const Matrix4 m=place(st.section);  // the anchor moved, then faced
+            for(size_t k=0;k<3;++k) b.anchor[k]=m[k]*st.position[0]+m[4+k]*st.position[1]+m[8+k]*st.position[2]+m[12+k];
+            // 0x419eef: the quad turns by +0x152 about the view axis
+            // (0x43b690: x' = c x - s y, y' = c y + s x), so an offset (ox, oy)
+            // on the right/up axes becomes (c ox + s oy, c oy - s ox).
+            if(st.angle!=0) {
+                const float c=std::cos(st.angle),sn=std::sin(st.angle);
+                for(auto& o:b.offsets) o={{c*o[0]+sn*o[1],c*o[1]-sn*o[0]}};
+            }
         }
         face_billboards(shown,camera_frame);
         translucent_[&shown]=translucent_models(shown);
         submit(shown,vp,view,identity_matrix());
     }
     for(const Barrier& w:session_.barriers()) {
+        if(!on(w.section)) continue;
         RaceCar at;at.position=w.position;at.yaw=w.yaw;
-        submit(w.tree?tree_:wall_,vp,view,at.frame());
+        submit(w.tree?tree_:wall_,vp,view,at_frame(w.section,at.frame()));
     }
-    for(const CarEffects* fx:cars) {
+    for(size_t c=0;c<cars.size();++c) {
+        const CarEffects* fx=cars[c];
+        const Matrix4 placed=place(car_sections[c]);
         for(const auto& s:fx->splashes()) {
             if(s.state<=0) continue;
-            submit(splash_column_,vp,view,s.column());
-            submit(splash_ring_,vp,view,s.ring());
+            submit(splash_column_,vp,view,multiply_matrix(placed,s.column()));
+            submit(splash_ring_,vp,view,multiply_matrix(placed,s.ring()));
         }
         for(const auto& r:fx->ripples()) {
             Matrix4 m=r.base;
             for(size_t i=0;i<3;++i) {m[i]*=r.scale;m[4+i]*=r.scale;m[8+i]*=r.scale;}
-            submit(ripple_,vp,view,m);
+            submit(ripple_,vp,view,multiply_matrix(placed,m));
         }
     }
 }
@@ -477,6 +1330,37 @@ void RaceView::draw() {
         }
     }
     wpc_vk_set_clip_rect(window_,0,0,width,height);
+}
+void RaceView::animate_scrolls() {
+    // 0x463e90: units per update over the first material's texture size (width for
+    // u, height for v), added to every vertex. Driven from the update count,
+    // so several draws of an update agree.
+    const uint64_t n=session_.updates();
+    for(Scroll& u:scrolls_) {
+        if(!u.found) {
+            u.found=true;
+            const auto gather=[&](std::vector<WorldBatch>& list) {
+                for(WorldBatch& b:list) if(b.node_id==u.node) {
+                    std::vector<float> base;base.reserve(b.vertices.size());
+                    for(const auto& v:b.vertices) base.push_back(u.along_u?v.u:v.v);
+                    u.batches.emplace_back(&b,std::move(base));
+                }
+            };
+            gather(world_.batches);
+            for(auto& list:spins_) gather(list);
+        }
+        for(auto& [batch,base]:u.batches) {
+            const auto size=texture_sizes_.find(batch->material.texture_id);
+            if(size==texture_sizes_.end()) continue;
+            const float extent=float(u.along_u?size->second[0]:size->second[1]);
+            if(!(extent>0)) continue;
+            // units x updates wrapped by the texture size in integers, so the
+            // shift keeps its precision and never jumps over a long race.
+            const int64_t e=int64_t(extent),m=((int64_t(u.units)*int64_t(n%uint64_t(e)))%e+e)%e;
+            const float shift=float(m)/extent;
+            for(size_t k=0;k<batch->vertices.size() && k<base.size();++k) (u.along_u?batch->vertices[k].u:batch->vertices[k].v)=base[k]+shift;
+        }
+    }
 }
 void RaceView::animate_lights() {
     // 0x4caf95 (renderer mode 1): each lights vertex with a serialized v
@@ -508,7 +1392,7 @@ void RaceView::animate_lights() {
     }
 }
 void RaceView::draw_view(int human,int width,int height) {
-    if(human==0) animate_lights();
+    if(human==0) {animate_lights();animate_scrolls();}
     const int w=int(640*scale_),h=int(480*scale_);
     const bool two=session_.two_players();
     wpc_vk_draw_rect(window_,offset_x_,offset_y_+(two?human*(h/2):0),w,two?h/2:h,world_.clear[0],world_.clear[1],world_.clear[2],1);
@@ -516,17 +1400,25 @@ void RaceView::draw_view(int human,int width,int height) {
     const Matrix4& camera=session_.camera(human);
     Matrix4 vp=multiply_matrix(projection_,inverse_affine_matrix(camera));
     for(size_t c=0;c<4;++c) {vp[c*4]*=float(w)/width;vp[c*4+1]*=float(h)/height;}
-    // A half viewport keeps the pixel scale: the view's middle band, moved
-    // up (player 1) or down (player 2) by a quarter of the frame (provisional).
-    if(two) for(size_t c=0;c<4;++c) vp[c*4+1]+=vp[c*4+3]*(human?0.5f:-0.5f)*float(h)/height;
+    // A half viewport (Wine, cc_t1 two players, 2026-11-08): the view at
+    // 1/sqrt 2 of its full-screen pixel size in both axes (the tower car 205 x
+    // 70 pixels at 1024x768 against 290 x 100), centred in the half and cut by
+    // it, as if the camera ratio (+0x15e, 0x435410) were halved (x x 0.707,
+    // y x 1.414 onto half the height). Where the original halves it is not traced.
+    if(two) {
+        const float k=0.70710678f;
+        for(size_t c=0;c<4;++c) {vp[c*4]*=k;vp[c*4+1]=vp[c*4+1]*k+vp[c*4+3]*(human?0.5f:-0.5f)*float(h)/height;}
+    }
     // Backdrop around the eye, unfogged, just inside the far plane.
     {
-        // Scaled to 93% of the far plane and lowered by 10.5% of the dome
-        // radius, both fitted to the cc_t1 Wine frame (dome radius 2505).
+        // Scaled to 93% of the far plane (fitted to the cc_t1 Wine frame, dome
+        // radius 2505) about the eye, in the dome node's frame less its
+        // translation. The earlier fit lowered it by 262/2505 of the radius:
+        // cc_t1's node translation is (0, 262, 0).
         const float k=fog_end_*0.93f/backdrop_radius_;
         Matrix4 place=identity_matrix();
         place[0]=place[5]=place[10]=k;
-        place[12]=camera[12];place[13]=camera[13]-backdrop_radius_*(262.f/2505.f)*k;place[14]=camera[14];
+        for(size_t i=0;i<3;++i) place[12+i]=camera[12+i]-k*backdrop_origin_[i];
         wpc_vk_set_fog(window_,0,0,0,0,0);
         draw_batches(backdrop_,multiply_matrix(vp,place));
     }
@@ -542,16 +1434,61 @@ void RaceView::draw_view(int human,int width,int height) {
     // queued per model and flushed at the end of the frame (0x4b2d70).
     const Matrix4 view=inverse_affine_matrix(camera),id=identity_matrix();
     queue_.clear();queued_.clear();
-    submit(world_.batches,vp,view,id);
-    // The course continues through the WMOD loop transform: beyond the last
-    // route's exit portal lies the first route, and vice versa.
-    const Vec3 eye{{camera[12],camera[13],camera[14]}};
-    const auto near=[&](const Vec3& p) {
-        const float dx=p[0]-eye[0],dz=p[2]-eye[2];return dx*dx+dz*dz<25000.f*25000.f;
-    };
+    // 0x49e290, 0x4a0bbf, 0x4a14b5: on a section change the player's tracker
+    // disables its three rows (0x4a8850) and enables the new ones (0x4a8680):
+    // its section and the two beside it, in a loop (Wine, dr_t3 on the grid
+    // in section 3: brick #303 of section 1 inactive, the others active;
+    // robots enable nothing). With two players both sets are drawn
+    // (provisional: the original's second tracker is not traced).
     const RaceTrack& track=session_.track();
-    if(near(track.exit(int(track.sections())-1))) submit(world_.batches,vp,view,track.unwrap());
-    if(near(track.entry(0))) submit(world_.batches,vp,view,track.wrap());
+    const int sections=int(track.sections());
+    uint32_t enabled=0;
+    const auto enable=[&](int s) {
+        if(sections<=0 || sections>32) {enabled=~0u;return;}
+        for(int d=-1;d<=1;++d) enabled|=1u<<(((s+d)%sections+sections)%sections);
+    };
+    enable(session_.player().section);
+    if(session_.two_players()) enable(session_.opponents()[0].car.section);
+    // The loop seam: each node's group (+0x104, its section; 0xffff when it
+    // has none) picks its matrix cache through 0x5472d0 (0x4200e0): +0xcc,
+    // under the root's local matrix (the WMOD wrap), for the groups 0x432690
+    // marks; otherwise +0x98. Drawing (0x432710) marks the last group when the
+    // player is in section 0, and the last two when the player is in the last
+    // section (Wine, dr_t3: tables 98 98 98 cc and 98 98 cc cc; root +0xcc =
+    // wrap()); groups past 3 never. A group is drawn in one place only. From a
+    // camera in the player's group, the marked groups go through wrap(), or the
+    // others through unwrap() when the player's own group is marked.
+    const int p=human==1 && session_.two_players()?session_.opponents()[0].car.section:session_.player().section;
+    const int final_group=sections-1;
+    const auto marked=[&](int g) {
+        if(g<0 || g>3 || sections<=0) return false;
+        if(p==0 && g==final_group) return true;
+        return p==final_group && g>=final_group-1;
+    };
+    const bool camera_marked=marked(p);
+    // 0: in place, 1: through unwrap(), 2: through wrap().
+    const auto place_of=[&](int g) {return marked(g)==camera_marked?0:camera_marked?1:2;};
+    for(size_t i=0;i<batch_sections_.size();++i) {
+        const uint32_t m=batch_sections_[i];
+        const bool on=!m || (m&enabled);
+        const int at=place_of(batch_group_[i]);
+        drawn_[i]=on && at==0;
+        seam_[0][i]=on && at==1;
+        seam_[1][i]=on && at==2;
+    }
+    submit(world_.batches,vp,view,id,&drawn_);
+    submit(world_.batches,vp,view,track.unwrap(),&seam_[0]);
+    submit(world_.batches,vp,view,track.wrap(),&seam_[1]);
+    const auto seam_place=[&](int section) {
+        const int at=place_of(section);
+        return at==1?track.unwrap():at==2?track.wrap():id;
+    };
+    // Course objects are drawn where their group's section is (the group of
+    // the node their batches come from).
+    const auto submit_object=[&](const std::vector<WorldBatch>& batches,const Matrix4& model) {
+        const std::vector<int>& in=batches.empty()?batch_group_none_:track.node_sections(batches.front().node_id);
+        submit(batches,vp,view,multiply_matrix(seam_place(in.empty()?-1:in.front()),model));
+    };
     // Pickups: the GDModel's local transform becomes the shared spin times
     // the state's scale, about the WPowerUp's origin.
     {
@@ -565,32 +1502,74 @@ void RaceView::draw_view(int human,int width,int height) {
             Matrix4 m=identity_matrix();
             m[0]=c*k;m[2]=-sn*k;m[5]=k;m[8]=sn*k;m[10]=c*k;
             m[12]=o[0]-(m[0]*o[0]+m[8]*o[2]);m[13]=o[1]-k*o[1];m[14]=o[2]-(m[2]*o[0]+m[10]*o[2]);
-            submit(pickups_[i],vp,view,m);
+            submit_object(pickups_[i],m);
         }
     }
     {
         const CourseObjects& objects=session_.objects();
-        for(size_t i=0;i<crossing_trams_.size();++i) if(objects.crossings()[i].active) submit(crossing_trams_[i],vp,view,objects.crossings()[i].tram_frame());
-        for(size_t i=0;i<movers_.size();++i) if(objects.movers()[i].active) submit(movers_[i],vp,view,objects.movers()[i].placed);
-        for(size_t i=0;i<logs_.size();++i) for(size_t k=0;k<logs_[i].size();++k) submit(logs_[i][k],vp,view,objects.log_rides()[i].frames[k]);
-        for(size_t i=0;i<bridges_.size();++i) for(size_t k=0;k<2;++k) submit(bridges_[i][k],vp,view,objects.bridges()[i].frames[k]);
+        for(size_t i=0;i<crossing_trams_.size();++i) if(objects.crossings()[i].active) submit_object(crossing_trams_[i],objects.crossings()[i].tram_frame());
+        for(size_t i=0;i<movers_.size();++i) if(objects.movers()[i].active) submit_object(movers_[i],objects.movers()[i].placed);
+        for(size_t i=0;i<logs_.size();++i) for(size_t k=0;k<logs_[i].size();++k) submit_object(logs_[i][k],objects.log_rides()[i].frames[k]);
+        for(size_t i=0;i<bridges_.size();++i) for(size_t k=0;k<2;++k) submit_object(bridges_[i][k],objects.bridges()[i].frames[k]);
         for(size_t i=0;i<holes_.size();++i) {
             const DynamiteHole& d=objects.dynamite_holes()[i];
-            submit(holes_[i][0],vp,view,d.lid_frame());
-            if(d.armed) submit(holes_[i][1],vp,view,hole_fuses_[i]);
+            submit_object(holes_[i][0],d.lid_frame());
+            if(d.armed) submit_object(holes_[i][1],hole_fuses_[i]);
         }
         for(size_t i=0;i<chisels_.size();++i) {
             const ChiselCrossover& c=objects.chisels()[i];
-            if(c.active) for(size_t k=0;k<chisels_[i].size();++k) submit(chisels_[i][k],vp,view,multiply_matrix(c.log_world,c.blow.pieces[k].local));
+            if(c.active) for(size_t k=0;k<chisels_[i].size();++k) submit_object(chisels_[i][k],multiply_matrix(c.log_world,c.blow.pieces[k].local));
         }
         for(size_t i=0;i<rocks_.size();++i) {
             const RollingRock& r=objects.rocks()[i];
-            if(r.active) {const Matrix4 w=r.world();for(size_t k=0;k<rocks_[i].size();++k) submit(rocks_[i][k],vp,view,multiply_matrix(w,r.blow.pieces[k].local));}
+            if(r.active) {const Matrix4 w=r.world();for(size_t k=0;k<rocks_[i].size();++k) submit_object(rocks_[i][k],multiply_matrix(w,r.blow.pieces[k].local));}
+        }
+        for(size_t i=0;i<dicks_.size();++i) {
+            const DicksRoad& r=objects.dicks_roads()[i];
+            if(r.active) submit_object(dicks_[i][size_t(r.chosen)],r.world[size_t(r.chosen)]);
+        }
+        for(size_t i=0;i<golden_.size();++i) {
+            const GoldenGate& g=objects.golden_gates()[i];
+            for(size_t k=0;k<9;++k) submit_object(golden_[i][k],multiply_matrix(g.parent,g.doors[k].frame));
+            submit_object(golden_[i][9],multiply_matrix(g.parent,g.marker_frame));
+        }
+        for(size_t i=0;i<cranes_.size();++i) {
+            const Crane& c=objects.cranes()[i];
+            if(!c.active) continue;
+            const auto w=c.worlds();
+            submit_object(cranes_[i][0],w[0]);
+            // Batches are in the group's space: each arm's motion from its home.
+            const Matrix4 m1=multiply_matrix(c.frame[1],inverse_affine_matrix(c.home[1]));
+            submit_object(cranes_[i][1],multiply_matrix(w[0],m1));
+            const Matrix4 m2=multiply_matrix(c.frame[2],inverse_affine_matrix(c.home[2]));
+            submit_object(cranes_[i][2],multiply_matrix(multiply_matrix(w[0],m1),multiply_matrix(c.home[1],multiply_matrix(m2,inverse_affine_matrix(c.home[1])))));
+        }
+        for(size_t i=0;i<shifted_.size();++i) {
+            const ShiftedRoad& r=objects.shifted_roads()[i];
+            for(size_t k=0;k<6;++k) submit_object(shifted_[i][k],multiply_matrix(r.parent,r.frame[k]));
+        }
+        for(size_t i=0;i<saws_.size();++i) {
+            const Saw& w=objects.saws()[i];
+            const Matrix4 sp=multiply_matrix(w.world,w.spinner_frame);
+            submit_object(saws_[i][0],sp);
+            submit_object(saws_[i][1],multiply_matrix(sp,w.owner_motion()));
+        }
+        for(size_t i=0;i<bumps_.size();++i) {
+            const BumSteer& b=objects.bum_steers()[i];
+            for(size_t k=0;k<2;++k) {
+                submit_object(bumps_[i][k],multiply_matrix(b.parent,b.gate_frame[k]));
+                submit_object(bumps_[i][2+k],multiply_matrix(b.parent,b.runner_frame[k]));
+            }
+        }
+        for(size_t i=0;i<spins_.size();++i) if(objects.model_spins()[i].active) submit_object(spins_[i],objects.model_spins()[i].frame());
+        for(size_t i=0;i<jams_.size();++i) {
+            const LogJam& j=objects.log_jams()[i];
+            if(j.active) for(size_t k=0;k<jams_[i].size();++k) submit_object(jams_[i][k],multiply_matrix(j.parent,j.logs[k].frame));
         }
         for(size_t i=0;i<geysers_.size();++i) if(objects.geysers()[i].active) {
             const Geyser& g=objects.geysers()[i];
-            if(g.top()>0) submit(geysers_[i][0],vp,view,g.column_frame());
-            if(g.ring_scale>0) submit(geysers_[i][1],vp,view,g.ring_frame());
+            if(g.top()>0) submit_object(geysers_[i][0],g.column_frame());
+            if(g.ring_scale>0) submit_object(geysers_[i][1],g.ring_frame());
         }
     }
     for(size_t i=0;i<session_.opponents().size();++i) {
@@ -599,29 +1578,45 @@ void RaceView::draw_view(int human,int width,int height) {
         // Player 2's car in its own near camera (see below).
         if(i==0 && human==1 && session_.two_players() && session_.camera_near(1)) continue;
         const auto& o=session_.opponents()[i];
-        const Matrix4 frame=o.car.frame();
+        // A car's group is its section (+0x104): across the seam it is drawn
+        // where its section is.
+        const Matrix4 placed=seam_place(o.car.section);
+        const Matrix4 frame=multiply_matrix(placed,o.car.frame());
         Matrix4 shadow;
         // 0x47c180 hides the shadow (flag 0x100) in the far mode.
-        if(!o.far && shadow_frame(i+1,o.car,shadow)) submit(shadows_.at(o.vehicle).batches,vp,view,shadow);
-        submit_car(o.vehicle,session_.bomb(int(i)),vp,view,frame);
+        if(!o.far && shadow_frame(i+1,o.car,shadow)) submit(shadows_.at(o.vehicle).batches,vp,view,multiply_matrix(placed,shadow));
+        // Type 2 hides the car, its wheels and +0x32 (flag 0x100) for stages 0..3.
+        if(!session_.bomb(int(i)).tank.car_hidden || session_.bomb(int(i)).type!=2) submit_car(int(i),o.vehicle,session_.bomb(int(i)),vp,view,frame);
+        submit_spin_hit(session_.bomb(int(i)),o.car,vp,view,placed);
+        submit_tank_hit(int(i),session_.bomb(int(i)),session_.opponent_effects(i),vp,view,placed);
+        submit_fly(int(i),o.car,vp,view,placed);
+        submit_fires(int(i),o.car,placed);
+        submit_breath_head(int(i),o.car,vp,view,placed);
     }
     // 0x4782fb: in the near mode the camera writes itself into +0x24 of the
     // car's body, wheels and template part +0x2e0 (cleared on leaving);
     // read here as those parts not being drawn in that view (provisional).
     if(!session_.drowning() && !(human==0 && session_.camera_near(0))) {
-        const Matrix4 frame=session_.player().frame();
+        const Matrix4 placed=seam_place(session_.player().section);  // in place in its own view
+        const Matrix4 frame=multiply_matrix(placed,session_.player().frame());
         Matrix4 shadow;
-        if(shadow_frame(0,session_.player(),shadow)) submit(shadows_.at(session_.player().vehicle).batches,vp,view,shadow);
-        submit_car(session_.player().vehicle,session_.bomb(-1),vp,view,frame);
+        if(shadow_frame(0,session_.player(),shadow)) submit(shadows_.at(session_.player().vehicle).batches,vp,view,multiply_matrix(placed,shadow));
+        if(!session_.bomb(-1).tank.car_hidden || session_.bomb(-1).type!=2) submit_car(-1,session_.player().vehicle,session_.bomb(-1),vp,view,frame);
+        submit_spin_hit(session_.bomb(-1),session_.player(),vp,view,placed);
+        submit_tank_hit(-1,session_.bomb(-1),session_.effects(),vp,view,placed);
+        submit_fly(-1,session_.player(),vp,view,placed);
+        submit_fires(-1,session_.player(),placed);
+        submit_breath_head(-1,session_.player(),vp,view,placed);
     }
-    effects(vp,view,camera);
+    submit_kicks(vp,view,seam_place);
+    effects(vp,view,camera,seam_place,enabled);
     queue_.flush([&](size_t i) {
         const Queued& q=queued_[i];
         wpc_vk_set_mvp(window_,q.mvp.data());
         wpc_vk_set_draw_mode(window_,draw_mode(q.model->draw_flags));
         for(size_t b:q.model->batches) {
             const WorldBatch& batch=(*q.batches)[b];
-            if(batch.hidden) continue;
+            if(batch.hidden || (q.mask && !(*q.mask)[b])) continue;
             wpc_vk_draw_material_triangles(window_,texture(batch.material),batch.vertices.data(),uint32_t(batch.vertices.size()),
                                            batch.material.clamp_axes,batch.material.two_sided?1:0);
         }
@@ -640,28 +1635,47 @@ void RaceView::draw_view(int human,int width,int height) {
         for(size_t k=0;k<=session_.opponents().size();++k) {
         const RaceCar& car=k?session_.opponents()[k-1].car:session_.player();
         const CarEffects& fx=k?session_.opponent_effects(k-1):session_.effects();
+        // A car's films go where its group is across the seam (WKBumm 0x472dc0
+        // and the hit smoke 0x47edcc copy the car's +0x104; the dust and
+        // POUSSIERE puffs follow the car's position).
+        const Matrix4 placed=seam_place(car.section);
+        const auto at_car=[&](const Matrix4& base,const Vec3& p) {
+            Vec3 w{},at{};
+            for(size_t i=0;i<3;++i) w[i]=base[12+i]+base[i]*p[0]+base[4+i]*p[1]+base[8+i]*p[2];
+            for(size_t i=0;i<3;++i) at[i]=placed[12+i]+placed[i]*w[0]+placed[4+i]*w[1]+placed[8+i]*w[2];
+            return at;
+        };
+        const Matrix4 car_origin=[&]{Matrix4 m=identity_matrix();for(size_t i=0;i<3;++i) m[12+i]=car.position[i];return m;}();
         for(const auto& p:fx.puffs()) {
             if(!p.age || size_t(p.reel)>=puff_reels_.size() || puff_reels_[size_t(p.reel)].empty()) continue;
             const auto& reel=puff_reels_[size_t(p.reel)];
-            Vec3 at{};
-            for(size_t i=0;i<3;++i) at[i]=car.position[i]+p.offset[i];
-            add(&reel[size_t(p.frame)%reel.size()],at,puff_scale_,0,{{1,1,1,1}});
+            add(&reel[size_t(p.frame)%reel.size()],at_car(car_origin,p.offset),puff_scale_,0,{{1,1,1,1}});
         }
         // 0x486c40: WKBumm's pieces, scale 0.2, in the clone's frame.
         if(!bumm_frames_.empty()) for(const auto& b:fx.bumms()) for(const auto& p:b.pieces) {
             if(p.landed) continue;
-            Vec3 at{};
-            for(size_t i=0;i<3;++i) at[i]=b.base[12+i]+b.base[i]*p.position[0]+b.base[4+i]*p.position[1]+b.base[8+i]*p.position[2];
-            add(&bumm_frames_[size_t(p.frame)%bumm_frames_.size()],at,0.2f,p.angle,{{1,1,1,1}});
+            add(&bumm_frames_[size_t(p.frame)%bumm_frames_.size()],at_car(b.base,p.position),0.2f,p.angle,{{1,1,1,1}});
         }
+        // 0x42d090 on flamesmoke's film: frame 0 (m_AnimType 0 never steps,
+        // 0x430110), white (m_ColR/G/B 255), the alpha +0x1ba (SMOO 1 keeps it),
+        // the scale +0x152 and the angle +0x14a.
+        if(!hit_smoke_frames_.empty()) for(const auto& h:fx.hit_smokes())
+            add(&hit_smoke_frames_[0],at_car(h.base,h.position),h.scale,h.angle,{{1,1,1,float(h.alpha)/255.f}});
         // 0x47b9d0: the POUSSIERE puffs, two in three slots, frame age - 1,
         // colour (160, 128, 0), alpha (24 - age) x 3, scale 0.5 + 0.05 age.
         if(!smoke_frames_.empty()) for(size_t i=0;i<fx.smoke().size();++i) {
             const auto& m=fx.smoke()[i];
             if(!m.age || i%3==0) continue;
-            add(&smoke_frames_[size_t(m.age-1)%smoke_frames_.size()],m.position,float(m.age)*0.05f+0.5f,0,
+            add(&smoke_frames_[size_t(m.age-1)%smoke_frames_.size()],at_car(identity_matrix(),m.position),float(m.age)*0.05f+0.5f,0,
                 {{160/255.f,128/255.f,0,float((24-m.age)*3)/255.f}});
         }
+        }
+        // The breath (DragonBreath 0x39a): its GD3DFilm 0x39d at the projectile,
+        // m_Scale 1, white, frame trunc(+0x196) (m_AnimType 2, frames 0..7).
+        if(!breath_film_.empty()) for(const Projectile& p:session_.projectiles()) if(p.object==0x39a) {
+            const Matrix4 m=seam_place(p.section);
+            const Vec3& v=p.position;
+            add(&breath_film_[size_t(p.film)%breath_film_.size()],{{m[0]*v[0]+m[4]*v[1]+m[8]*v[2]+m[12],m[1]*v[0]+m[5]*v[1]+m[9]*v[2]+m[13],m[2]*v[0]+m[6]*v[1]+m[10]*v[2]+m[14]}},1,0,{{1,1,1,1}});
         }
         // WExplosion (provisional: its update is not traced): m_Size 500
         // reached over m_GrowTime (2), then faded over m_FadeOutTime (20),
@@ -696,7 +1710,12 @@ void RaceView::draw_view(int human,int width,int height) {
             };
             const WpcTexturedVertex3D quad[6]={corner(x0,y1,0,0),corner(x1,y1,1,0),corner(x1,y0,1,1),
                                                corner(x0,y1,0,0),corner(x1,y0,1,1),corner(x0,y0,0,1)};
+            // 0x4b5550 (the film's Direct3D draw, renderer 0x6f5958 = 1): no
+            // depth write; mode 8, or 9 + SMOO when the frame's SILL (+0x5c)
+            // is set (0x42d5c4). Mode 10's bit 0x2 blends INVSRCALPHA/INVSRCCOLOR.
+            if(g.film) wpc_vk_set_draw_mode(window_,WPC_DRAW_NO_DEPTH_WRITE|(g.sill && g.smooth?WPC_DRAW_INVERSE:0));
             wpc_vk_draw_material_triangles(window_,g.texture,quad,6,3,1);
+            if(g.film) wpc_vk_set_draw_mode(window_,0);
         }
     }
     wpc_vk_set_fog(window_,0,0,0,0,0);

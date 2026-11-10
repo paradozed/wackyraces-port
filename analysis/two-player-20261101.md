@@ -60,3 +60,25 @@
 - `0x4d2c80` draws per viewport (`viewport+0x13a`): 0 takes player 1's car (`+0x11e`), the needle at (273,93) and its angle state `+0x13e`; otherwise player 2's (`+0x122`), the needle at (276,95), state `+0x142`. The gauge (230,68), gadget (250,10) and weapon (290,10) are the same. `0x546cf0` is 1 or 2 in two players while `+0x146` draws (0 in battle and state 5); that element is not identified.
 - Player 2 is a human (`+0xc0` = 0, `0x49eb20`), so `0x4679d0` runs the human roulette for it (the port used the robots' slot path).
 - Native: `RaceSession::human_items` for both players (`items2_`), `RaceView::powerup_panel(human)`. Headless capture (`--race cc/cc_t1.wgm --vehicle2 1`): both panels with their own items. Not compared with Wine.
+
+## The half viewport against Wine (2026-11-08)
+
+### Wine
+
+- **Path to a two-player race.** Main menu Return (DEMARRER), Down + Return (2 JOUEURS), Return
+  (COURSE). On the car page, Up (player 1 ready) and G (player 2 ready). Then Return
+  (environment), Return (course): `cc_t1`, Dingo (vehicle 3) and Tocard Tank (vehicle 5).
+- **Size.** At 1024×768 the top half shows the tower car 205 × 70 pixels. The native port drew it
+  290 × 100, the full-screen pixel scale cut to the half. The ratio is 0.707 = 1/√2 on both axes,
+  with no squash.
+- The projection `0x435410` depends only on the camera's FOV and ratio (`+0x15e`). A ratio halved
+  would give x × 0.707 and y × 1.414, onto half the height: 0.707 on both axes. Where the original
+  halves it is not traced (the `+0x15e` writes found belong to other classes).
+
+### Native
+
+`RaceView::draw_view` scales the half's clip x and y by 1/√2 and centres the view in the half.
+At the same moment the top halves then match Wine's framing: car size, the canyon wall, the
+palm, the water tower (a few pixels apart in height).
+
+Not compared: the bottom half in motion; the two-player follow camera's own distance.

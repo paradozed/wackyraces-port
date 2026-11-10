@@ -96,6 +96,12 @@ MenuPrefs MenuPrefs::defaults() {
     p.set_word(0xe4,2);p.set_word(0xe8,0);
     return p;
 }
+void MenuPrefs::reset_controls(int player) {
+    static const uint32_t keys[2][8]={{0xc8,0xd0,0xcb,0xcd,0x1c,0x34,0x35,0x36},{0x22,0x30,0x2f,0x31,0x1e,0x2a,0x2c,0x2d}};
+    static const uint32_t buttons[8]={4,5,100,100,0,1,2,3};
+    const bool pad=device(player)!=-1;
+    for(size_t i=0;i<8;++i) set_word(0x24+size_t(player)*0x60+i*8,pad?buttons[i]:keys[player][i]);
+}
 uint32_t MenuPrefs::word(size_t o) const {
     if(o+4>block.size()) throw std::runtime_error("prefs: offset out of the block");
     return uint32_t(block[o])|uint32_t(block[o+1])<<8|uint32_t(block[o+2])<<16|uint32_t(block[o+3])<<24;

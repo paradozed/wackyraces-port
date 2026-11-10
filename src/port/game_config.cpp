@@ -35,7 +35,7 @@ GameConfig parse_config(const std::string& text,const std::filesystem::path& bas
         if(line.front()=='[') {
             if(line.back()!=']') fail("unterminated section header");
             section=trim(line.substr(1,line.size()-2));
-            if(section!="paths" && section!="game" && section!="video") fail("unknown section ["+section+"]");
+            if(section!="paths" && section!="game" && section!="video" && section!="input") fail("unknown section ["+section+"]");
             continue;
         }
         const size_t eq=line.find('=');
@@ -59,6 +59,11 @@ GameConfig parse_config(const std::string& text,const std::filesystem::path& bas
         } else if(section=="video" && key=="resolution") {
             try {config.resolution=parse_resolution(value);}
             catch(const std::runtime_error& e) {fail(e.what());}
+        } else if(section=="input" && (key=="joystick1" || key=="joystick2")) {
+            char* end=nullptr;
+            const long n=std::strtol(value.c_str(),&end,10);
+            if(*end || n<-1 || n>15) fail(key+" must be -1 (keyboard) or a joystick number 0..15");
+            (key=="joystick1"?config.joystick1:config.joystick2)=int(n);
         } else fail("unknown key "+(section.empty()?key:section+"."+key));
     }
     return config;

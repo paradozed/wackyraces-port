@@ -258,7 +258,13 @@ When a hit takes, `0x47d66f..` adds to the car's `+0x48b` slots (`0x4726c0`):
   - **Life.** The counter `+0x38` counts only in this state. Past `m_nLifeTime` the cloud goes to state 2 for 40 updates.
   - **Strike.** `0x4a71e0` (angle π, range 700, flag 1: racers only) returns the nearest idle racer other than the thrower. If its vehicle bit is already set, nobody is struck this update. Otherwise that car is struck: its bit is set, and type `0x400` is written unconditionally and activated. The cloud then goes to state 1 for 30 updates, or 2 when the car's guard is not 1.
 - **State 1.** The cloud moves over the car (400 up) at no more than `spd` per update.
-- **State 2.** v.y += 4, and the cloud fades by 0.025 per update (`0x5169e0`).
+- **State 2.** v.y += 4, and the sprite's `+0x152` = timer × 0.025 (`0x4e196a`, `0x5169e0`).
+  - The cloud is a GD3dSprite (`0x379`). Its `+0x152` is property `0x0f`, 8 bytes before
+    `m_RenderSetting` `+0x15a`. The sprite draw passes it to `0x43b690` (`0x419eef`), so it turns the
+    quad about the view axis, in radians. So the cloud turns from about 1 radian back to 0 as it rises;
+    it does not fade (2026-11-08).
+  - The port turns the billboard's offsets. The world sprites' property `0x0f` is now applied the same
+    way (none of the 20 courses has a nonzero one). Not compared with Wine.
 - **Native.** `Storm`, `RaceSession::update_storms`. The cloud (`GD3dSprite` `0x379`) is not drawn. A hit already running keeps its own type; in WPC it would be overwritten (provisional).
 
 ## WPU_Detour (icon 23)
@@ -282,7 +288,17 @@ When a hit takes, `0x47d66f..` adds to the car's `+0x48b` slots (`0x4726c0`):
   - **Trap.** Armed, the sign queries for a car with `0x403d69` (= `0x4a71e0`, owner excluded). If that car is idle and within 150 (`0x51493c`), it takes the type, and the sign goes.
   - **Effect.** The type only turns the car ±π, through the activation kick.
 - **Native.** `drop_detour`, through `update_mines`. `RaceView` draws `GDModel` `0x37f`.
-- **Not ported:** `m_aEffectAngle`, `m_aMaxSteerMod` and `m_nTrapTime`; their reader is not found yet.
+- **The three other members (2026-11-08).** They are registered for the class `0x2ab0ab8` at
+  `0x50` (`m_aEffectAngle`, `0x4e3130`), `0x58` (`m_nTrapTime`, `0x4e31f0`) and `0x60`
+  (`m_aMaxSteerMod`, `0x4e3250`). Each value sits 4 past its registered offset, as the update's
+  reads show (`m_nUnlockTime` 0x38 → `+0x3c`, `m_rGravity` 0x40 → `+0x44`, `m_rFromGround` 0x48 →
+  `+0x4c`, all through `[action+0x18]`). So the values are at `+0x54`, `+0x5c` and `+0x64`.
+  - The init overwrites `m_nTrapTime` with 5 (`0x4e32a4`: `[action+0x18]+0x5c` = 5).
+  - No reader was found: neither the init nor the update reads `+0x54`, `+0x5c` or `+0x64`. A scan
+    of every load through `+0x18` followed by one of those offsets finds only `0x4d5510` and
+    `0x4e4f10` (other classes, `+0x54`) and the write above.
+  - So they look unused in the shipped game (a static scan only; a read through another pointer
+    would escape it; no Wine watchpoint was run).
 
 ## The remaining effects (survey, 20261029)
 
@@ -386,7 +402,25 @@ From `0x47e220`'s Ghidra decompile and the disassembly; not compared with Wine.
   4. the saved colours are restored;
   5. it returns 1.
 
-  As every vertex moves by the same fraction, the colours are lerp(start, target, f), and the steps depend only on each channel's largest |target − start|. From white to (10, 10, 0): 30, 1, 11, 30, 1 updates, then 1 at the 74th call.
+  As every vertex moves by the same fraction, the colours are lerp(start, target, f), and the steps depend only on each channel's largest |target − start|. From white to (10, 10, 0): 30, 1, 11, 30, 1 updates, then 1 at the 74th call. (This is the float path, renderer 2; see the next section for renderer 1, which Wine uses.)
+
+- **Renderer 1 (2026-11-08).** Wine reads `0x6f5958` = 1, so `0x47d890` takes the packed-byte path
+  (`0x47d906`, table `0x47dff8`).
+  - A step is (target − c) / 13 truncated toward zero (the `0x4ec4ec4f` division). A mode ends once
+    every channel's largest |step| is below 2.
+  - The fades thus take 33 updates from white to (10, 10, 0) and back, and stop short at
+    (33, 33, 23) and 232. The next mode's write then sets the target or the saved colours.
+  - Logged under Wine (`cc_t1`, robot 0, far, hit with 0x80; bomba `+0x4a` against `+0x82`): mode 1
+    after 33 updates, 2 after 34, 3 after 45, 4 after 78, 5 after 79, `+0x36` after 80.
+  - The model's colours (`[+0x3e] +0x30`, 753 vertices) read r 0.231..1, g 0.047..1, b 0..1, the
+    native vehicle 0's range.
+  - **Native:** `step_tint` follows the byte path on each channel's two extreme vertices (the
+    truncating step keeps the vertices' order). `tint_colour` replays the steps per vertex for the
+    drawing: modes 1 and 4 show the last fade until their write.
+  - Every transition matches the Wine log. The 0x80 hit now lasts 81 updates (`+0x36` at 79,
+    counted from 0); before, with the float path, it was 6 updates short.
+  - **Effects on other types** (white colours): type 4 ends after 78, type 2 after 97; `0x200`,
+    `0x400` and `0x100` are unchanged.
 - **Colour writes.** `0x400`'s stage 0 writes (10, 10, 0) and stage 2 copies `+0x56` back. Type 2's stage 4 writes (100, 100, 0).
 - **Squash (`0x200`).** `+0x66` = 0.1, target `+0x6a` = 1, `+0x62` = 0.2, then `0x43b190(1, +0x66, 1)` every update of stage 1. Past `+0x28` = 20: v = (1 − s) / ((66 − `+0x28`) × 0.05 + 0.3) (`0x513024`, `0x513020`, `0x512a04`), w = (v + w) × 0.87 (`0x51301c`), s += w. Three spring updates, then stage 2 at `+0x28` = 24.
 
@@ -562,3 +596,295 @@ So icon i is `WFirstPowerUp`'s (i+1)th following sibling in `GDWorld`: the order
 The mine's end (`0x4df9b1`) and the TNT's clone it.
 
 **Native.** `RaceSession::blasts` records them at a landmine's or the TNT's end. `RaceView` draws a camera-facing quad of the sprite, growing to 500 over 2 updates and fading over 20, tinted (255, 64, 0). The class's own update (ring, resolution, colour fade) is not traced, and no capture checked the look. `native_drive_test` checks that a thrown TNT leaves an explosion.
+
+## Using a weapon backward (2026-11-08)
+
+### Recovered
+
+- **The flag.** The use routine `0x4d2970` writes the action's `+0x5c` from `0x4d24f0(car)`
+  (`0x4d29cc`).
+  - `0x4d24f0` returns 0 when the car's brick `+0xc0` (the robot driver) is set.
+  - Otherwise it returns whether the player's input word `0x6e42b8[player]` holds the mask
+    `0x52aad4[player]` = `0x4`: look-back (control 5, '.', the follow camera's rear view).
+  - So a human holding look-back when the item fires uses it backward; robots never do.
+- **The readers.** The frame turns by π about y (`0x403279` with `0x40490fda`) in:
+  - the missile (`0x4da605`), the tank gun (`0x4dbbaa`) and the boomerang (`0x4dc213`): the clone's
+    frame, before WBreath's init moves it 100 along its axis;
+  - the breath (`0x4dacea`): the head's frame;
+  - the TNT (`0x4dcaff`): the thrown frame.
+- **Other readers:**
+  - the tank gun sets the car's `+0x3ab` to π or 0 (`0x4dbc5e`): presumably the turret's angle;
+  - the kicker and the flipper keep `+0x5c` in `+0xfa8` (`0x4d893a`, `0x4d9b31`), pick their arm's
+    offset by it (`0x2ab10b0`/`0x2ab11e8` + 12 × flag, `0x4d876b`, `0x4d98f3`), load π or 0
+    (`0x4d8aaf`, `0x4d9ca7`) and flip the swing (`0x4d8b69`, `0x4d9d46`);
+  - the storm's route step `0x4e1410`: on a new route polygon it takes the first backward link
+    (index = the forward count, `+0x16` bits 4..7) when `+0x5c` is set. With no backward link
+    (bits 0..3 zero) it keeps its waypoint; the polygon is still recorded (`+0x8c`, before the
+    test).
+
+- **No gadget reads it.** A scan of `0x5c(` accesses in `0x4d2000..0x4e5000` finds only the weapons
+  above. MonsterTires' `0x4d6641` compares a counter with its template's `+0x5c` (a phase limit), and
+  `0x4d7c21` is a constructor's default.
+
+### Native
+
+- `RaceSession::use_backward_` takes `DriveInput::look_back` around the human's `use_weapon`.
+  `WeaponEffect::backward` keeps it for the breath's later shot.
+- `fire()` turns the yaw by π for the projectiles (missile, tank gun, boomerang, paintball,
+  breath). The tank gun's and the boomerang's target search uses the turned heading.
+- The TNT is thrown along the turned heading, and its target is looked for that way.
+- `Storm::backward` makes the route step take `node.backward.front()`.
+- The kicker and the flipper look for their target behind. This is **provisional**: the update's
+  query is not traced.
+- The breath head is drawn turned by π (`RaceView::submit_breath_head`).
+- Not ported: the tank gun's `+0x3ab`, and the kicker/flipper arm offsets (their arms are not
+  drawn).
+
+### Checks
+
+- `native_drive_test`, every course: a backward missile starts 100 behind and leaves backward. A
+  backward TNT is thrown backward.
+- Forward and backward storms from the grid, over 60 updates, counted as route-polygon steps along
+  the last polygon's forward or backward links:
+  - forward 5..17 steps forward and none backward;
+  - backward 1..17 steps backward and none forward;
+  - all 20 courses pass.
+- Control: with the backward link choice disabled, `cc_t1`'s backward storm makes 7 forward steps
+  and the check fails.
+- Not compared with Wine.
+
+## FlyPower per vehicle (2026-11-08)
+
+### Recovered
+
+- **Jump tables by vehicle** (`[template] +0x88`): init `0x4d5354`, update `0x4d5b8c`, end
+  `0x4d5ba8`.
+
+  | Vehicle | Init | Update | End |
+  |---|---|---|---|
+  | 0 | `0x4d4f26` | `0x4d59ed` | `0x4d5a75` |
+  | 1 | `0x4d520f` | `0x4d59ed` | `0x4d5b38` |
+  | 2 | `0x4d5309` | `0x4d59ff` | `0x4d5b20` |
+  | 3 | `0x4d4e19` | `0x4d596f` | `0x4d5b13` |
+  | 4 | `0x4d5172` | `0x4d58a1` | `0x4d5b13` |
+  | 5 | `0x4d504b` | `0x4d5555` | `0x4d5aae` |
+  | 6 | `0x4d523f` | `0x4d56da` | `0x4d5b13` |
+
+- **Gravity.** Vehicles 3, 4 and 6 halve the template gravity `+0x98` again (× 0.5 after the
+  common × 0.17).
+- **Models.** The template's members `0x290..0x293` (offsets `+0x3c..+0x54`) are general.wgm nodes
+  450 (GDHModel), 451 (a brick with WPU_Propeller and GDHModel 453 with WRot), 457 (a brick with
+  GDDoubleHModel 459) and 456. Vehicle 4 clones `+0x3c`, 6 `+0x44` and 3 `+0x4c`. Vehicles 0, 1 and
+  2 animate the body (clip 0, `0x40275c` overrides).
+- **Vehicle 3.**
+  - Init: the clone's child's local matrix is the identity (`0x43b090`) × 2.5 (`0x402027`), turned
+    30° about x (`0x43b2b0`), at (−30, 150, −10) (`0x40150a`). Clip 0 plays (`0x405e1b(0, 0, 1, −1)`).
+  - Update (`0x4d596f`): the clone takes the car's local matrix `+0x2c` and its group.
+
+### Wine
+
+`cc_t1`, the player given a charge (`car+0x399` = 3), then '/'. Two symmetric green wings flap
+mid-tower: GDDoubleHModel draws a mirrored second copy.
+
+### Native
+
+- `RaceView::submit_fly` draws GDDoubleHModel 0x1cb posed by its MTNL (clip 0), and its copy
+  mirrored across the car's x axis (x at +30).
+- A native capture shows the same pair of flapping wings.
+- All 20 courses pass with the halved gravity.
+- Not compared: the timing of the flaps; the flight's height with the new gravity.
+
+### Vehicles 4 and 6 (later the same day)
+
+- **Vehicle 4** (`0x4d5172`, update `0x4d58a1`):
+  - it clones member `0x290`, GDHModel 0x1c2 itself, and plays its clip 0 (MTNL 0x10355);
+  - each update, its local matrix is the car's `+0x2c` with the translation 160 (`0x512a90`)
+    higher.
+  - Native: `submit_fly` draws it. A capture shows a pterodactyl carrying the stone car, wings
+    beating. Not compared with Wine.
+- **Vehicle 6** (`0x4d523f`, update `0x4d56da`):
+  - it clones brick 0x1c3 (WPU_Propeller);
+  - the brick keeps its own rotation, at the car's position (`+0x288`) + 100 (`0x510414`) up;
+  - its GDHModel child 0x1c5 (with WRot) plays clip 0 and a second controller
+    (`0x4024eb(0, 2, −1)`); `0x40360c` overrides run before update 20.
+  - Ported 2026-11-09, see "Vehicle 6's rotor" below.
+
+### Vehicle 6's rotor (2026-11-09)
+
+Recovered (static reading of `0x4d523f` and `0x4d56da`; thunks `0x40360c` → `0x437f70`,
+`0x405e1b` → `0x440970`, `0x4024eb` → `0x4409f0`, `0x401b95` → `0x440290`, `0x40526d` → `0x440900`):
+
+- **Template.** FlyPower's `0x291` (`+0x44`) is general.wgm brick 0x1c3: identity axes, action
+  WPU_Propeller 0x1c4 (`m_flytimetohigh` 1200, `m_flytime` 3000, `m_upy` 20, `m_tospeed` 0.52,
+  `m_turnykonst` 0.13, `m_turnzkonst` −0.3, `m_minspeed` 0.2, `m_ishelicopter` 1, `m_StepRotDegY`
+  −0.6458), children GDHModel 0x1c5 (GHMS `0x102d6`, 4 segments, MTNL `0x10357`) with WRot 0x1c6
+  (type 2, `m_StepRotDegY` −0.6458) and GDSound 0x1c7 (GSMP `0x1033b`).
+- **MTNL `0x10357`.** Four clips, all on controller 0 (so controller index 1, `0x440900`): 0 (40,
+  next 1), 1 (−10, next 3), 2 (50, next 1), 3 (20, next 3).
+- **Init `0x4d523f`.** Gravity × 0.5; the clone `+0x68` of the brick; on its first child (the
+  GDHModel): vtable `+0x4c`; `0x437f70(1, 0, 1, 0, 1)` locks segment 1's scale to (0, 1, 0);
+  `0x440970(0, 0, 1, −1)` plays clip 0; `0x4409f0(0, 2, −1)` sends command 2 (freeze at the end) to
+  clip 0's controller; the clone is added to the scene (`0x41b3c0`, list `0x6f2c40`).
+- **Update `0x4d56da`** (after `+0x64` is incremented):
+  - the clone's local matrix keeps its axes; its translation is the car's `+0x288` + 100
+    (`0x510414`) in y (`0x40150a`); `0x41eeb0(0)`; the car's group `+0x104` is copied to the clone
+    and its children;
+  - `+0x64` < 20 and `[[GDHModel +0x166] + 4] +0x28` (controller 1's flags) has bit 4 (frozen):
+    bit 0 cleared (the controller stops), segment 1 to (1, 1, 1), segments 2 and 3 to (0, 0, 0)
+    (all with flag 1);
+  - `+0x64` = 70: bit 0 set, segment 1 to (0, 1, 0), segments 2 and 3 to (1, 1, 1), clip 2 played
+    and frozen at its end the same way.
+- The end (`0x4d5b13`) is shared with vehicles 3 and 4.
+
+Native (`RaceView::submit_fly`; `MotionController::frozen`/`set_active`):
+
+- The same stages, keyed on the session's FlyPower counter (the native counter starts at 1 at the
+  use, as for the gravity's doubling at 20); a stage change shows from the next pose.
+- The WRot spin accumulates `m_StepRotDeg*` per race update, wrapped to [0, 2π), on the GDHModel's
+  local frame (as the course WRot, `analysis/roto-magnet-volcano-20261106.md`).
+- A native capture (`cc_t1`, `--vehicle 6`, `WPC_WEAPON=11` for a charge, '/' after the start):
+  a folded cone over the car opens into two blades within about four frames, the flat rotor spins
+  on its shaft above the car, then at the fold the blades drop into a spinning cone that stays until
+  the gadget ends.
+- **WPU_Propeller** has no behaviour: its class record (`0x4d7ac0`, string `0x52e208`) builds a
+  0x74-byte object with vtable `0x516398`, whose init (slot 4, `0x4d80f0`) only clears `+0x48` and
+  `+0x4c` and whose update (slot 2, `0x4d8110`) is a bare `ret`. Its members (`m_flytime`, `m_upy`,
+  `m_ishelicopter`, ...) have no reader in its own methods; no other reader was searched for.
+- The GDHModel's vtable `+0x4c` call at the init builds its controllers (the car init `0x469bf0`
+  makes the same call before a body's controllers exist, `analysis/mtnl-motion-20261028.md`).
+- The GDSound 0x1c7 is never played: GDSound (registration `0x44b7b0`, constructor `0x44c6d0`,
+  vtable `0x511f38`) overrides only its destructor (`0x44c810`), so it has no init, update or draw;
+  it sounds only through the play `0x44c380` (thunk `0x405164`), whose 31 callers include one in
+  FlyPower, `0x4d4dd6`, the car's `+0x3df` sound. Nothing to port.
+- Not compared with Wine.
+
+### The per-vehicle rules and vehicle 5's parachute (2026-11-09)
+
+Static reading of the update `0x4d5510` (table `0x4d5b8c`) and the inits (table `0x4d5354`):
+
+- **Gravity at the init.** Vehicles 1 (`0x4d520f`) and 2 (`0x4d5309`) end at `0x4d5337`: `+0x98`
+  × 0.3 (`0x512a04`). Vehicle 0 keeps × 0.17; 3, 4 and 6 take × 0.5 (`0x51026c`).
+- **The end test** (after `+0x64` is incremented and the gravity doubled at 20):
+  - vehicles 0 and 1 (`0x4d59ed`): airtime `+0x8a7` < 3 ends at once (no counter test);
+  - vehicle 2 (`0x4d59ff`) after its segment-5 turn, 3, 4 and 6 (`0x4d5a2e`): airtime < 3 and
+    `+0x64` > 95 (`0x5f`);
+  - vehicle 5 (`0x4d5555`): airtime < 3 and `+0x64` > 17 (`0x4d56d1`, `0x11`).
+- **The end** (`0x4d5a56`): `+0x98` = the saved `+0x6c`; the per-vehicle end (table `0x4d5ba8`); the
+  top-speed row × 0.8333 (`0x51622c`, 1 / 1.2); `+0x385` = −1; the sound stopped (`+0x4c` vtable
+  `+0x14`); the action ends (`0x405a6a`).
+- **Vehicle 5** (`0x4d5555`):
+  - at the init, body segment 6's x rotation is locked at 35° (`0x4383b0(6, 35, 0, 0, 1)`; the
+    routine locks the rotation slots 3..5 with a = −1 and b = its arguments 2..4, flag 0 zeroes
+    them, −1 clears `+0x17a` bit 0) and both WFires are shown (`analysis/wfire-20261109.md`);
+  - at `+0x64` = 10 (`0x4d5602`): the template's `+0x54` (member `0x293`, GDHModel 0x1c8, GHMS
+    `0x102d3`, MTNL `0x10354`) is cloned, its vtable `+0x4c` called, clip 0 played and frozen at its
+    end (`0x440970(0, 0, 1, −1)`, `0x4409f0(0, 2, −1)`), the clone added to the scene; then the
+    gravity × 0.5 and the airtime = 4 (`0x4d56a2`). A failed clone ends the action;
+  - each update the clone keeps its axes at the car's `+0x288` + 100 (`0x510414`), with the car's
+    group;
+  - the end (`0x4d5aae`): `0x4383b0(6, 0, 0, 0, 1)` then `(6, 0, 0, 0, −1)`, the clone's `+0xc` |= 1,
+    the two WFires hidden.
+- **Vehicle 2**'s update turns body segment 5 about z by 153 × `+0x64` degrees (`0x4383b0(5, 0, 0,
+  153 n, 1)`); its end clears the lock (`0x4d5b20`). Not ported.
+
+Native: `RaceSession`'s FlyPower step follows the gravity and end rules (the native counter is one
+ahead of `+0x64`, as for the doubling at 20); `RaceView::submit_fly` draws the parachute from
+counter 10. `native_drive_test` checks vehicles 0, 2 and 5 on every course (dt_t1: vehicle 0 ended
+after 40 updates; gravity at update 10 × 0.17 × 0.3 for 2 and × 0.17 × 0.5 for 5; with the rule
+disabled the vehicle-0 check fails, 95 updates). A native capture (`cc_t1`, `--vehicle 5`,
+`WPC_GADGET=5`) shows the green parachute open over the tank for about 1.5 s, gone on landing. Not
+compared with Wine.
+
+## MonsterTires drawn (2026-11-09)
+
+Static reading of the init `0x4d6380` and the update `0x4d6560`; native captures; no Wine comparison.
+
+- **Template** (general.wgm): GDStdBrick `0x2c0` with the action (`m_tireradius` 50 at `+0x3c`,
+  `m_tomaxframenum` 10, `m_tonormframenum` 3, `m_innormframenum` 300, `m_tominframenum` 5,
+  `m_tomaxscalediff` 0.2, `m_tonormscalediff` −0.1, `m_tominscalediff` −0.4) and children: four tyre
+  GDModels `0x2ca`, `0x2db`, `0x2fa`, `0x2fb`, and GDSound `0x2fc`.
+- **Init:** the brick is added to the scene with the car's frame (`0x404def`); each tyre's local
+  matrix is the car template's `m_monstertires11/12/21/22` (`+0x200`, `+0x238`, `+0x270`, `+0x2a8`);
+  `+0x6c` = 1, `+0x68` = `+0x64` = 0; the car's `+0x385` = 0; the brick's fifth child (the GDSound)
+  plays with its `+0xc` | 4; the wheels `+0x273..+0x27f` (the model root's first four children,
+  `0x469ebc`) get flag `0x100`; `+0x15b` = `0x52b800[vehicle × 16]`; the four `+0x44b` records = 24.
+- **Update:** the counter `+0x64` increments; by stage `+0x68` (table `0x4d6918`): 0 adds 0.2 until
+  10, 1 adds −0.1 until 3, 2 waits until `m_innormframenum` − 30 = 270 (`0x4d661e`), 3 adds −0.4
+  until 5; each limit resets the counter and moves on. Stage 4 (`0x4d6659`): the action ends, the
+  brick is flagged, `+0x385` = −1, the wheels shown, `+0x15b` = `0x52b7f8[v]`, the records =
+  ftol(`0x52b804[v]`). So the effect lasts 10 + 3 + 270 + 5 + 1 = 289 updates (natively 318
+  before).
+- **Each update,** each tyre's local matrix is the scale `+0x6c` (`0x402027`) turned about x by the
+  car's wheel spin `+0x2a4` × 2.5 (`0x51629c`, `0x405e8e`), at its own translation; the brick takes
+  the car's frame; the car's model height `+0x92f` = (s − 1) × `m_tireradius` × 0.5 + 20 (`0x51026c`,
+  `0x51152c`), at least 20.
+- **Per-vehicle table** (`0x52b7f8`, 16 bytes): `+0x15b` after, unknown, `+0x15b` during, the
+  records after: 0 (1.2, 0.8, 1.6, 24), 1 (0.9, 0.3, 1.6, 8), 2 (0.34, 0.35, 0.9, 6), 3 (0.6, 0.6,
+  1.3, 6), 4 (0.65, 0.1, 1.4, 7), 5 (1.0, 0.4, 1.9, 16), 6 (0.7, 0.5, 1.3, 8).
+
+Native: `RaceSession` runs the stages (`monster_scale`); `RaceView` hides the wheels' batches, draws
+the tyres at `vehicle_wheels` (the `m_monstertires` translations) scaled by s in the car's frame,
+and raises the model. Not ported: the spin (the port has no wheel spin), the physics fields, the
+GDSound. `native_drive_test` (dt_t1): "MonsterTires ran 289 updates, tyre scale up to 3"; with the
+wait at 300 it fails (319). Captures (`cc_t1`, vehicles 0 and 3, `WPC_GADGET=7`): the wheels give
+way to four large treaded tyres that grow, and the car rides higher.
+
+## The tank's turret `+0x3ab` (2026-11-09)
+
+Static reading; a `native_drive_test` check and a native capture; no Wine comparison.
+
+- **The shot** (`0x4dbbb6..0x4dbc76`): after the clone's inner action picks and aims at its target
+  (`0x402a4a`, `0x401893`), with a target (`[action +0x28]`), the car's `+0x3ab` = `0x496f90`(atan2(−x,
+  z) of the action's `+0x2c..+0x34`, atan2(−x, z) of the clone frame's z axis `0x43bf30`), i.e. the
+  difference reduced modulo 2π (`0x514780`) and brought into (−π, π]. Without a target: π
+  (`0x510b54`) when the action's `+0x5c` (backward) is set, else 0.
+- **Each update** (`0x469a1c..0x469a99`, vehicle 5 only, `[template +0x88]` = 5): with `+0x389` =
+  −1 (no weapon running) the turret steps toward 0 by 3° (`0x512a24`, 0.05236), and is set to 0
+  inside ±3°. Then body segment 2 is locked to the y rotation `+0x3ab` × 57.2958 (`0x512a20`) degrees
+  (`0x4383b0(2, 0, a, 0, 1)`).
+
+Native: `RaceSession::fire` sets `Body::turret` from the aimed velocity (`aim_projectile`) less the
+shot's heading; the update steps it back while no weapon effect runs; `RaceView::body_gadgets`
+locks segment 2. `native_drive_test` (dt_t1, practice, a backward shot with no target): "tank turret
+3.142 after the backward shot, back to 0 after 82 updates" (21 of the weapon, then 61 steps); with
+the write disabled the check fails. Capture (`cc_t1`, vehicle 5, `WPC_WEAPON=16`, look-back held):
+the turret faces the camera after the shot and swings back forward.
+
+## The BootKicker's arm (2026-11-09)
+
+Static reading of the init `0x4d8830`, the update `0x4d8aa0` and the placement `0x4d8710`; a
+`native_drive_test` check and a native capture; no Wine comparison.
+
+- **Template:** brick `0x32b` (m_range 2000 `+0x3c`, m_spd 200 `+0x44`, m_angle 1.047 `+0x4c`), its
+  GDHModel `0x32d` (a sphere primitive of radius 100) and GDSound `0x32e`.
+- **Init:** the offsets `0x2ab10b0` = (0, 20, 190) and (0, 20, −160); the user's `+0x389` = `0xb`;
+  the GDHModel's local matrix reset to the identity; the brick takes the car model's frame; the
+  user's `+0xfa8` = the backward flag `+0x5c`; the target `+0x80` = `0x403d69`(user, frame, section,
+  ftol(range + 1000), angle, 0, 0, 2); segment 1's scale locked at 1 (`0x437f70`); the extension
+  `+0x68` = 0, the velocity `+0x74` = (0, 0, spd), the state `+0x84` = 0, the type `+0x64` = 0x100.
+- **Each update,** first the aim: the target's position in the brick's frame (`0x43bb00`), a =
+  atan2(−x, z), within ±m_angle of 0 (or, backward, of π); no target: 0 or π. It is kept in `+0x88`
+  in state 0 only.
+- **State 0 (out):** the velocity's z × 1.1 (`0x516450`); n = ftol(max(1, v.z / the sphere's radius
+  `[prim +0x54]`)) substeps of v / n, each moving the sphere's centre (`[prim +0x44]`) to the
+  extension and querying the cars (`0x4040e8`). A car other than the user (with `[car +0x369] +0xc`
+  bit 2): a `+0x48b` slot of (d.x × 80, 40, d.z × 80) (d the unit brick → car, `0x512a3c`), decay 0.8,
+  unless its bomba's `+0x86` is 2; the type `+0x64` if its bomba is idle; voice 6 (the user's
+  vehicle, `0xff`); then the extension = (0, 0, |car − brick| − 100), v = (0, 0, −100), state 1,
+  counter 10. Past m_range the same without a hit (z = m_range).
+- **State 1 (bounce):** the sound at counter 10; the extension += v; v.z × −0.8 (`0x51644c`); after
+  10, state 2 with v = (0, 10, spd × −0.7) (`0x516448`).
+- **State 2 (home):** the extension += v; v.z × 1.1; below z = 0 the action ends (`+0x389` = −1);
+  otherwise y is held at most z.
+- **Placement** (`0x4d8710`, every update): the brick takes the car model's frame, at the offset by the
+  backward flag (`0x43b880`); the GDHModel's axes are turned about y by `+0x88` (`0x43c380`); its
+  segment 1's translation is locked at the extension (`0x4381a0(1, ext, 1)`, slots 0..2).
+
+Native: `RaceSession::Kick`/`update_kicks` replace the flipper's timed strike for the kicker (the
+query: the port's sphere test, 100 + 100; the bomba `+0x86` and `[car +0x369]` tests are left out);
+`RaceView::submit_kicks` draws the boot with the translation lock (`AnimatedInstance::moves`).
+`native_drive_test` (dt_t1, vehicle 0 at the back of the grid): "boot kicker struck at update 0,
+reach 90, home after 12 updates" (the robot ahead is within the first step). Capture (`cc_t1`,
+vehicle 0, `WPC_WEAPON=11`): the scissor arm stretches out ahead with the boot at its end, holds,
+and folds back.
+

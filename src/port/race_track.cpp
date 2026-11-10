@@ -48,6 +48,7 @@ RaceTrack::RaceTrack(const Archive& course,const Scene& scene,bool battle) {
         visit(visit,scene.root());
     }
     std::vector<std::pair<ModeVector,ModeVector>> bounds;
+    std::unordered_map<uint32_t,std::vector<int>> bricks;  // each row's +0x58 brick -> its section
     // Sections in route-table order: route(k) is definitions[route_indices[k]]
     // (the table is a permutation on cc_t4, dr_t2 and sh_t2), each exit
     // meeting the next entry, the last one through the loop transform.
@@ -68,7 +69,13 @@ RaceTrack::RaceTrack(const Archive& course,const Scene& scene,bool battle) {
         // Row +0x34: the row's route length (0x4a3a7a); one row per section
         // on the shipped courses, so the first row's.
         section.row_length=int(route.rows[0].word34);
+        {const auto& lo=route.rows[0].vectors[2];const auto& hi=route.rows[0].vectors[3];
+         section.box[0]=lo[0];section.box[1]=lo[2];section.box[2]=hi[0];section.box[3]=hi[2];}
         section.exit=position(unwrapped_scene_transform(scene.root(),route.object_ids[1]));
+        for(const ModeRow& row:route.rows) if(row.ground_object_id) {
+            auto& s=bricks[row.ground_object_id];
+            if(std::find(s.begin(),s.end(),int(sections_.size()))==s.end()) s.push_back(int(sections_.size()));
+        }
         // Every kind-zero link of the section's rows (0x4a8680 enables
         // those nodes for the player's neighbouring rows).
         for(const ModeRow& row:route.rows) for(const uint32_t link:row.object_links) {
@@ -130,10 +137,20 @@ RaceTrack::RaceTrack(const Archive& course,const Scene& scene,bool battle) {
     if(!(best<1000)) bad("no WMOD transform closes the route loop");
     unwrap_=inverse_affine_matrix(wrap_);
     // A node's rows: its own links, else its nearest linked ancestor's.
-    std::vector<int> linked;
-    std::function<void(const Node&)> collect=[&](const Node& n) {
-        const std::vector<int> outer=linked;
-        if(const auto l=links_.find(n.id);l!=links_.end()) linked=l->second;
+    // Drawn sections: 0x4a8680 enables a row's +0x58 brick and the world's
+    // children its links name (flag 0x10), each with its subtree; 0x4a8850
+    // disables them (0x41ba90 clears 0x1000), and the draw walk 0x432490
+    // skips an inactive node with its subtree.
+    std::vector<int> linked,drawn;
+    std::function<void(const Node&,int)> collect=[&](const Node& n,int depth) {
+        const std::vector<int> outer=linked,outer_drawn=drawn;
+        if(const auto l=links_.find(n.id);l!=links_.end()) {
+            linked=l->second;
+            if(depth==1) for(int s:l->second) if(std::find(drawn.begin(),drawn.end(),s)==drawn.end()) drawn.push_back(s);
+        }
+        if(const auto b=bricks.find(n.id);b!=bricks.end())
+            for(int s:b->second) if(std::find(drawn.begin(),drawn.end(),s)==drawn.end()) drawn.push_back(s);
+        if(!drawn.empty()) node_sections_[n.id]=drawn;
         if(n.class_name=="WPowerUp") {
             PowerUpSpot spot;spot.node=n.id;spot.type=n.integer(0x28b);
             const Matrix4 m=unwrapped_scene_transform(scene.root(),n.id);
@@ -160,10 +177,10 @@ RaceTrack::RaceTrack(const Archive& course,const Scene& scene,bool battle) {
                 cylinders_.push_back(c);
             }
         }
-        for(const Node& c:n.children) collect(c);
-        linked=outer;
+        for(const Node& c:n.children) collect(c,depth+1);
+        linked=outer;drawn=outer_drawn;
     };
-    collect(scene.root());
+    collect(scene.root(),0);
     objects_.load(scene);
     objects_.load_log_meshes(course,scene);
     objects_.link([this](uint32_t id) {const auto i=links_.find(id);return i==links_.end()?std::vector<int>{}:i->second;});
@@ -189,6 +206,34 @@ RaceTrack::RaceTrack(const Archive& course,const Scene& scene,bool battle) {
         if(links.size()>0 && links[0].target==two) c.bits|=2;
         if(links.size()>1 && links[1].target==one) c.bits|=4;
         if(links.size()>1 && links[1].target==two) c.bits|=8;
+    }
+    // 0x4c7d3a..0x4c7da5: WDicksTrick2's route node 0x1c and node 0x1d.
+    for(DicksRoad& d:objects_.dicks_roads()) {
+        const Route w=route(d.world[1][12]!=0?Vec3{{d.world[1][12],d.world[1][13],d.world[1][14]}}:d.centre);
+        if(!w.hit) continue;
+        const auto node=[&](int n) {
+            uint32_t polygon=0;
+            for(int i=0;i<n;++i) {const RouteNode k=route_node(w.section,w.record,polygon);polygon+=uint32_t(k.forward.size()+k.backward.size()+2)*3;}
+            return polygon;
+        };
+        d.section=w.section;d.polygon=node(0x1c);
+        const RouteNode here=route_node(w.section,w.record,d.polygon);
+        d.fork=!here.forward.empty() && here.forward[0].target==node(0x1d);
+    }
+    // 0x4cb9b0..0x4cba65: WShiftedRoad's route node 1 and its nodes 0x20, 0x23, 0x28.
+    for(ShiftedRoad& r:objects_.shifted_roads()) {
+        const Route w=route(r.route_at);
+        if(!w.hit) continue;
+        const auto node=[&](int n) {
+            uint32_t polygon=0;
+            for(int i=0;i<n;++i) {const RouteNode k=route_node(w.section,w.record,polygon);polygon+=uint32_t(k.forward.size()+k.backward.size()+2)*3;}
+            return polygon;
+        };
+        r.section=w.section;r.polygon=node(1);
+        const RouteNode here=route_node(w.section,w.record,r.polygon);
+        std::vector<RouteLink> links=here.forward;links.insert(links.end(),here.backward.begin(),here.backward.end());
+        const std::array<uint32_t,3> targets{{node(0x20),node(0x23),node(0x28)}};
+        for(size_t l=0;l<3 && l<links.size();++l) for(size_t t=0;t<3;++t) if(links[l].target==targets[t]) r.link[t]=int(l);
     }
     for(MistyBridge& b:objects_.bridges()) {
         if(b.sensors.empty()) continue;

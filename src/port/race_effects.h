@@ -60,6 +60,20 @@ public:
     struct Bumm {Matrix4 base{};std::array<Piece,8> pieces{};};
     void bumm(const Matrix4& frame,float speed);
     const std::vector<Bumm>& bumms() const {return bumms_;}
+    // A hit's smoke (WackyAutoBomba 0x47ed6e, types 8, 0x40, 0x80): a clone of
+    // m_smokeparticle (general.wgm GDStdBrick 0x1be) in the car's frame at the
+    // spawn; its GD3DFilm 0x1bf (FILM 0x102f6, frame 0, no depth write) runs
+    // the flamesmoke action (record 0x541cb8, init 0x4181e0, update 0x418310).
+    // position: in the clone's frame, from (0, 0, 0); alpha: 0..255.
+    struct HitSmoke {Matrix4 base{};Vec3 position{},velocity{};int age=0;float spin=0,scale=0,angle=0;int alpha=0;};
+    void hit_smoke(const Matrix4& frame,bool flip);
+    const std::vector<HitSmoke>& hit_smokes() const {return hit_smokes_;}
+    // The tank gun's hit, stage 3 (0x47e7b6): eleven clones of m_Particle
+    // (general.wgm GDModel 0x394) running WReszecske (vtable 0x512f98, init
+    // 0x47d050, update 0x47d130). frame: the clone's world matrix.
+    struct Chunk {Matrix4 frame{};Vec3 position{},velocity{};int age=0;};
+    void tank_chunks(const Matrix4& frame);
+    const std::vector<Chunk>& chunks() const {return chunks_;}
     // The POUSSIERE option (0x6f4650, menu item 588; off by default): 24 film
     // puffs from the rear wheels (0x47b750, drawn by 0x47b9d0 with
     // WCarFxStorage's first GD3DFilm, 410).
@@ -89,6 +103,8 @@ private:
     std::vector<Ripple> ripples_;
     std::vector<Splash> splashes_;
     std::vector<Bumm> bumms_;
+    std::vector<HitSmoke> hit_smokes_;
+    std::vector<Chunk> chunks_;
     bool smoke_on_=false;
     float track_width_=24;
     std::array<TrackStrip,4> tracks_{};

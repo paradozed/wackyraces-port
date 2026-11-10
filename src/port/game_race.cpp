@@ -23,6 +23,16 @@ void finite(const Matrix4& m) {
     if(m[3]!=0 || m[7]!=0 || m[11]!=0 || m[15]!=1) bad("actor transform is not affine");
 }
 }
+std::array<SpriteAim,27> load_sprite_aims(const Node& general_root,const std::array<SpriteAim,27>& fallback) {
+    std::array<SpriteAim,27> out=fallback;size_t k=0;
+    std::function<void(const Node&)> walk=[&](const Node& n) {
+        if(k>=out.size()) return;
+        if(n.class_name=="WPowerUpSprite") {out[k]={n.real(0x284,fallback[k].range),n.real(0x285,fallback[k].angle)};++k;}
+        for(const auto& c:n.children) walk(c);
+    };
+    walk(general_root);
+    return out;
+}
 RaceTemplates load_race_templates(const Node& general_root) {
     RaceTemplates result;
     size_t cameras=0;

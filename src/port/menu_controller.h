@@ -182,6 +182,10 @@ public:
     // 0x48a660 shows an option item's value through 0x405f10, which sets the
     // string (+0x130, member 0x4a) of the item's second child; 0 if none.
     uint32_t value_text(const Node &item) const;
+    // The joysticks present (their names), for the JOUEUR items' device cycle.
+    void set_joysticks(const std::vector<std::string>& names) {joysticks_=names;}
+    // Type 5's value with a joystick: "number:name" (0x48a939); empty for the keyboard.
+    std::string device_label(const Node &item) const;
     // 0x48c7a8: entering a node whose 0x19d is 0x21 (the pause's option
     // node) in a championship (app +0x1a60 = 3) sets its page's sixth item's
     // first text to string 200, REDEMARRER CHAMPIONNAT. 0 when unchanged.
@@ -200,6 +204,7 @@ public:
     void set_prefs(const MenuPrefs &prefs);
     MenuPrefs prefs() const;
 private:
+    std::vector<std::string> joysticks_;
     void index(const Node &node, const Node *parent);
     const Node *lookup(uint32_t id) const;
     std::vector<const Node *> children(const Node &node) const;

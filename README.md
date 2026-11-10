@@ -59,6 +59,12 @@ resolution = 1280x960         # window size (as --resolution); default 640x480
 fullscreen = true             # full screen (as --fullscreen, WPC_FULLSCREEN=1)
 ```
 
+On the options page, left/right on JOUEUR 1/2 picks the keyboard or a Linux joystick
+(`/dev/input/jsN`, shown as number:name), as the original does; `[input] joystick1` / `joystick2`
+(or `WPC_JOYSTICK1` / `WPC_JOYSTICK2`) set it at start. In races the stick steers and accelerates or brakes past half
+deflection, and the buttons follow the original's joystick defaults (4 accelerate, 5 brake,
+0 camera, 1 rear view, 2 gadget, 3 weapon). The keyboard keeps working beside it.
+
 The menu options (volumes, METEO, POUSSIERE, RETOUR DE FORCE and the control
 table) are kept as the original's `MenuPrefs` record in
 `$XDG_CONFIG_HOME/wackyraces/MenuPrefs.bin`, read at start and written at exit.
@@ -107,8 +113,9 @@ starts a single race on a course archive, skipping the startup and menu.
 `WPC_RACE_PLACE=x,z,yaw` then puts the player at a world position, for
 screenshots of a given spot. `WPC_MENU_MOTION=N` (debug) plays MTNL clip `N`
 on the car-selection previews that have one; the original never starts a clip
-there ([MTNL motion](analysis/mtnl-motion-20261028.md)). `WPC_WEAPON=11..25` (debug)
-gives player 1 that weapon with a full charge.
+there ([MTNL motion](analysis/mtnl-motion-20261028.md)). `WPC_PLACE=x,z,yaw` (debug) puts player 1 there at the start of a `--race`, for captures. `WPC_WEAPON=11..25` (debug)
+gives player 1 that weapon with a full charge, and `WPC_GADGET=0..10` (debug) that gadget. `WPC_HIT=TYPE,UPDATE` (debug) hits player 1 with
+that WackyAutoBomba type (e.g. `0x80`) at that race update.
 
 ### Implemented and remaining work
 
@@ -140,7 +147,12 @@ gives player 1 that weapon with a full charge.
   [battle](analysis/battle-20261102.md)).
 - Racing on the Championship I courses `cc_t1`, `sh_t1`, `dt_t1` and `ct_t1`:
   WMOD route sections, WGNR ground in each brick's frame, the rigid loop
-  transform (a translation on `cc_t1`/`ct_t1`, a rotation on `sh_t1`/`dt_t1`),
+  transform (a translation on `cc_t1`/`ct_t1`, a rotation on `sh_t1`/`dt_t1`; across the seam each
+  section, each car and each weapon is drawn in one place, as the original's group table `0x5472d0` picks;
+  projectiles, TNT and storms cross the seam through the transform,
+  [note](analysis/section-culling-20261107.md)), section culling
+  (only the player's section and the two beside it are drawn, as the original's `0x4a8680` enables
+  each row's brick and linked nodes; [note](analysis/section-culling-20261107.md)),
   `m_nLapNum` laps, the PRET!/PARTEZ! countdown, the recovered WackyAuto
   speed/steering/motion equations, drowning in the deep river, the follow
   camera (`WFollowCamera_2` `0x478070`: spring, wall and ceiling rays, the
@@ -162,9 +174,22 @@ gives player 1 that weapon with a full charge.
   edges `0x468890`; [avoidance](analysis/robot-avoidance-20261030.md)). The turbo (gadget 8) and the shield (gadget 10) work. The missile, breath, tank gun and boomerang fire guided projectiles, the TNT
   bounces towards a target, the storm cloud strikes cars along the route, the
   detour sign turns a car round, and the landmine (icon 19) drops behind the
-  car and arms after 15 updates. A car that is hit is held
+  car and arms after 15 updates. Holding look-back while using a weapon fires it backward, as the
+  original's `+0x5c` flag does: projectiles and the TNT leave behind, and the storm follows the route
+  back (not compared with Wine). A dropped weapon takes the section of the slot row whose box holds
+  it (`0x4a6d20`). A car that is hit is held
   for 25 updates (`WackyAutoBomba`, then a doubled acceleration;
-  [weapons](analysis/weapons-bomba-20261029.md)). Every weapon icon now has an effect, some provisional, and FlyPower and
+  [weapons](analysis/weapons-bomba-20261029.md)); a TNT or mine hit fades the car to black and
+  raises a smoke column (`flamesmoke`), a boomerang hit circles it with stars, a tank shell buries it in a
+  pulsing mound that bursts into chunks (the cars' bodies also sway with their accelerations,
+  GDHModel controller 0 with the per-vehicle gains, matching Wine frame for frame; the
+  tower car's own gadget spreads two flapping wings, and vehicle 6's unfolds a spinning rotor
+  that folds back at the 70th update, vehicle 5's opens a parachute, the bodies play their gadget clips, MonsterTires grows four big tyres, the wheels roll and the front ones steer, the tank's turret turns to its shot, the boot kicker's arm stretches out and kicks, each vehicle's flight ending
+  by the original's rule, not compared with Wine; TurboSpeed and FlyPower light the
+  WFire jet flames of vehicles 0, 2, 5 and 6, [WFire](analysis/wfire-20261109.md)), and paint leaves a blue
+  pool under it (all compared with Wine; [hit visuals](analysis/hit-smoke-20261107.md)). Missiles and
+  the breath trail WRocketTail's fins and glow, and the breath flies as its fireball film
+  ([tails](analysis/rocket-tail-20261108.md)). Every weapon icon now has an effect, some provisional, and FlyPower and
   MonsterTires only partly (see `TODO.md`). On dt_t1 the level-crossing tram runs on its light cycle and the
   shuttle tram on its path; both squash the cars they touch, and robots wait at the red light
   (compared with Wine; like the original, each runs only while the player is in or next to a
@@ -172,7 +197,7 @@ gives player 1 that weapon with a full charge.
   ([trams](analysis/trams-20261030.md)). On `cc_t2` the bascule bridge (`WMisty`) opens and shuts
   at its sensors, carries cars and redirects the robots
   ([bridge](analysis/misty-bridge-20261106.md)). `WGeyser`, `WFountain` (`dt_t2`), `WLogRollingB` (`sh_t2`, player cars only) and
-  `WDynamiteHole` (`dr_t1`) are ported too, as are `WRolling` and `WChiselCrossover` with `WBlowUp` (`cc_t4`, `ct_t2`, `dr_t4`; [note](analysis/rolling-chisel-blowup-20261106.md), `cc_t4` compared with Wine); the fountain and the log were compared with Wine
+  `WDynamiteHole` (`dr_t1`) are ported too, as are `WRolling` and `WChiselCrossover` with `WBlowUp` (`cc_t4`, `ct_t2`, `dr_t4`; [note](analysis/rolling-chisel-blowup-20261106.md), `cc_t4` compared with Wine), `WLogJam` (`sh_t3`, [note](analysis/log-jam-20261106.md), compared with Wine in memory and on screen), and `WRotoHill`, `WBumSteer`, `WMagnet`, `WVolcano` and course `WRot` (`dr_t2`, `dr_t3`, [note](analysis/roto-magnet-volcano-20261106.md)), and `WSaw`, `WJunkyard`, `WConstructionSite`, `WShiftedRoad` and `WGoldenGate` (`sh_t2`, `dr_t3`, `sh_t4`, [note](analysis/saw-crane-gate-road-20261107.md)), and `WDicksTrick2` (`cc_t3`) and `UVScroll` ([note](analysis/dickstrick-uvscroll-rooms-20261107.md)); the fountain and the log were compared with Wine
   ([notes](analysis/lap-line-geyser-20261106.md)). Escape opens the original in-race pause menu
   (general.wgm's `WMenuBrick`) over the race: resume, volumes, restart and
   quit with its confirmation ([pause](analysis/pause-menu-20261030.md)). Race audio covers every car's engine and skid loop,
@@ -190,13 +215,15 @@ gives player 1 that weapon with a full charge.
   capture of `sh_t1`'s ramps ([vertical](analysis/vertical-motion-20261030.md));
   the return trigger and progress field are provisional native rules (the
   return point is the original's, Wine-checked). All 16 other course archives
-  load; `cc_t2`, `cc_t4`, `dr_t3`, `dt_t3` and `sh_t4` pass every `native_drive_test`
-  check, and the failures on the others are listed in `TODO.md`. Laps follow
+  load; all 20 courses pass every `native_drive_test` check. The test's driver is the port's route
+  follower (RoboDriver) on the player's keys, with a look-ahead planner for stalls
+  ([note](analysis/test-driver-20261107.md)). Laps follow
   the original's start line rule (`0x49a2f0`), and `cc_t3`'s geyser throws cars
   up ([laps and geyser](analysis/lap-line-geyser-20261106.md)). See
   [native race](analysis/native-race-cc-t1-20261027.md) and
   [Championship I](analysis/native-championship-i-20261028.md).
-- Race worlds draw each course's own backdrop dome, scaled by its radius, and
+- Race worlds draw each course's own backdrop dome, in its node's frame about the eye and scaled by its radius
+  (fog from far − 3000, [checks](analysis/on-screen-checks-20261107.md)), and
   `GD3dSprite`/`WGndSprite` trees, cacti and signs turned toward the camera
   about the world up axis as `0x419b90` does ([sprites](analysis/sprites-20261029.md));
   they draw at the texture's colour, Wine-checked. A same-input Wine comparison of
@@ -233,7 +260,7 @@ pixel parity are unverified. See
 [character selection](analysis/menu-character-selection-reverse-20261027.md).
 Specialized node lifecycle
 callbacks other than demos, replays, credits and the keyboard controls page,
-multiplayer readiness, joysticks, complete race-world
+multiplayer readiness, joysticks in the menus, complete race-world
 rendering, the rest of the wall/contact response and the item effects, the championship results and progression remain to be ported. Recovered routines elsewhere
 in `src/` and legacy native stubs do not imply those systems execute in this
 build. The port is not a complete or playable game.
@@ -247,7 +274,7 @@ water and splashes when it drowns; cc_t1's cacti burst into pieces, rocks stop
 the car and push it back, and the shadow follows the ground
 ([car effects](analysis/car-effects-20261028.md)). The menu's POUSSIERE and
 METEO options reach the race (`[game] dust` sets POUSSIERE's starting value);
-braking and sliding leave skid marks on roads; a slide start kicks the yaw by `m_farolbendmod` and throws the player's car outward; sand, grass, snow, dirt and ice scale top speed, acceleration and steering by the recovered per-vehicle rows; METEO draws rain on cc and dr_t1 and snow on ct, dr_t4 and dr_b (`0x4b6190`, `0x4b6510`). Walls use the original contact response: four probe rays push the car out along the wall normal, turn it along the wall and cost 5% speed; three hits on stopping
+braking and sliding leave skid marks on roads; a slide start kicks the yaw by `m_farolbendmod` and throws the player's car outward; sand, grass, snow, dirt and ice scale top speed, acceleration and steering by the recovered per-vehicle rows; METEO draws rain on cc and dr_t1 and snow on ct, dr_t4 and dr_b (`0x4b6190`, `0x4b6510`); rain also halves the textures and darkens the sky and fog, as the original does (compared with Wine on cc_t1). Walls use the original contact response: four probe rays push the car out along the wall normal, turn it along the wall and cost 5% speed; three hits on stopping
 surfaces halt it and a wall ends a running turbo; the rays meet every surface, ramp faces included, and robots rest on the ground through the original's single ray along their up axis, levelling out in the air; a car that falls off or drowns returns at its section's entry (the start line in the first), and steering in the air is cut to 30% ([wall contacts](analysis/wall-contacts-20261029.md)). There is no edge guard: as in the original, a car may leave the course area, hang off a ledge on one probe or fall; the out-of-bounds trigger and gravity scale are provisional.
 
 The loader and its observed limits are documented in

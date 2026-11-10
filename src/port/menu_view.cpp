@@ -445,6 +445,9 @@ void MenuView::draw_page(int selected,bool ready) {
             // original's formatting routine is not traced.
             Label shown=label; shown.text=std::to_string(std::lround(controller_.volume(*label.value_item)));
             text(shown,label.item>=0 && chosen(label.item));
+        } else if (label.value_item && !controller_.device_label(*label.value_item).empty()) {
+            Label shown=label; shown.text=controller_.device_label(*label.value_item);
+            text(shown,label.item>=0 && chosen(label.item));
         } else if (const uint32_t value=label.value_item ? controller_.value_text(*label.value_item) : 0) {
             Label shown=label; shown.text=strings_.get(value);
             text(shown,label.item>=0 && chosen(label.item));

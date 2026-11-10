@@ -3,7 +3,10 @@
 #include "game_drive.h"
 #include "game_scene.h"
 #include "race_session.h"
+#include "game_motion.h"
 #include "race_weapons.h"
+#include "race_robot.h"
+#include "game_random.h"
 #include <cmath>
 #include <cstdio>
 #include <stdexcept>
@@ -116,9 +119,13 @@ struct Autopilot {
     int plan_left=0,stalled=0,escapes=0;
     float best=-1e9f;
     wpc::DriveInput plan;
+    // The route cursor is the original's measure; the geodesic field is not
+    // monotonic along every route (sh_t4's U, around (3500, 22000)). It still
+    // gives the direction where the cursor stays flat (cc_t2's section end).
+    static float measure(const wpc::RaceSession& r) {return r.player_route_progress()+0.2f*r.player_progress();}
     wpc::DriveInput operator()(const wpc::RaceSession& race) {
         if(race.phase()!=wpc::RaceSession::Phase::Racing) return {true,false,false,false};
-        const float now=race.player_progress();
+        const float now=measure(race);
         if(now>best+0.002f) {best=now;stalled=0;} else ++stalled;
         if(stalled>90) {
             stalled=0;best=now;++escapes;
@@ -138,14 +145,55 @@ struct Autopilot {
                 if(reverse) in=k==0?wpc::DriveInput{}:k<durs[option]?wpc::DriveInput{false,true,dirs[option]<0,dirs[option]>0}:wpc::DriveInput{true,false,false,false};
                 else in={true,false,dirs[option]>0&&k<durs[option],dirs[option]<0&&k<durs[option]};
                 sim.update(released(in,sim.player()));
-                if(sim.drowning() || sim.respawns()!=race.respawns()) {penalty=-100+k*0.1f;break;}
+                // A glide off the course (cc_t4's wall slopes) only ends in a
+                // return 400 updates later, beyond this look-ahead.
+                if(sim.drowning() || sim.respawns()!=race.respawns() || sim.player_glides()!=race.player_glides()) {penalty=-100+k*0.1f;break;}
             }
             // Contacts cost a little, so the driver steers off walls and edges.
-            const float value=sim.player_progress()+penalty-0.002f*float(sim.impacts()-race.impacts())+(option==0?0.0005f:0)-(reverse?0.001f:0);
+            const float value=measure(sim)+penalty-0.002f*float(sim.impacts()-race.impacts())+(option==0?0.0005f:0)-(reverse?0.001f:0);
             if(value>value_best) {value_best=value;chosen=option;}
         }
         if(chosen>=7) {plan={false,true,dirs[chosen]<0,dirs[chosen]>0};plan_left=29;return {};}
         return {true,false,dirs[chosen]>0,dirs[chosen]<0};
+    }
+};
+// The port's own route follower (RoboDriver, 0x4e5d..) drives the player's
+// car through its keys: the throttle as given, the steering keys following
+// the robot's steer. The keys stop at the 40-degree lock (0x5129d8) while a
+// robot's steer does not, so the throttle is released in turns past 80% of
+// the lock above speed 0.3 (cc_t3's spiral ramp, sh_t3's helix).
+struct RoboPilot {
+    wpc::RoboDriver robot;wpc::MsvcRandom random{1};wpc::Vec3 previous{};bool started=false;
+    wpc::DriveInput operator()(const wpc::RaceSession& race) {
+        if(race.phase()!=wpc::RaceSession::Phase::Racing) return {true,false,false,false};
+        const wpc::RaceCar& p=race.player();
+        wpc::RoboCarState st;st.position=p.position;st.forward={{-std::sin(p.yaw),0,std::cos(p.yaw)}};
+        st.previous=started?previous:p.position;started=true;previous=p.position;
+        st.speed=p.speed.speed;st.top_speed=race.tuning().top_speed;st.surface=p.surface;
+        const wpc::RoboControl c=robot.drive(race.track(),st,random);
+        wpc::DriveInput in;in.accelerate=c.throttle==1;in.brake=c.throttle==2;
+        const float want=wpc::robot_steering(c.steer),step=race.tuning().steer_step;
+        if(want>p.steer+0.5f*step) in.left=true; else if(want<p.steer-0.5f*step) in.right=true;
+        if(std::abs(want)>0.8f*0.6981317f && p.speed.speed>0.3f) in.accelerate=false;
+        return released(in,p);
+    }
+};
+// The route follower drives; when the progress stays flat for 300 updates
+// the look-ahead planner takes over until the progress passes the stall by
+// 0.02 or for 3000 updates (ct_t4's lower road, cc_t1's start).
+struct HybridPilot {
+    RoboPilot robo;Autopilot planner;int planner_left=0,flat=0,handovers=0;float best=-1e9f,resume=0;
+    wpc::DriveInput operator()(const wpc::RaceSession& race) {
+        if(race.phase()!=wpc::RaceSession::Phase::Racing) return {true,false,false,false};
+        const float now=Autopilot::measure(race);
+        if(now>best+0.002f) {best=now;flat=0;} else ++flat;
+        if(planner_left>0) {
+            --planner_left;
+            if(!planner_left || now>resume) {planner_left=0;robo=RoboPilot();flat=0;best=now;}
+            else return planner(race);
+        }
+        if(flat>300) {planner=Autopilot{};planner_left=3000;flat=0;resume=best+0.02f;best=now;++handovers;return planner(race);}
+        return robo(race);
     }
 };
 void test_objects() {
@@ -285,19 +333,162 @@ void test_effects() {
             }
             require(held==25 && boosts==1 && boost_at==25,"25 held updates, the boost on the 26th");
             require(!h.active(),"the hit ends after its sequence");
+            // 0x47ed6e: m_smokeparticle on every 5th update of the hit, the
+            // 10th ones with the spin negated; 16 over a 0x80 hit (79 + 2).
+            {
+                wpc::BombHit s;s.type=0x80;
+                std::vector<int> smoke,flip;
+                for(int i=1;s.active() && i<200;++i) {const wpc::BombStep st=wpc::update_bomb(s);if(st.smoke) smoke.push_back(i);if(st.flip) flip.push_back(i);}
+                require(smoke.size()==16 && smoke.front()==5 && smoke[1]==10 && smoke.back()==80,"a smoke clone every 5 updates of the hit");
+                require(flip.size()==8 && flip.front()==10,"every 10th clone spins the other way");
+            }
+            // 0x47ebea: m_BoomerangHit at 0.1, x 1.3 an update, then 1.5 from
+            // the identity once +0x28 passes 8; 20 degrees an update; hidden
+            // past +0x82 = 45.
+            {
+                wpc::BombHit s;s.type=0x10;
+                wpc::update_bomb(s);
+                require(s.spin.shown && s.spin.stage==1 && std::abs(s.spin.scale-0.1f)<1e-6f,"0x10: the model starts at 0.1");
+                for(int i=0;i<8;++i) wpc::update_bomb(s);
+                require(s.spin.stage==1 && std::abs(s.spin.scale-0.1f*std::pow(1.3f,8.f))<1e-5f,"it grows by 1.3 an update");
+                wpc::update_bomb(s);
+                require(s.spin.stage==2 && s.spin.from_identity && s.spin.scale==1.5f && std::abs(s.spin.turn-0.34906585f)<1e-6f,"the 10th update resets it to 1.5");
+                int shown=10;while(s.active() && s.spin.shown) {wpc::update_bomb(s);if(s.spin.shown) ++shown;}
+                require(shown==46,"shown for 46 updates");
+            }
+            // 0x47ea3b: m_bluepool at 0.2, x 1.15 in x and z through counter 17,
+            // 52 waiting, x 0.8 for 8, hidden at 78.
+            {
+                wpc::BombHit s;s.type=4;
+                const wpc::BombStep first=wpc::update_bomb(s);
+                require(first.pool && s.pool.shown && s.pool.scale[1]==0.2f,"paint: the pool takes the car's frame at 0.2");
+                for(int i=0;i<17;++i) wpc::update_bomb(s);
+                require(s.pool.stage==2 && std::abs(s.pool.scale[0]-0.2f*std::pow(1.15f,17.f))<1e-4f && s.pool.scale[1]==0.2f,"it spreads for 17 updates");
+                int c=18;while(s.pool.stage<5) {wpc::update_bomb(s);++c;}
+                require(c==79 && !s.pool.shown,"hidden on the 79th update (counter 78)");
+            }
+            // 0x47e277: the tank gun's hit. The model at the car's frame x 2,
+            // the car hidden through counter 41; segments 1, 3, 4 and 5 pulse
+            // (t = +0x28 x 20 degrees) for 35 updates; then (0.7, 0.1, 0.7),
+            // x (1.1, 1, 1.1) for 6 updates, hidden at counter 50.
+            {
+                wpc::BombHit s;s.type=2;
+                int hidden=0,first_hidden=0,last_hidden=0,overridden=0,first_override=0,last_override=0,last_shown=0;
+                float y43=0,x49=0;std::array<std::array<float,3>,4> seg10{};
+                for(int i=1;s.active() && i<200;++i) {
+                    const wpc::BombStep st=wpc::update_bomb(s);
+                    if(i==1) require(st.tank_axes && st.tank_position && s.tank.shown && s.tank.scale[0]==2,"type 2: the model takes the car's frame at x 2");
+                    if(i>=7 && i<=42) require(!st.tank_axes && st.tank_position,"type 2: then the position alone");
+                    if(s.tank.car_hidden) {++hidden;if(!first_hidden) first_hidden=i;last_hidden=i;}
+                    if(s.tank.override) {++overridden;if(!first_override) first_override=i;last_override=i;}
+                    if(s.tank.shown) last_shown=i;
+                    if(i==10) seg10=s.tank.segments;
+                    if(i==43) y43=s.tank.scale[1];
+                    if(i==49) x49=s.tank.scale[0];
+                }
+                require(hidden==42 && first_hidden==1 && last_hidden==42,"type 2: the car is hidden for counters 0..41");
+                require(overridden==35 && first_override==7 && last_override==41,"type 2: the segments pulse for 35 updates");
+                const float t=80*0.017453292f,a=std::sin(2*t)*0.5f+1,b=std::sin(t)*0.5f+1,c4=std::sin(4*t)*0.5f+1;
+                require(std::abs(seg10[0][1]-b)<1e-5f && std::abs(seg10[1][0]-c4)<1e-5f && std::abs(seg10[2][0]-a)<1e-5f && std::abs(seg10[3][2]-a)<1e-5f,"type 2: the curves at +0x28 = 4");
+                require(std::abs(y43-0.2f)<1e-6f && std::abs(x49-1.4f*std::pow(1.1f,6.f))<1e-4f,"type 2: flattened to 0.1, then spread by 1.1 six times");
+                require(last_shown==50,"type 2: the model is hidden at counter 50");
+            }
+            // 0x4e5b0a: the robots aim each item with its WPowerUpSprite's
+            // m_range and m_visangle (general.wgm, read under Wine).
+            {
+                const wpc::ItemAims a=wpc::default_item_aims();
+                require(a[14].range==10000 && std::abs(a[14].angle-0.34906585f)<1e-6f && a[25].range==10000 && a[24].range==3000,"the breath and missile aim 10000 at 20 degrees, TNT 3000");
+                require(a[9].range==5000 && a[9].angle>6.28f && a[15].range==8000 && a[11].range==2000,"the FireSiren all round at 5000, the boomerang 8000, the kicker 2000");
+            }
+            // WRocketTail (0x4ea960): every update the points shift back, point 0
+            // takes the new position and axes (x 3), the phase steps 0.3; the
+            // breath's film loops 0..7.
+            {
+                wpc::Projectile p;
+                for(auto& t:p.tail) t={{{0,0,0}},{{0,1,0}},{{1,0,0}},1};
+                p.position={{0,0,300}};wpc::update_tail(p,{{0,1,0}},{{1,0,0}});
+                p.position={{0,0,600}};wpc::update_tail(p,{{0,1,0}},{{1,0,0}});
+                require(p.tail[0].position[2]==600 && p.tail[1].position[2]==300 && p.tail[2].position[2]==0 && p.tail[0].k==3 && p.tail[2].k==1,"the tail shifts one point an update");
+                require(std::abs(p.tail_phase-0.6f)<1e-6f && p.tail_updates==2,"its phase steps 0.3");
+                for(int i=0;i<6;++i) wpc::update_tail(p,{{0,1,0}},{{1,0,0}});
+                require(p.film==0,"the breath's film returns to frame 0 after frame 7");
+            }
+            // flamesmoke (0x418310): t = 2 x age; scale 2 x 0x5264c8(t), alpha
+            // 255 x 0x526588(t); it rises 30 (x 0.99) past t = 10; gone past 100.
+            {
+                wpc::CarEffects fx(1);
+                fx.hit_smoke(wpc::identity_matrix(),true);
+                const std::array<wpc::WheelContact,4> none{};
+                fx.update(wpc::identity_matrix(),0,none,false);
+                const auto& p=fx.hit_smokes().at(0);
+                require(p.age==1 && std::abs(p.scale-0.08f)<1e-6f && p.alpha==25 && p.position[1]==0,"age 1: scale 0.08, alpha 25, not moving");
+                require(p.spin<=0 && std::abs(p.angle-(p.spin-0.13962634f))<1e-5f,"a flipped spin turns the other way");
+                for(int i=0;i<5;++i) fx.update(wpc::identity_matrix(),0,none,false);
+                require(std::abs(fx.hit_smokes().at(0).position[1]-29.7f)<1e-4f && std::abs(fx.hit_smokes().at(0).position[0]-0.2f)<1e-6f,"age 6: up 29.7, drifting 0.2");
+                for(int i=0;i<44;++i) fx.update(wpc::identity_matrix(),0,none,false);
+                require(fx.hit_smokes().size()==1 && fx.hit_smokes()[0].age==50 && fx.hit_smokes()[0].alpha==0,"age 50: faded out");
+                fx.update(wpc::identity_matrix(),0,none,false);
+                require(fx.hit_smokes().empty(),"past t = 100 it is gone");
+            }
+            // Controller 0 (0x440e30): a model moving at a constant velocity
+            // gives no sway; one lateral kick (x 20 in one update) rolls it
+            // by b0 x -15 (the clamp) on the next step, then rings down.
+            {
+                wpc::SwayController sw;wpc::MotionPairs pairs(9*2,{0.f,0.f});
+                std::array<float,16> m{{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}};
+                const auto step=[&]{std::fill(pairs.begin(),pairs.end(),std::array<float,2>{0.f,0.f});sw.update(m,pairs);};
+                for(int i=0;i<40;++i) {m[14]+=10;step();}
+                float rest=0;for(float v:sw.values()) rest=std::max(rest,std::abs(v));
+                require(rest<0.05f,"sway: a steady drive settles");
+                for(int i=0;i<200;++i) {m[14]+=10;step();}
+                m[12]+=20;m[14]+=10;step();
+                const float c0=2*0.9f*std::cos(0.4f),c1=-0.81f,b0=(1-c0-c1)*0.5f*0.28985509f;
+                float roll=sw.values()[5],before=0;for(int i=0;i<1;++i) before=roll;
+                require(std::abs(roll-b0*-15)<1e-4f,"sway: the kick's roll input is clamped to -15 (gain 0.5)");
+                require(pairs[5][1]==roll && pairs[9+5][1]==roll && pairs[5][0]==0,"sway: every segment takes the value (negative in b)");
+                float peak=0;for(int i=0;i<60;++i) {m[12]+=20;m[14]+=10;step();peak=std::max(peak,std::abs(sw.values()[5]));}
+                require(peak>std::abs(before) && std::abs(sw.values()[5])<0.05f,"sway: it rings and settles at a steady velocity");
+            }
+            // WReszecske (0x47d050, 0x47d130): eleven chunks 30..70 up, rising
+            // 20..38 x 0.7..1.29 and falling by 1.5 an update; gone after 31 steps.
+            {
+                wpc::CarEffects fx(1);
+                fx.tank_chunks(wpc::identity_matrix());
+                require(fx.chunks().size()==11 && fx.chunks()[0].position[1]==30 && fx.chunks()[10].position[1]==70,"tank hit: eleven chunks from 30 to 70 up");
+                for(const auto& c:fx.chunks()) require(c.velocity[1]>=20*0.7f-1e-3f && c.velocity[1]<=37.8f*1.29f+1e-3f && std::abs(c.velocity[0])<=18*1.29f+1e-3f,"each thrown up within the init's range");
+                const float v0=fx.chunks()[0].velocity[1],y0=fx.chunks()[0].position[1];
+                const std::array<wpc::WheelContact,4> none{};
+                fx.update(wpc::identity_matrix(),0,none,false);
+                require(std::abs(fx.chunks()[0].velocity[1]-(v0-1.5f))<1e-4f && std::abs(fx.chunks()[0].position[1]-(y0+v0-1.5f))<1e-3f,"the first step falls by 1.5");
+                for(int i=0;i<30;++i) fx.update(wpc::identity_matrix(),0,none,false);
+                require(fx.chunks().size()==11,"still there after 31 steps");
+                fx.update(wpc::identity_matrix(),0,none,false);
+                require(fx.chunks().empty(),"gone past +0x40 = 30");
+            }
             // The end of each type (white model colours): +0x36 at D, cleared
             // the update after. 0x80: the fade out (30 updates), set, held 11,
             // back (30), restored, then 0x47d890 returns 1 at 73.
-            for(const auto& [type,done]:std::vector<std::pair<uint16_t,int>>{{0x200,25},{0x400,27},{0x100,46},{0x80,73},{4,78},{2,94},{0x1000,0}}) {
+            // Renderer 1's byte path (Wine): the fades take 33 updates; on
+            // vehicle 0's colours 0x80 ends as under Wine (+0x36 after 80).
+            for(const auto& [type,done]:std::vector<std::pair<uint16_t,int>>{{0x200,25},{0x400,27},{0x100,46},{0x80,79},{4,78},{2,97},{0x1000,0}}) {
                 wpc::BombHit e;e.type=type;int n=0;
                 while(e.active() && n<200) {wpc::update_bomb(e);++n;}
                 require(n==done+2,("hit type "+std::to_string(type)+" lasts done + 2 updates").c_str());
             }
             {
                 wpc::Tint t;t.target={{10/255.f,10/255.f,0}};
-                const std::array<float,3> spread{{245/255.f,245/255.f,1}};
-                int k=0;while(t.mode==0) {wpc::step_tint(t,spread);++k;}
-                require(k==30 && t.f>0.9f,"the fade reaches every step below 2/255 in 30 updates");
+                const std::array<float,3> white{{1,1,1}};
+                int k=0;while(t.mode==0) {wpc::step_tint(t,white,white);++k;}
+                require(k==33 && t.f>0.9f,"the byte fade (truncated / 13) reaches every step below 2 in 33 updates");
+                const std::array<float,3> c=wpc::tint_colour(t,white);
+                require(std::lround(c[0]*255)==33 && std::lround(c[2]*255)==23,"it stops short of the target: (33, 33, 23)");
+                wpc::step_tint(t,white,white);
+                require(wpc::tint_colour(t,white)[0]==10/255.f,"mode 1 writes the target");
+                {
+                    wpc::BombHit v0;v0.type=0x80;v0.colour_lo={{0.231f,0.047f,0}};v0.colour_hi={{1,1,1}};int n=0;
+                    while(v0.active() && n<200) {wpc::update_bomb(v0);++n;}
+                    require(n==81,"0x80 on vehicle 0's colours: +0x36 after 80 updates, as under Wine (cc_t1, robot 0)");
+                }
                 wpc::BombHit sq;sq.type=0x200;wpc::update_bomb(sq);
                 require(std::abs(sq.scale_y-0.1f)<1e-6f,"0x200 squashes the car to 0.1");
                 for(int i=0;i<23;++i) wpc::update_bomb(sq);
@@ -513,6 +704,237 @@ void test_course(const std::string& path) {
         require(track.sheltered({{cx,cy,cz}}),"cc_t1: the box centre is sheltered");
         require(!track.sheltered({{cx,cy+2000,cz}}),"cc_t1: above the box is not");
     }
+    if(path.find("dr_t2")!=std::string::npos) {
+        // WRotoHill (0x4cf6f0): caught within m_88, it turns and rises, then lets go.
+        wpc::CourseObjects o=track.objects();
+        require(o.roto_hills().size()==1 && o.model_spins().size()==1,"dr_t2: one WRotoHill, one spinning model");
+        const wpc::Vec3 c=o.roto_hills()[0].centre;
+        wpc::CarProbe car;car.position={{c[0]+500,c[1],c[2]}};car.robot=true;car.section=o.roto_hills()[0].sections[0];
+        std::vector<wpc::ObjectHit> hits;std::vector<int> effect{0};
+        o.update({car},hits,effect);
+        require(effect[0]==0xb && o.roto_hills()[0].holds[0].phase==1,"dr_t2: a robot in range is caught and told to use its gadget");
+        const float y=car.position[1];int held=0;
+        for(int i=0;i<1000 && o.roto_hills()[0].holds[0].phase!=4;++i) {
+            o.update({car},hits,effect);
+            if(!o.held().empty()) {++held;car.position=o.held()[0].position;}
+        }
+        require(o.roto_hills()[0].holds[0].phase==4 && held>100 && car.position[1]>y+100,"dr_t2: the car turns and rises until let go");
+        car.position={{c[0]+20000,c[1],c[2]}};
+        o.update({car},hits,effect);
+        require(o.roto_hills()[0].holds[0].phase==0,"dr_t2: past 10000 the table is free again");
+        // WBumSteer (0x4cede0): the runners run their paths, the gates open behind
+        // them and shut; a touched gate opens.
+        {
+            wpc::CourseObjects b=track.objects();
+            require(b.bum_steers().size()==1,"dr_t2: one WBumSteer");
+            std::vector<int> none;
+            const auto& w=b.bum_steers()[0];
+            b.update({},hits,none);
+            require(w.state==0 && w.active,"dr_t2: the runners start");
+            const wpc::Matrix4 first=w.runner_frame[0];
+            for(int i=0;i<5;++i) b.update({},hits,none);
+            require(w.runner_frame[0][12]!=first[12] || w.runner_frame[0][14]!=first[14],"dr_t2: a runner moves along its path");
+            bool one=false,two=false,three=false,back=false;float widest=0;
+            for(int i=0;i<3000;++i) {
+                b.update({},hits,none);
+                one=one||w.state==1;two=two||w.state==2;three=three||w.state==3;back=back||(three&&w.state==0);
+                widest=std::max(widest,std::abs(std::atan2(w.gate_frame[0][1],w.gate_frame[0][0])-std::atan2(w.gate_home[0][1],w.gate_home[0][0])));
+            }
+            require(one && two && three && back,"dr_t2: the states cycle");
+            require(widest>1.0f && widest<1.6f,"dr_t2: the gates open towards 75 degrees");
+            int solid=0;
+            for(const auto& s:b.solid_spheres()) solid+=s.bump==0;
+            require(solid>=2,"dr_t2: the gates have solid spheres");
+            b.gate_touched(0,1);
+            require(w.bits==2,"dr_t2: touching the second gate sets bit 2");
+        }
+        // WVolcano (0x4c9cf0) only pulses: no car is ever held.
+        wpc::CourseObjects v=track.objects();
+        require(v.geysers().size()>=1,"dr_t2: its volcano loads as a pulsing column");
+        for(const auto& g:v.geysers()) if(g.volcano) {
+            wpc::CarProbe in;in.position=g.aim;
+            for(int i=0;i<300;++i) {v.update({in},hits,effect);require(v.lifts().empty(),"dr_t2: the volcano holds no car");}
+        }
+    }
+    if(path.find("cc_t3")!=std::string::npos) {
+        // WDicksTrick2 (0x4c7fe0): one road piece; a car coming and going redraws it.
+        wpc::CourseObjects o=track.objects();
+        require(o.dicks_roads().size()==1 && o.dicks_roads()[0].section>=0,"cc_t3: one WDicksTrick2 with its route node");
+        std::vector<wpc::ObjectHit> hits;std::vector<int> none;
+        o.update({},hits,none);
+        const auto& r=o.dicks_roads()[0];
+        // A point on a piece: its first triangle's centroid, in the world.
+        const auto on=[&](size_t k) {
+            const auto& t=r.triangles[k].at(0);const wpc::Matrix4& f=r.world[k];
+            const float x=(t[0][0]+t[1][0]+t[2][0])/3,y=(t[0][1]+t[1][1]+t[2][1])/3,z=(t[0][2]+t[1][2]+t[2][2])/3;
+            return wpc::Vec3{{f[0]*x+f[4]*y+f[8]*z+f[12],f[1]*x+f[5]*y+f[9]*z+f[13],f[2]*x+f[6]*y+f[10]*z+f[14]}};
+        };
+        const wpc::Vec3 a=on(size_t(r.chosen)),b=on(size_t((r.chosen+1)%3));
+        require(o.log_ground(a[0],a[2],a[1]+400,a[1]-400).hit,"cc_t3: the piece in place carries cars");
+        require(!o.log_ground(b[0],b[2],b[1]+400,b[1]-400).hit,"cc_t3: the others do not");
+        std::array<bool,3> seen{};
+        wpc::CarProbe car;car.position=r.centre;
+        std::vector<int> effect{0};
+        for(int i=0;i<60;++i) {
+            o.update({car},hits,effect);
+            require(r.triggered,"cc_t3: a car in range holds the piece");
+            o.update({},hits,none);
+            require(!r.triggered,"cc_t3: no car: a new piece");
+            seen[size_t(r.chosen)]=true;
+        }
+        require(seen[0] && seen[1] && seen[2],"cc_t3: any piece can be drawn");
+    }
+    if(path.find("sh_t4")!=std::string::npos) {
+        // WShiftedRoad (0x4cbb60): one of three slabs swings up; the route follows.
+        wpc::CourseObjects o=track.objects();
+        require(o.shifted_roads().size()==1,"sh_t4: one WShiftedRoad");
+        std::vector<wpc::ObjectHit> hits;std::vector<int> none;
+        const auto& r=o.shifted_roads()[0];
+        require(r.section>=0,"sh_t4: its route node is found");
+        o.update({},hits,none);
+        require(r.chosen>=0 && r.chosen<3 && r.timer==r.reload,"sh_t4: a slab is drawn");
+        const int first=r.chosen;
+        for(int i=0;i<60;++i) o.update({},hits,none);
+        const size_t c=size_t(first);
+        require(std::abs(r.frame[c][5])<0.4f,"sh_t4: the chosen slab swings towards 90 degrees");
+        int changes=0,last=r.chosen;
+        for(int i=0;i<3000;++i) {o.update({},hits,none);if(r.chosen!=last) {++changes;last=r.chosen;}}
+        require(changes>=3,"sh_t4: the chosen slab changes");
+        std::printf("%s: WShiftedRoad links %d %d %d, %zu weights\n",path.c_str(),r.link[0],r.link[1],r.link[2],o.route_weights().size());
+        // WGoldenGate (0x4c6b10): doors swing by turns; a touched door opens.
+        {
+            wpc::CourseObjects g=track.objects();
+            require(g.golden_gates().size()==1,"sh_t4: one WGoldenGate");
+            const auto& w=g.golden_gates()[0];
+            std::array<int,9> first{};
+            g.update({},hits,none);
+            for(size_t i=0;i<9;++i) first[i]=w.doors[i].state;
+            int moved=0;
+            for(int i=0;i<1200;++i) {g.update({},hits,none);for(size_t k=0;k<9;++k) if(w.doors[k].state!=first[k]) {++moved;first[k]=w.doors[k].state;}}
+            require(moved>=5,"sh_t4: the doors change state");
+            int solid=0;for(const auto& s:g.solid_spheres()) solid+=s.golden==0;
+            require(solid>=9,"sh_t4: the doors are solid");
+            size_t door=0;for(;door<9 && w.doors[door].state==4;++door) {}
+            const wpc::Matrix4 f=wpc::multiply_matrix(w.parent,w.doors[door].frame);
+            const float sign=w.doors[door].state==1?1.f:-1.f;
+            g.door_touched(0,int(door),{{f[8]*sign,f[9]*sign,f[10]*sign}});
+            require(w.doors[door].state==4 && w.doors[door].target==360,"sh_t4: a car on the right side opens a door");
+        }
+    }
+    if(path.find("dr_t3")!=std::string::npos) {
+        // WJunkyard (0x4ce430): the crane's arms move; WConstructionSite's belts
+        // move a car whose last contact has their flag.
+        {
+            wpc::CourseObjects o=track.objects();
+            require(o.cranes().size()==1 && o.conveyors().size()==1,"dr_t3: a WJunkyard, a WConstructionSite");
+            std::vector<wpc::ObjectHit> hits;std::vector<int> none;
+            const auto& c=o.cranes()[0];
+            float low=1,high=-1;
+            for(int i=0;i<600;++i) {o.update({},hits,none);low=std::min(low,c.frame[1][1]);high=std::max(high,c.frame[1][1]);}
+            require(high-low>0.5f,"dr_t3: the crane's second arm swings");
+            // 0x4ce65b: the third arm's PrimSphere (radius 215) squashes the
+            // first car it touches, unless that car's WackyAutoBomba runs.
+            require(c.prims.size()==1 && std::abs(c.prims[0].radius-215.089f)<0.01f,"dr_t3: the third arm's PrimSphere");
+            const auto centre=[&]{const wpc::Matrix4 w=c.worlds()[2];const auto& q=c.prims[0].centre;
+                return wpc::Vec3{{w[0]*q[0]+w[4]*q[1]+w[8]*q[2]+w[12],w[1]*q[0]+w[5]*q[1]+w[9]*q[2]+w[13],w[2]*q[0]+w[6]*q[1]+w[10]*q[2]+w[14]}};};
+            wpc::CarProbe under;under.position=centre();
+            wpc::CarProbe away=under;away.position[1]+=2000;
+            wpc::CarProbe busy=under;busy.busy=true;
+            std::vector<int> two{0,0};
+            o.update({away,under},hits,two);
+            require(hits.size()==1 && hits[0].car==1,"dr_t3: the arm squashes the car it touches, not one 2000 above");
+            under.position=centre();busy.position=under.position;
+            o.update({busy,under},hits,two);
+            require(hits.empty(),"dr_t3: only the first car found is looked at; a busy one is not squashed");
+            const float belt=std::sqrt(o.conveyors()[0].push[0][0]*o.conveyors()[0].push[0][0]+o.conveyors()[0].push[0][1]*o.conveyors()[0].push[0][1]+o.conveyors()[0].push[0][2]*o.conveyors()[0].push[0][2]);
+            near(belt,40,0.01f,"dr_t3: a belt's vector is m_88 long");
+            wpc::CarProbe car;car.position={{0,0,0}};car.surface=1u<<26;car.section=o.conveyors()[0].sections.empty()?-1:o.conveyors()[0].sections[0];
+            std::vector<int> effect{0};
+            o.update({car},hits,effect);
+            require(!o.rolled().empty() && std::abs(o.rolled()[0].position[0]-o.conveyors()[0].push[0][0])<0.01f,"dr_t3: a car on a belt moves by it");
+        }
+        // WMagnet (0x4d09e0): on and off by turns; a car under it turns by m_b8.
+        wpc::CourseObjects o=track.objects();
+        require(o.magnets().size()==1 && o.magnets()[0].radius>0,"dr_t3: one WMagnet with a radius");
+        wpc::CarProbe car;car.position=o.magnets()[0].centre;car.section=o.magnets()[0].sections[0];
+        std::vector<wpc::ObjectHit> hits;std::vector<int> effect{0};
+        int pulled=0,free=0;
+        for(int i=0;i<400;++i) {
+            o.update({car},hits,effect);
+            const bool p=!o.pushes().empty();
+            if(p) {++pulled;near(o.pushes()[0].yaw,o.magnets()[0].yaw,1e-6f,"dr_t3: the magnet's turn");} else ++free;
+            require(p==o.magnets()[0].on,"dr_t3: it pulls only while on");
+        }
+        require(pulled>50 && free>50,"dr_t3: it goes on and off");
+    }
+    if(path.find("sh_t2")!=std::string::npos) {
+        // WSaw (0x4c0a90): it spins and slides; it follows a car, holds it for
+        // m_64 updates and throws it away at m_4c.
+        wpc::CourseObjects o=track.objects();
+        require(o.saws().size()==1 && o.saws()[0].slide_axis==3 && o.saws()[0].amplitude==300 && o.saws()[0].hold==30,"sh_t2: one WSaw");
+        std::vector<wpc::ObjectHit> hits;std::vector<int> effect;
+        const auto& w=o.saws()[0];
+        float low=1e9f,high=-1e9f;
+        for(int i=0;i<200;++i) {o.update({},hits,effect);low=std::min(low,w.owner_frame[14]);high=std::max(high,w.owner_frame[14]);}
+        near(high-low,600,40,"sh_t2: alone it slides over twice its amplitude");
+        const wpc::Matrix4 own=w.owner_world();
+        wpc::CarProbe car;car.position={{own[12]+100,own[13],own[14]+50}};car.section=w.sections.empty()?-1:w.sections[0];
+        effect.assign(1,0);
+        bool held=false;int updates=0;
+        for(;updates<400 && !held;++updates) {
+            o.update({car},hits,effect);
+            held=w.state==1;
+        }
+        require(held && w.target==0,"sh_t2: a car in reach is caught");
+        bool thrown=false;
+        for(int i=0;i<40 && !thrown;++i) {
+            o.update({car},hits,effect);
+            thrown=!o.pushes().empty();
+            if(i<25) require(!o.rolled().empty(),"sh_t2: the caught car is held in place");
+        }
+        require(thrown && w.state==2,"sh_t2: then thrown");
+        const auto& f=o.pushes()[0].force;
+        near(std::sqrt(f[0]*f[0]+f[2]*f[2]),1000,1,"sh_t2: at m_4c");
+        for(int i=0;i<20;++i) o.update({},hits,effect);
+        require(w.state==0,"sh_t2: 15 updates later it is free");
+    }
+    if(path.find("sh_t3")!=std::string::npos) {
+        // WLogJam (0x4c4940): compared with Wine (2026-11-06): the rolling log's
+        // speeds step by 0.642 and -0.144 an update on path 1's first segment, it
+        // hands its speed to the log waiting at n - 3 and keeps a tenth (4.061 on
+        // that path), then waits at n - 3; the struck log rolls off and restarts.
+        wpc::CourseObjects o=track.objects();
+        require(o.log_jams().size()==1 && o.log_jams()[0].logs.size()==6 && o.log_jams()[0].paths.size()==5,"sh_t3: a WLogJam of six logs and five paths");
+        std::vector<wpc::ObjectHit> hits;std::vector<int> none;
+        o.update({},hits,none);
+        const auto& j=o.log_jams()[0];
+        int rolling=0,waiting=0;
+        for(const auto& l:j.logs) {rolling+=l.state==1;waiting+=l.state==0;}
+        require(rolling==1 && waiting==5,"sh_t3: five logs wait, one rolls");
+        for(size_t i=1;i<6;++i) require(j.logs[i].segment==int(j.paths[i-1].points.size())-3 && j.logs[i].path==int(i-1),"sh_t3: each path has a log waiting at n - 3");
+        bool handed=false,struck=false,restarted=false;
+        for(int i=0;i<3000;++i) {
+            o.update({},hits,none);
+            for(const auto& l:j.logs) {handed=handed || l.state==2;struck=struck || l.state==3;restarted=restarted || (struck && l.state==5);}
+        }
+        require(handed && struck && restarted,"sh_t3: a log hands on its speed, the struck one rolls off and restarts");
+        rolling=waiting=0;
+        for(const auto& l:j.logs) {rolling+=l.state==1 || l.state==2 || l.state==3;waiting+=l.state==0;}
+        require(rolling>=1 && rolling+waiting==6,"sh_t3: the cycle keeps going");
+        require(o.solid_spheres().size()==6 && o.solid_spheres()[0].cylinder,"sh_t3: each log is a solid cylinder");
+        // A moving log squashes a car in its way.
+        wpc::CourseObjects q=track.objects();
+        std::vector<wpc::ObjectHit> h2;
+        q.update({},h2,none);
+        bool squashed=false;
+        for(int i=0;i<3000 && !squashed;++i) {
+            wpc::Vec3 at{};bool any=false;
+            for(const auto& l:q.log_jams()[0].logs) if(l.state==1) {const wpc::Matrix4 w=wpc::multiply_matrix(q.log_jams()[0].parent,l.frame);at={{w[12]+w[4]*l.prim_centre[1],w[13]+w[5]*l.prim_centre[1]+100,w[14]+w[6]*l.prim_centre[1]}};any=true;}
+            q.update(any?std::vector<wpc::CarProbe>{{at}}:std::vector<wpc::CarProbe>{},h2,none);
+            squashed=!h2.empty();
+        }
+        require(squashed,"sh_t3: a moving log squashes a car");
+    }
     if(path.find("cc_t4")!=std::string::npos) {
         // WChiselCrossover (0x4d0020): node 98's and 101's second link leads
         // to the node two on, so link 1 weighs 0x8000 whole and link 0 0xffff
@@ -684,6 +1106,21 @@ void test_course(const std::string& path) {
         std::printf("%s: a car on a log at y %.0f moves %.0f in 10 updates (log y %.0f)\n",path.c_str(),start[1],moved,f[13]);
         require(start[1]>f[13]-100 && moved>200,"sh_t3: a car on a log rides with it");
     }
+    // 0x4a6d20: a dropped weapon is filed in the first enabled row (the
+    // player's previous, current, next) whose box (row +0x1c..+0x30)
+    // holds its x and z; outside every box, none (-1).
+    {
+        wpc::RaceSession drop(track,3,1);
+        for(int i=0;i<120;++i) drop.update({});
+        drop.drop_mine(-1);
+        const auto& m=drop.mines().back();
+        const int k=drop.slot_section(m.position),n=int(track.sections()),s=drop.player().section;
+        std::printf("%s: drop at (%.0f %.0f) in section %d, slot row %d, mine section %d\n",path.c_str(),m.position[0],m.position[2],s,k,m.section);
+        require(k>=0 && track.row_box_holds(k,m.position[0],m.position[2]),"a mine dropped on the course lies in a slot row's box");
+        require(k==((s-1+n)%n) || k==s || k==(s+1)%n,"the slot row is the player's previous, current or next");
+        require(m.section==k,"the mine takes its slot row's section");
+        require(drop.slot_section({{1e7f,0,1e7f}})==-1,"no slot row holds a point off every box");
+    }
     const bool cc=path.find("cc_t1")!=std::string::npos,sh=path.find("sh_t1")!=std::string::npos;
     if(path.find("dt_t1")!=std::string::npos) {
         // dt_t1's WTram (0x4caf40): six light phases (323 updates, as the pass end
@@ -716,6 +1153,60 @@ void test_course(const std::string& path) {
             require(top>y0+200,"FlyPower lifts the car");
             for(int i=0;i<200 && fly.player_effect()==1;++i) fly.update(go);
             require(fly.player_effect()!=1 && std::abs(fly.tuning().gravity-wpc::vehicle_tuning(3).gravity)<1e-6f,"FlyPower ends and the gravity comes back");
+        }
+        // FlyPower's per-vehicle ends (0x4d5b8c): vehicle 0 stops once down
+        // (0x4d59ed), vehicle 5 halves its gravity again at update 10 (0x4d56a2)
+        // and stops past 17 once down, vehicle 2 flies with gravity x 0.3.
+        for(int vehicle:{0,2,5}) {
+            wpc::RaceSession fly(track,vehicle,1,2);
+            for(int i=0;i<120;++i) fly.update({});
+            const float g0=wpc::vehicle_tuning(vehicle).gravity;
+            fly.use_gadget_now(vehicle);
+            wpc::DriveInput go;go.accelerate=true;
+            int updates=0;float at10=0;
+            for(;updates<400 && fly.player_effect()==1;++updates) {fly.update(go);if(fly.flying(-1)==10) at10=fly.tuning().gravity;}
+            std::printf("%s: FlyPower vehicle %d ended after %d updates, gravity at 10 %.4g (x %.4g)\n",path.c_str(),vehicle,updates,at10,at10/g0);
+            require(fly.player_effect()!=1 && std::abs(fly.tuning().gravity-g0)<1e-6f,"FlyPower's per-vehicle end restores the gravity");
+            if(vehicle==2) require(std::abs(at10-g0*0.17f*0.3f)<1e-4f*g0,"FlyPower vehicle 2's gravity x 0.3");
+            if(vehicle==5) require(std::abs(at10-g0*0.17f*0.5f)<1e-4f*g0 && updates>16,"FlyPower vehicle 5's gravity halves at update 10");
+            if(vehicle==0) require(updates<95,"FlyPower vehicle 0 ends once down");
+        }
+        // MonsterTires (0x4d6560): the tyres grow to 3 in 10 updates, settle to
+        // 2.7, stay 270 updates (m_innormframenum - 30), shrink; 289 in all.
+        {
+            wpc::RaceSession mt(track,0,1,2);
+            mt.use_gadget_now(7);
+            int updates=0;float top=0;
+            for(;updates<400 && mt.player_effect()==7;++updates) {mt.update({});top=std::max(top,mt.monster_scale(-1));}
+            std::printf("%s: MonsterTires ran %d updates, tyre scale up to %.3g\n",path.c_str(),updates,top);
+            require(updates==289 && std::abs(top-3.f)<1e-3f && mt.monster_scale(-1)==0,"MonsterTires' stages (289 updates, scale 3)");
+        }
+        // The tank's turret +0x3ab (0x4dbc76, 0x469a1c): a backward shot with no
+        // target turns it to pi; it holds while the weapon runs, then comes back
+        // by 3 degrees an update.
+        {
+            wpc::RaceSession tk(track,5,1,2);
+            tk.use_weapon_now(16,-1,true);
+            const float at0=tk.turret(-1);
+            int back=0;
+            for(;back<200 && tk.turret(-1)!=0;++back) tk.update({});
+            std::printf("%s: tank turret %.4g after the backward shot, back to 0 after %d updates\n",path.c_str(),at0,back);
+            require(std::abs(at0-3.14159265f)<1e-5f && back>60 && back<100,"the tank turret turns back after a shot (+0x3ab)");
+        }
+        // The wheel spin +0x2a4 (0x46b0d2): driving forward turns it down by
+        // 0.05 x the step an update, wrapped at -2 pi.
+        {
+            wpc::RaceSession ws(track,0,1,2);
+            wpc::DriveInput go;go.accelerate=true;
+            float lowest=0,moved=0;int steps=0;
+            for(int i=0;i<200;++i) {
+                const float before=ws.wheel_spin(-1);ws.update(go);
+                const float d=ws.wheel_spin(-1)-before;
+                if(d<0) {moved-=d;++steps;}
+                lowest=std::min(lowest,ws.wheel_spin(-1));
+            }
+            std::printf("%s: wheel spin turned %.3g rad down in %d updates, now %.3g\n",path.c_str(),moved,steps,ws.wheel_spin(-1));
+            require(steps>50 && lowest>=-6.2832f && moved>1,"the wheels roll forward (+0x2a4)");
         }
         // WPU_Paintball: the paint shot hits a robot ahead with type 4.
         {
@@ -756,16 +1247,23 @@ void test_course(const std::string& path) {
             for(int i=0;i<200 && !stopped;++i) {wall.update(go);for(const auto& e:wall.take_item_events()) stopped|=e.find("brick wall stopped")!=std::string::npos;}
             require(!stopped,"the user is never stopped by its own wall (+0x70)");
         }
-        // WPU_FireSiren (0x4e0130): every other car in the user's section
-        // runs at x 0.9 an update for 150 updates.
+        // WPU_FireSiren (0x4e0130): every other car in the user's section and
+        // within the action's +0x2c (icon 9's m_range, 5000) on each axis
+        // (0x4a7e70) runs at x 0.9 an update for 150 updates.
         {
+            // After 120 updates the robots are still within 5000 of the grid.
             wpc::RaceSession a(track,3,7),b(track,3,7);
-            for(int i=0;i<200;++i) {a.update({});b.update({});}
+            for(int i=0;i<120;++i) {a.update({});b.update({});}
             a.use_gadget_now(9);
             for(int i=0;i<10;++i) {a.update({});b.update({});}
-            float sa=0,sb=0;
-            for(size_t i=0;i<a.opponents().size();++i) if(a.opponents()[i].car.section==a.player().section) {sa+=a.opponents()[i].car.speed.speed;sb+=b.opponents()[i].car.speed.speed;}
-            require(sa<sb*0.8f,"the fire siren slows the cars of its section");
+            float sa=0,sb=0;int near=0;
+            const auto within=[&](const wpc::Vec3& p){for(size_t k=0;k<3;++k) if(!(std::abs(p[k]-a.player().position[k])<5000)) return false;return true;};
+            for(size_t i=0;i<a.opponents().size();++i) {
+                const auto& c=a.opponents()[i].car;
+                if(c.section!=a.player().section || !within(c.position)) continue;
+                ++near;sa+=c.speed.speed;sb+=b.opponents()[i].car.speed.speed;
+            }
+            require(near>0 && sa<sb*0.8f,"the fire siren slows the cars of its section within 5000");
             for(int i=0;i<150;++i) a.update({});
             require(a.player_effect()!=9,"the siren ends after its life");
         }
@@ -777,6 +1275,20 @@ void test_course(const std::string& path) {
             bool struck=false;
             for(int i=0;i<30 && !struck;++i) {fl.update({});for(const auto& e:fl.take_item_events()) struck|=e.find("flipper hit car")!=std::string::npos;}
             require(struck,"the flipper strikes a robot ahead");
+        }
+        // WPU_BootKicker (0x4d8aa0): the boot reaches out (x 1.1 an update),
+        // kicks a robot ahead with 0x100, bounces 10 updates and comes home.
+        {
+            wpc::RaceSession kb(track,0,1);
+            kb.use_weapon_now(11);
+            int struck_at=-1,updates=0;float reach=0;
+            for(;updates<200 && !kb.kicks().empty();++updates) {
+                reach=std::max(reach,kb.kicks()[0].ext[2]);
+                kb.update({});
+                for(const auto& e:kb.take_item_events()) if(e.find("boot kicker hit car")!=std::string::npos && struck_at<0) struck_at=updates;
+            }
+            std::printf("%s: boot kicker struck at update %d, reach %.0f, home after %d updates\n",path.c_str(),struck_at,reach,updates);
+            require(struck_at>=0 && kb.kicks().empty() && kb.running_weapon(-1)!=11,"the boot kicker strikes a robot ahead and comes home");
         }
         // WPU_OilSpill (0x4ddcf0): armed after 15 updates, it springs under
         // any car, its dropper too; the car spins (1.31 rad decaying by 0.897)
@@ -888,7 +1400,9 @@ void test_course(const std::string& path) {
                 // Finished robots park at the line and aim beside each other (dt_t2).
                 if(o.robot.avoiding() && race.opponent_laps(k)<track.laps()) {++aims;aims_on_route+=track.route(o.robot.avoid_point()).hit;}
                 const wpc::RoadEdges e=wpc::road_edges(track,o.robot.module(),o.robot.next_module());
-                if(e.hit) {++edged;const int w=e.left_distance(o.car.position)+e.right_distance(o.car.position);sane+=w>200 && w<8000;}
+                // A finished robot parks beyond the line, off its module (dr_t3:
+                // robot 1 stops in a narrow alley after its third lap).
+                if(e.hit && race.opponent_laps(k)<track.laps()) {++edged;const int w=e.left_distance(o.car.position)+e.right_distance(o.car.position);sane+=w>200 && w<8000;}
                 best=std::max(best,race.opponent_laps(k));
                 if(!cc) continue;
                 const auto& fx=race.opponent_effects(k);
@@ -911,9 +1425,24 @@ void test_course(const std::string& path) {
         // on cc_t1 two robots can end at that bend (r0 and r5 at speed 0).
         // Long courses (ct_t3, dr_t2: over 60 s a lap) are measured against
         // the best robot rather than two laps.
-        require(trapped<=2,"every robot but two does two laps in 120 s");
+        // dt_t3 (2026-11-08): a steep ramp in section 2 around (-40200, -2200,
+        // 23800) (+250 over 500 toward -x) that a robot climbs at about 0.19
+        // after a hit, then slides back, again and again (always-near pack only).
+        // With the robots' item aims read from the WPowerUpSprites (10000 at
+        // 20 degrees for the missile and breath), more of them are hit there:
+        // 4 trapped, against 2 with TNT's 60 degrees and 5000. The original's
+        // robots are trapped there too (Wine, player held above the ramp: one
+        // robot 65 s in the hollow, another in and out 17 times). See TODO.
+        const bool ramp=path.find("dt_t3")!=std::string::npos;
+        require(trapped<=(ramp?4:2),"every robot but two does two laps in 120 s (four on dt_t3's ramp)");
         if(aims_on_route*100<aims*95) std::printf("%s: avoidance aims on the route layer %zu of %zu\n",path.c_str(),aims_on_route,aims);
-        require(aims>100 && aims_on_route*100>=aims*90,"avoidance aims lie on the route layer (90%; dr_t3 94.8%)");
+        // dr_t2: WBumSteer's runners and gates knock robots off the line (86.9%).
+        // ct_t1 (2026-11-08): with the race distance in the rows' +0x34 (1.38x
+        // the native field a lap there), the early-race avoidance window
+        // (progress under 20000, +-120 degrees) ends sooner on the road, as in
+        // the original's units: 88.9%.
+        const bool loose=path.find("dr_t2")!=std::string::npos || path.find("ct_t1")!=std::string::npos;
+        require(aims>100 && aims_on_route*100>=aims*(loose?85:90),"avoidance aims lie on the route layer (90%; dr_t2 and ct_t1 85%)");
         require(edged>1000 && sane*100>=edged*95,"road edges span the car's module");
         size_t moved=0;
         for(const auto& o:race.opponents()) moved+=o.robot.has_goal();
@@ -921,6 +1450,29 @@ void test_course(const std::string& path) {
         int boosted=0;for(const auto& o:race.opponents()) boosted+=o.rank_boosted;
         std::printf("%s: robots best %d lap%s in 120 s, worst %d (%d catching up at the end, %zu avoiding updates)\n",path.c_str(),best,best==1?"":"s",worst,boosted,aims);
         require(marked>0,"robots leave dust or tracks");
+    }
+    // 0x4e53df: a far robot hit keeps its last control under the car update:
+    // held still for the hit's 25 updates, then driving; it glides again once
+    // the hit ends (Wine, cc_t1: robot 0 about 40000 away, hit with 0x80).
+    {
+        wpc::RaceSession race(track,3);
+        int k=-1;
+        for(int i=0;i<900 && k<0;++i) {race.update({});for(size_t r=0;r<race.opponents().size();++r) if(race.opponents()[r].far && !race.opponent_hidden(r) && race.opponent_laps(r)<track.laps()) {k=int(r);break;}}
+        if(k>=0) {
+            require(race.hit(k,0x80),"a far robot takes a hit");
+            race.update({});
+            const wpc::Vec3 at=race.opponents()[size_t(k)].car.position;
+            float moved=0;
+            for(int i=0;i<20;++i) {race.update({});const auto& p=race.opponents()[size_t(k)].car.position;moved=std::max(moved,std::hypot(p[0]-at[0],p[2]-at[2]));}
+            // The far step would cover about 80 an update (1600 here); held, a
+            // car only creeps on a slope after the 0x80 hop (cc_t2: 115).
+            require(moved<400,"held: the far robot does not glide during the hold");
+            int n=0;while(race.bomb(k).active() && n<200) {race.update({});++n;}
+            const wpc::Vec3 after=race.opponents()[size_t(k)].car.position;
+            std::printf("%s: far robot %d hit: %.0f during the hold, %.0f by the hit's end\n",path.c_str(),k,moved,std::hypot(after[0]-at[0],after[2]-at[2]));
+            // dt_t2: 145 when the robot drives into a wall after the hold.
+            require(std::hypot(after[0]-at[0],after[2]-at[2])>100,"then it drives off before the hit ends");
+        }
     }
     if(cc) {
         // Wine (2026-10-30): with the player parked at (-57000, 14172) the
@@ -1004,10 +1556,10 @@ void test_course(const std::string& path) {
         for(int i=0;i<30;++i) race.update({});
         const wpc::Vec3 off=race.opponents()[0].car.position;
         require(std::abs(off[0]-at[0])+std::abs(off[2]-at[2])>50,"the robot drives off");
-        // White model colours (no view): 0x47d890 returns 1 at 73, the hit
-        // ends on the 75th update.
+        // White model colours (no view), renderer 1's byte fades: +0x36 at 79,
+        // the hit ends on the 81st update.
         int more=0;while(race.bomb(0).active() && more<100) {race.update({});++more;}
-        require(60+more==75,"the hit has ended");
+        require(60+more==81,"the hit has ended");
         // TurboSpeed: the limit x 2.2 and the convergence x 10 for 60 updates.
         {
             // Straight from the grid; by 400 updates the car would be in the
@@ -1215,13 +1767,13 @@ void test_course(const std::string& path) {
             require(race.gadget_icon()==3,"the slot returns to the vehicle's own gadget");
         }
     }
-    // The test driver is slow through sh_t1's tunnel hairpins (about 300 s a
-    // lap); one lap there covers the tunnel, the pyramid jumps and the seam.
+    // One lap on sh_t1 covers the tunnel, the pyramid jumps and the seam
+    // (the earlier planner took about 300 s a lap there).
     const int laps=sh?1:3;
     wpc::RaceSession race(track,3);
-    Autopilot autopilot;
+    HybridPilot autopilot;
     int robot_pickups=0,robot_uses=0;
-    for(int i=0;i<12000 && race.laps_completed()<laps && race.phase()!=wpc::RaceSession::Phase::Finished;++i) {
+    for(int i=0;i<18000 && race.laps_completed()<laps && race.phase()!=wpc::RaceSession::Phase::Finished;++i) {
         race.update(autopilot(race));
         for(const auto& e:race.take_item_events()) {
             if(e.rfind("robot ",0)==0 && e.find("picked up")!=std::string::npos) ++robot_pickups;
@@ -1235,9 +1787,10 @@ void test_course(const std::string& path) {
     // The native seam can come just after the line (cc_t3), so the last lap
     // may count one loop before its seam.
     require(race.laps_completed()>=laps && race.player().loops>=laps-1,"laps through the loop transform");
-    if(laps==3) {
-        // The robots now beat the slow test driver on some courses, so only
-        // the finish and the player's place in the standings are checked.
+    // ct_t2 runs 9 laps (m_nLapNum); its finish is not driven here.
+    if(laps==3 && track.laps()==3) {
+        // The robots beat the test driver on some courses, so only the
+        // finish and the player's place in the standings are checked.
         const int place=race.rank();
         require(race.phase()==wpc::RaceSession::Phase::Finished && place>=1 && place<=7,"race finished");
         std::printf("%s: the test driver finishes %d%s\n",path.c_str(),place,place==1?"st":place==2?"nd":place==3?"rd":"th");
@@ -1253,7 +1806,7 @@ void test_course(const std::string& path) {
             wpc::RaceSession champ(track,3);
             std::array<int,7> totals{};totals[0]=20; // vehicle 0 leads the championship
             champ.set_championship(totals);
-            Autopilot pilot;
+            HybridPilot pilot;
             for(int i=0;i<12000 && champ.phase()!=wpc::RaceSession::Phase::Finished;++i) champ.update(pilot(champ));
             static const int by_place[7]={10,6,4,3,2,1,0};
             int awarded=0;for(int v:champ.race_points()) awarded+=v;
@@ -1267,13 +1820,76 @@ void test_course(const std::string& path) {
             // a faster time replaces the record with the vehicle in bits 28+.
             wpc::RaceSession practice(track,3,1,2);
             practice.set_record(0xfffffffu);
-            Autopilot solo;
+            HybridPilot solo;
             for(int i=0;i<12000 && practice.phase()!=wpc::RaceSession::Phase::Finished;++i) practice.update(solo(practice));
             require(practice.finish_state()==15 && practice.finish_counter()==60 && practice.standings().empty(),"practice ends in state 0xf");
             require(practice.new_record() && practice.record()>>28==3 && (practice.record()&0xfffffffu)<0xfffffffu,"practice record replaced");
             for(int i=0;i<60;++i) practice.update({});
             require(practice.accept(),"Enter closes the practice");
         }
+    }
+    // The action's +0x5c (look-back held at the use, 0x4d24f0): the missile
+    // leaves backward (0x4da605), the TNT is thrown backward (0x4dcaff), and
+    // the storm takes the backward links (0x4e14e0).
+    {
+        const auto along=[](const wpc::Vec3& d,float yaw){return -std::sin(yaw)*d[0]+std::cos(yaw)*d[2];};
+        wpc::RaceSession fw(track,3),bk(track,3);
+        fw.set_robots_enabled(false);bk.set_robots_enabled(false);
+        for(int i=0;i<120;++i) {fw.update({});bk.update({});}
+        const wpc::RaceCar& c=bk.player();
+        bk.use_weapon_now(25,-1,true);
+        require(bk.projectiles().size()==1 && bk.weapon_backward(-1),"a backward missile");
+        const wpc::Projectile& m=bk.projectiles()[0];
+        const wpc::Vec3 dm{{m.position[0]-c.position[0],0,m.position[2]-c.position[2]}};
+        require(along(dm,c.yaw)<-99 && along(m.velocity,c.yaw)<0,"the backward missile starts 100 behind and leaves backward");
+        bk.update({});bk.update({});
+        for(int i=0;i<45;++i) bk.update({});   // the missile's +0x389 runs out (40)
+        bk.use_weapon_now(24,-1,true);
+        require(!bk.tnts().empty() && along(bk.tnts().back().velocity,c.yaw)<0,"the backward TNT is thrown backward");
+        fw.use_weapon_now(21);bk.use_weapon_now(21,-1,true);
+        require(fw.storms().size()==1 && bk.storms().size()==1 && bk.storms()[0].backward && !fw.storms()[0].backward,"one storm each way");
+        // Each change of route polygon counted as a step along one of the
+        // last polygon's forward or backward links (the start line restarts
+        // the remaining fraction inside section 0, so no progress measure).
+        struct Steps {bool has=false;int section=-1;uint32_t record=0,polygon=0;int forward=0,backward=0;};
+        const auto step=[&](Steps& k,const wpc::Vec3& p) {
+            const auto r=track.route(p);if(!r.hit) return;
+            if(k.has && r.section==k.section && r.polygon!=k.polygon) {
+                const wpc::RouteNode node=track.route_node(k.section,k.record,k.polygon);
+                for(const auto& l:node.forward) if(l.target==r.polygon) ++k.forward;
+                for(const auto& l:node.backward) if(l.target==r.polygon) ++k.backward;
+            }
+            k.has=true;k.section=r.section;k.record=r.record;k.polygon=r.polygon;
+        };
+        Steps sf,sb;
+        for(int i=0;i<60 && !fw.storms().empty() && !bk.storms().empty();++i) {
+            step(sf,fw.storms()[0].position);step(sb,bk.storms()[0].position);
+            fw.update({});bk.update({});
+        }
+        std::printf("%s: storms' route steps in 60 updates, forward storm %d/%d, backward storm %d/%d (along forward/backward links)\n",path.c_str(),sf.forward,sf.backward,sb.forward,sb.backward);
+        require(sf.forward>sf.backward && sb.backward>sb.forward,"the forward storm follows the forward links, the backward one the backward links");
+    }
+    // A missile fired 1500 before the last exit flies on into section 0
+    // through the loop transform (0x4a23c2), instead of off the last section.
+    if(track.sections()>1) {
+        wpc::RaceSession ms(track,3);
+        ms.set_robots_enabled(false);
+        const wpc::Matrix4 e=wpc::multiply_matrix(track.unwrap(),track.entry_frame(0));
+        const float fx=e[8],fz=e[10],l=std::sqrt(fx*fx+fz*fz);
+        ms.place(e[12]-fx/l*1500,e[14]-fz/l*1500,std::atan2(-fx/l,fz/l));
+        require(ms.player().section==int(track.sections())-1,"the seam pose is in the last section");
+        ms.use_weapon_now(25);
+        require(ms.projectiles().size()==1,"one missile before the seam");
+        bool crossed=false;int after=0;
+        for(int i=0;i<60 && !ms.projectiles().empty();++i) {
+            ms.update({});
+            if(ms.projectiles().empty()) break;
+            const wpc::Projectile& p=ms.projectiles()[0];
+            const wpc::RaceTrack::Route r=track.route(p.position);
+            if(p.section==0 && r.hit && r.section==0) crossed=true;
+            if(crossed) ++after;
+        }
+        require(crossed && after>3,"the missile flies on into section 0");
     }
     std::printf("%s: %d lap%s in %.1f s, %d respawns, %d glides\n",path.c_str(),race.laps_completed(),laps==1?"":"s",race.race_seconds(),race.respawns(),race.player_glides());
 }

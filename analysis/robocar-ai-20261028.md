@@ -239,8 +239,43 @@ From the same decompiles and `0x4679d0`/`0x46a4a0` (Ghidra export and headless r
 - In the four Championship I races of `native_drive_test`, robots took 8, 4, 47 and 5 power-ups and used 5, 3, 44 and 5 items.
 - The `sh_t1` test driver now takes 178.8 s with 5 respawns (147.9 s, 1 before), because robots hit it.
 
+**Item aims (2026-11-08).**
+- **The query:** `0x4e5b0a` (weapons 11–16, 20, 22, 24, 25 by the table `0x4e82f8`/`0x4e82f0`;
+  17, 18, 19, 21, 23 drop at once, `0x4e5f33`), the FireSiren at `0x4e5b61` and the battle path
+  `0x4e5d77`. Each calls the object query `0x403d69` with range ftol(`+0xf8`) and angle `+0x100` of
+  the record of `car+0x375`.
+  - `car+0x375` is the item's entry in the HUD table `0x2ab078c[icon]`, a `WPowerUpSprite`. The
+    two members are `m_range` (`0x284`) and `m_visangle` (`0x285`).
+- **Read under Wine (`cc_t1`):** the 27 entries are runtime nodes `0x36b..0x385`. Their values equal
+  those of `general.wgm`'s first 27 `WPowerUpSprite`s in tree order:
+
+  | Icons | Range | Angle |
+  |---|---|---|
+  | 0–3, 5–8, 26 | 0 | 2π |
+  | 4 | 300 | 2π |
+  | 9 (FireSiren), 10 (Shield) | 5000 | 2π |
+  | 11, 12 (kicker, flipper) | 2000 | 40° |
+  | 13 (paint) | 3000 | 30° |
+  | 14 (breath), 16 (tank gun), 25 (missile) | 10000 | 20° |
+  | 15 (boomerang) | 8000 | 70° |
+  | 17–19 (dropped) | 2000 | −120° |
+  | 20, 22, 23 | 5000 | 60° |
+  | 21 (storm) | 10000 | 60° |
+  | 24 (TNT) | 3000 | 20° |
+
+- **The power-up actions share them.** The use `0x4d2970` (the icon's sprite as `this`) clones
+  `0x6f2c50[icon]`, then writes into its first action `+0x28` = the car, `+0x2c` = the sprite
+  record's `+0xf8` (`m_range`) and `+0x30` = its `+0x100` (`m_visangle`), and activates it. So the
+  actions' "range `+0x2c`, angle `+0x30`" are their icon's values:
+  - the FireSiren's query `0x405051` (5000, with `0x4a7e70`'s box test, not the whole section);
+  - the falling tree's and brick wall's target (`0x4e23fc`: 5000 at 60°, before a provisional
+    10000);
+  - the detour's query (5000, then its strict 150 test, so the outcome is unchanged).
+- **Native:** `ItemAims` (`default_item_aims`, `load_sprite_aims` from `general.wgm`, set by
+  `linux_main`). It is also used for those three actions. `robot_items` aims every weapon and the FireSiren with its icon's values; before,
+  TNT's 60° and 5000 were used for all.
+
 **Provisional:**
-- the weapons' query uses TNT's 60° and 5000 (template `+0x100` not read);
 - the list covers every course power-up, not the section cell's;
 - far robots take nothing.
 
@@ -349,3 +384,88 @@ longest 83 updates, shows within 648 of the entry portal.
 - `RaceSession::update` queries the route polygon under the player after the step, takes each visible robot's from its driver (`RoboDriver::module`, `+0x2c5`), and keeps the last hit (`Body::cursor`/`cursor_section`).
 - `fraction()` uses 1 − b / 256 while the cursor is in the car's section, otherwise the geodesic field. The player's `rank()` goes through the same path.
 - `native_drive_test` passes. The test driver's times: cc_t1 139.6 s (222.7 before), dt_t1 105.9 s, ct_t1 105.3 s. The gadget check now waits for the effect to end. The rank change altered the roulette's draw, and state 4 waits for the effect.
+
+## Far robots and hits (2026-11-08)
+
+- **The trace (`dr_t2`, player idle on the grid, the race distance in the rows' `+0x34`):**
+  - Robot 0, far, was hit around 160 s (its speed stayed 0 from then on in far mode).
+  - The far motion does not run `move()`, so the hit's 4π spin (`request_spin`) and the −5 motion
+    counter stayed pending.
+  - At 241 s it crossed the seam into near mode next to the parked player. Then the stale spin
+    (1.40 rad an update, decaying by 0.889) turned it round in place while the hold kept it still.
+  - It drove +x, +z off the road, fell to y −1931, and was respawned 200 past the start line without
+    crossing it: a lap was lost.
+- **The original:** the car update `0x46a4a0` processes the slots (`0x4727b0`, `0x472890`, called at
+  `0x46b962`) with no test of the far state `+0x2b1`. The far/near switch (`0x4e523a`) writes only
+  the state, the angles, the position, `+0x173` and the speed.
+- **Native (provisional):** the far branch counts the motion counter up, decays the spin and the
+  pushes, and drops the spent ones, without moving the car. Robot 0 now ends its third lap at 241.4 s
+  (329 s before).
+- **Not checked under Wine:** that the car update runs for far robots (their angles stay frozen
+  under Wine).
+
+## A far robot's hit under Wine (2026-11-08)
+
+`cc_t1`, the player on the grid and robot 0 about 40000 away (far mode). A one-shot jmp hook on
+`0x4a1c40` wrote type `0x80` into robot 0's WackyAutoBomba (`car+0x36d`, `+0x2c`) and called
+`0x41ba60`. `wmem logm` then read the bomba every 30 ms:
+
+- the counter `+0x82` rose by one a frame, 1 to 80 in 3.5 s (about 22 frames a second);
+- `+0x36` (done) was set at counter 80 and the type was cleared at 81;
+- the robot meanwhile stayed far, moving from (−37090, 563, 15206) to (−57037, 553, 5298).
+
+So the hit runs out while the robot is far, as the native far branch now lets it (`bomb_step`).
+Not checked: whether the 25-update hold stops a far robot (natively it slides on).
+
+The end differs:
+- Wine sets `+0x36` at counter 80.
+- `update_bomb`, with vehicle 0's model colour range (lo (0.23, 0.05, 0), hi (1, 1, 1), as
+  `RaceView::model_colours` computes it), sets it at 73, as for every vehicle.
+
+The cause (found the same day): Wine runs renderer 1 (`0x6f5958` = 1), whose fade steps packed
+bytes with truncation, 33 updates a fade instead of 30. The native tint now follows that path, and
+its mode changes match the log (`analysis/weapons-bomba-20261029.md`).
+
+## A far robot's hold (2026-11-08)
+
+### Wine
+
+`cc_t1`, robot 0 far away, hit with 0x80 through the hook. `wmem logv 0` every 20 ms:
+
+- before the hit: 79 units a frame at speed 0.56 (the far step);
+- 0.33 s to 1.5 s: still, speed 0;
+- then the speed rose by 0.0216 a frame (4, 7, 11 … 79 units a frame), up to 0.406, then fell to
+  0.237;
+- from 3.55 s, when the hit ended (counter 80): 79 a frame again, speed frozen at 0.233.
+
+### Code
+
+In the far state (`+0x2b1` = 0x1000), `0x4e53d4` jumps to `0x4e82e3`, skipping the far step,
+when the bomba's type (`[car+0x36d] +0x2c`) is set. It also skips it when `+0x1c7` is 5. The car
+update then moves the robot with its last control. The far flag itself (`+0x12a`, `0x4e50ce` /
+`0x4e5200`) depends on the distance and `+0x385` = −1 only.
+
+### Native
+
+`drive_opponent` takes the far step only without a running hit. A far robot with a hit goes
+through the near path, which keeps its last control while the bomba runs. `native_drive_test` hits
+a far robot on every course:
+
+- during the hold it moved 0 to 115 (a creep on a slope after the hop), against about 1600 for a
+  glide;
+- by the hit's end it had moved 145 to 5262.
+
+## The robots' own gadget (2026-11-08, static reading)
+
+- **`0x4e59a4`.** With `+0x1c7` = 2, the controller puts the robot's own gadget
+  (`0x2ab078c[vehicle]`) in its slot `+0x371` and raises its charge `+0x399` to at least 1. With 4
+  (`0x4e5a5f`), it puts its weapon (`0x2ab07b8[vehicle]`) in `+0x375`.
+- **Writers of `+0x1c7`.**
+  - Immediates: 3 (`0x4c7822`, `0x4d02d7`), 5 (trams), 7/8 (WSaw), 0xa (the controller), 0xb
+    (WRotoHill).
+  - Registers: the car's constructor (`0x4661bf`), the hiding (`0x4a2796`, 0), `0x4c5760` (0), and
+    WGoldenGate (`0x4c6e35`, 1 for robots).
+  - None writes 2 or 4. The controller compares `+0x1c7` with 2, 3, 4, 5, 7, 9, 0xa and 0xb, never
+    with 1.
+- **So** the shipped robots never get their own gadget (FlyPower) and never fly. WGoldenGate's 1 is
+  read by nothing. Natively they do not use it either; to confirm under Wine.

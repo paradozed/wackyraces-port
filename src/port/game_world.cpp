@@ -51,10 +51,13 @@ struct WorldBuilder {
         if(out.vertex_count>=4*1024*1024) bad("expanded geometry exceeds world limit");
         WpcTexturedVertex3D result{};
         position(result,m,x,y,z);result.u=u;result.v=v;
-        // Flat colors are proven COLS[1] (Glide; the Direct3D colour of
-        // untextured parts is not traced). Textured: 0x4b21ae, Wine-checked
-        // on ct_t1's snow and the cars' shadows.
-        if(b.material.textured) {
+        // Textured: 0x4b21ae, Wine-checked on ct_t1's snow and the cars'
+        // shadows. Untextured with VCOL: the same Direct3D diffuse (LIGHTING 0,
+        // no material colour), Wine-checked on sh_t4's WGoldenGate doors
+        // (VCOL mean (96, 65, 22), Wine (112, 84, 21); COLS[1] gave (255, 234, 0)).
+        // Untextured without VCOL keeps COLS[1] (Glide; the Direct3D rule,
+        // white with alpha TRAN, is read but not compared).
+        if(b.material.textured || color) {
             const auto c=textured_vertex_color(b.material.transparency,color);
             result.r=c[0];result.g=c[1];result.b=c[2];result.a=c[3];
         } else {
@@ -116,16 +119,18 @@ void WorldBuilder::visit(const Node& n,const Matrix4& parent,bool replace,bool i
                 }
                 const float cx=n.real(0x0b,.5f),cy=n.real(0x0c,.5f),angle=n.real(0x0f);
                 if(!std::isfinite(scale)||!std::isfinite(aspect)||!std::isfinite(cx)||!std::isfinite(cy)||!std::isfinite(angle)) bad("nonfinite sprite geometry");
-                // The inspected type-0 path has zero angle. Preserve that
-                // boundary until the rotation helper's units are recovered.
-                if(angle!=0) bad("nonzero world sprite angle needs recovered rotation units");
+                // Property 0x0f is +0x152 (8 before m_RenderSetting +0x15a): the
+                // sprite draw turns the quad by it about the view axis
+                // (0x419eef -> 0x43b690, radians), as the storm cloud's does.
+                const float ca=std::cos(angle),sa=std::sin(angle);
                 for(unsigned corner:{0u,1u,3u,0u,3u,2u}) {
                     const float u=float(corner&1),v=float(corner>>1);
                     // 0x419c36: x from -cx s, y from -cy s (the anchor
                     // fraction scales by s, not by the height), width s,
                     // height s x aspect. Image row 0 is the top: the upper
                     // corners take v=0.
-                    const float x=(u-cx)*scale,y=v*scale*aspect-cy*scale;
+                    const float x0=(u-cx)*scale,y0=v*scale*aspect-cy*scale;
+                    const float x=ca*x0+sa*y0,y=ca*y0-sa*x0;
                     vertex(b,transform,x,y,0,u,1-v);
                     b.offsets.push_back({{x,y}});
                 }

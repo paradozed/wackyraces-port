@@ -198,6 +198,8 @@ MenuEvent MenuController::bind_key(uint32_t dik) {
     const int item=binding_;binding_=-1;
     if (!dik) return event(MenuEvent::ChangedSetting,*current_,"binding cancelled");
     const int player=current_->integer(0x1a2);
+    // A joystick's table holds buttons; rebinding them is not ported.
+    if (session_.prefs.device(player)>=0) return event(MenuEvent::ChangedSetting,*current_,"joystick buttons are not rebound");
     const bool set=set_control(session_.prefs,player,item,dik);
     return event(MenuEvent::ChangedSetting,*current_,set?"key "+dik_name(dik):"key held by the other player");
 }
@@ -206,6 +208,11 @@ std::string MenuController::control_name(const Node &item) const {
     if (binding_>=0 && binding_==action) return "?";
     const int player=current_->integer(0x1a2);
     if (action<0 || action>11 || player<0 || player>1) return "";
+    // A joystick's entries are button numbers (100: none, the stick).
+    if (session_.prefs.device(player)>=0) {
+        const uint32_t b=session_.prefs.controls(player)[size_t(action)].first;
+        return b==100?std::string("-"):"B"+std::to_string(b+1);
+    }
     return key_names_.name(session_.prefs.controls(player)[size_t(action)].first,language_);
 }
 bool MenuController::idle_update(bool input) {
@@ -281,8 +288,18 @@ MenuEvent MenuController::selected_action(const Node &item) {
     }
     return {};
 }
+std::string MenuController::device_label(const Node &item) const {
+    if (item.class_name!="WMenuSetValueItem" || item.integer(0x194)!=5) return "";
+    const int player=item.integer(0x195);
+    if (player<0 || player>1) return "";
+    const int d=session_.prefs.device(player);
+    if (d<0) return "";
+    return std::to_string(d+1)+":"+(size_t(d)<joysticks_.size()?joysticks_[size_t(d)]:std::string("?"));
+}
 uint32_t MenuController::value_text(const Node &item) const {
     if (item.class_name!="WMenuSetValueItem") return 0;
+    // 0x48a930: type 5 with the keyboard shows string 0x97 (CLAVIER).
+    if (item.integer(0x194)==5) return session_.prefs.device(item.integer(0x195)&1)<0 ? 0x97 : 0;
     // 0x48a7a2: strings 0x0a, 0x0b, 0xfd; 0x48a80e: 0x9a INACTIVE, 0x9b ACTIVE.
     switch (item.integer(0x194)) {
         case 8: return session_.weather==0 ? 0x0a : session_.weather==1 ? 0x0b : 0xfd;
@@ -522,6 +539,22 @@ MenuEvent MenuController::adjust(int direction) {
     if (!direction || file_screen() || credits_) return {};
     auto choices=items(); if (selected()>=choices.size()) return {};
     const Node &item=*choices[selected()];
+    if (item.class_name=="WMenuSetValueItem" && item.integer(0x194)==5) {
+        // 0x48cab0: left (0x8000) and right (0x2000) call the item's slots +0x50
+        // and +0x54 (0x48a620, 0x48a640), both the callback with 1; type 5
+        // (0x48a845) steps the player's device: up by one, past the other
+        // player's, and back to -1 beyond the joystick count (0x5419d4).
+        const int player=item.integer(0x195),count=int(joysticks_.size());
+        if (player<0 || player>1) throw std::runtime_error("Invalid controller player");
+        const int before=session_.prefs.device(player),other=session_.prefs.device(player^1);
+        int d=before+1;
+        if (d!=-1 && d==other) ++d;
+        if (d>=count || d<0) d=-1;
+        if (d==before) return {};
+        session_.prefs.set_device(player,d);
+        session_.prefs.reset_controls(0);session_.prefs.reset_controls(1);
+        return event(MenuEvent::ChangedSetting,item);
+    }
     if (item.class_name!="WMenuSetVolumeItem") return {};
     float maximum=item.real(0x18e), step=item.real(0x18f), initial=volume(item);
     if (!std::isfinite(maximum) || !std::isfinite(step) || !std::isfinite(initial) || maximum<0 || step<0)

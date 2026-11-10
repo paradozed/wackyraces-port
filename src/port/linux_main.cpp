@@ -2,6 +2,7 @@
 #include "game_assets.h"
 #include "game_scene.h"
 #include "game_config.h"
+#include "linux_joystick.h"
 #include "game_exe.h"
 #include "game_files.h"
 #include "race_view.h"
@@ -40,6 +41,8 @@ struct Options {
     fs::path data=".", disc;
     unsigned language=0, frames=0, vehicle=3;
     int vehicle2=-1; // --vehicle2: a two-player --race (debug)
+    std::array<int,2> joysticks{{-1,-1}}; // [input] joystick1/2, WPC_JOYSTICK1/2: -1 keyboard
+    std::array<bool,2> joysticks_set{{false,false}};
     int width=640, height=480; // window size; the original 640x480 by default
     bool skip_startup=false, inspect=false, dust=false, fullscreen=false;
     std::string race; // course archive to race directly, e.g. sh/sh_t1.wgm
@@ -63,7 +66,10 @@ Options options(int argc,char **argv) {
         if (cfg.dust) result.dust=*cfg.dust;
         if (cfg.resolution) { result.width=cfg.resolution->first; result.height=cfg.resolution->second; }
         if (cfg.fullscreen) result.fullscreen=*cfg.fullscreen;
+        if (cfg.joystick1) {result.joysticks[0]=*cfg.joystick1;result.joysticks_set[0]=true;}
+        if (cfg.joystick2) {result.joysticks[1]=*cfg.joystick2;result.joysticks_set[1]=true;}
     }
+    for (int p=0;p<2;++p) if (const char *j=std::getenv(p?"WPC_JOYSTICK2":"WPC_JOYSTICK1")) {result.joysticks[size_t(p)]=std::atoi(j);result.joysticks_set[size_t(p)]=true;}
     if (const char *full=std::getenv("WPC_FULLSCREEN")) result.fullscreen=std::string(full)!="0";
     if (const char *data=std::getenv("WPC_DATA")) { result.data=data; result.data_from="WPC_DATA"; }
     if (const char *disc=std::getenv("WPC_DISC")) { result.disc=disc; result.disc_from="WPC_DISC"; }
@@ -118,6 +124,7 @@ struct Race {
     double accumulator=0;
     bool championship=false;
     bool gadget_key=false,weapon_key=false,view_key=false,view2_key=false; // keys as of the last update
+    int hit_type=0;unsigned long long hit_at=0; // WPC_HIT (debug)
     std::string name;int vehicle=0;           // for RECOMMENCER (WMenuNodeLoadTrack)
     // The in-race pause: general.wgm's WMenuBrick graph (WMenuNodePause).
     std::unique_ptr<wpc::MenuController> pause;
@@ -137,6 +144,13 @@ int main(int argc,char **argv) {
         if (!config.config_file.empty()) wpc_log("Config: %s",config.config_file.string().c_str());
         wpc_log("Game data: %s (%s); disc: %s (%s)",config.data.string().c_str(),config.data_from.c_str(),
                 config.disc.empty()?"none":config.disc.string().c_str(),config.disc_from.c_str());
+        // The joysticks present (/dev/input/js0..), as DirectInput lists them
+        // for the original's device count 0x5419d4.
+        std::vector<std::string> pad_names;
+        {wpc::Joystick probe;for (int i=0;i<16 && probe.open(i);++i) pad_names.push_back(probe.name());}
+        if (!pad_names.empty()) wpc_log("Joysticks: %zu (first: %s)",pad_names.size(),pad_names[0].c_str());
+        std::array<wpc::Joystick,2> joysticks;
+        std::array<int,2> joystick_index{{-1,-1}};
         wpc::Archive archive; archive.load(file(config.data,"menu.wgm").string());
         if (config.inspect) {
             size_t textures=0,empty=0;
@@ -185,6 +199,13 @@ int main(int argc,char **argv) {
             controller.set_credits(wpc::parse_credits(std::vector<uint8_t>((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>())));
         } catch(const std::exception& error) { wpc_log_error("Credits unavailable: %s",error.what()); }
         controller.set_prefs(wpc::load_prefs(prefs_path));
+        controller.set_joysticks(pad_names);
+        // [input] joystick1/2 or WPC_JOYSTICK1/2 set the MenuPrefs devices.
+        {
+            wpc::MenuPrefs prefs=controller.prefs();bool changed=false;
+            for (int p=0;p<2;++p) if (config.joysticks_set[size_t(p)] && config.joysticks[size_t(p)]!=prefs.device(p)) {prefs.set_device(p,config.joysticks[size_t(p)]);changed=true;}
+            if (changed) {prefs.reset_controls(0);prefs.reset_controls(1);controller.set_prefs(prefs);}
+        }
         if (config.dust) controller.set_options(controller.session().weather,true);
         wpc::MenuView menu(window.get(),archive,scene,strings,controller);
         wpc::GameAudio audio({config.data},{config.disc},config.language);
@@ -233,8 +254,19 @@ int main(int argc,char **argv) {
                 {int e=0,c=0;if (mode==2 && wpc::course_indices(name,e,c) && e*4+c<20) next->session->set_record(controller.session().profile.records[size_t(e*4+c)]);}
                 // The menu's POUSSIERE and METEO options (0x6f4650, 0x6f464c).
                 next->session->set_dust_option(controller.session().dust);
+                // Debug: WPC_PLACE=x,z,yaw puts player 1 there on the ground (captures).
+                if (const char* at=std::getenv("WPC_PLACE"); at && *at && name==config.race) {
+                    float x=0,z=0,yaw=0;
+                    if (std::sscanf(at,"%f,%f,%f",&x,&z,&yaw)==3) next->session->place(x,z,yaw);
+                }
                 // Debug: WPC_WEAPON=11..25 gives player 1 that weapon, charged.
                 if (const char* w=std::getenv("WPC_WEAPON"); w && *w) next->session->give_weapon(std::atoi(w));
+                // Debug: WPC_GADGET=0..10 gives player 1 that gadget, charged.
+                if (const char* g=std::getenv("WPC_GADGET"); g && *g) next->session->give_gadget(std::atoi(g));
+                // Debug: WPC_HIT=TYPE,UPDATE hits player 1 with that WackyAutoBomba
+                // type (e.g. 0x80) at that race update (captures).
+                if (const char* h=std::getenv("WPC_HIT"); h && *h && std::sscanf(h,"%i,%llu",&next->hit_type,&next->hit_at)!=2)
+                    throw std::runtime_error("WPC_HIT needs TYPE,UPDATE");
                 {int environment=0,course=0;if (wpc::course_indices(name,environment,course)) next->session->set_course(environment,course);}
                 // Debug: WPC_WEATHER=0/1/2 overrides METEO (off, on, random).
                 const char* forced=std::getenv("WPC_WEATHER");
@@ -242,6 +274,14 @@ int main(int argc,char **argv) {
                 wpc_log("Race options: dust %d, weather %d, rain %d",int(controller.session().dust),
                         controller.session().weather,int(next->session->raining()));
                 next->session->set_camera_members(wpc::race_camera_members(next->general_scene.root()));
+                {
+                    // The robots' item aims from general.wgm's WPowerUpSprites.
+                    const wpc::ItemAims d=wpc::default_item_aims();std::array<wpc::SpriteAim,27> f{};
+                    for(size_t k=0;k<f.size();++k) f[k]={d[k].range,d[k].angle};
+                    const auto read=wpc::load_sprite_aims(next->general_scene.root(),f);
+                    wpc::ItemAims a{};for(size_t k=0;k<a.size();++k) a[k]={read[k].range,read[k].angle};
+                    next->session->set_item_aims(a);
+                }
                 next->view=std::make_unique<wpc::RaceView>(window.get(),wpc::ArchivePool{&next->course,&next->general},
                     next->general,next->course_scene,next->general_scene,strings,*next->session);
                 {
@@ -380,6 +420,35 @@ int main(int argc,char **argv) {
             bool new_left=wpc_input_key_down(window.get(),WPC_KEY_LEFT);
             bool new_right=wpc_input_key_down(window.get(),WPC_KEY_RIGHT);
             bool new_escape=wpc_input_key_down(window.get(),WPC_KEY_ESCAPE);
+            // The players' joysticks follow their MenuPrefs devices (+0x18/+0x1c).
+            for (int p=0;p<2;++p) {
+                const int d=controller.prefs().device(p);
+                if (d==joystick_index[size_t(p)]) continue;
+                joystick_index[size_t(p)]=d;
+                if (d>=0 && joysticks[size_t(p)].open(d)) wpc_log("Player %d joystick: /dev/input/js%d (%s)",p+1,d,joysticks[size_t(p)].name().c_str());
+                else {joysticks[size_t(p)].open(-1);if (d>=0) wpc_log("Player %d joystick /dev/input/js%d not available",p+1,d);}
+            }
+            for (auto& j:joysticks) j.poll();
+            // Outside a race player 1's joystick also drives the menus: the stick
+            // gives the arrows' direction bits (0x4399b0), the accelerate button
+            // accepts (0x52aada = 0x40, the accelerate control) and the brake
+            // button backs out (provisional: the menu list's joystick bindings
+            // are not traced).
+            if (joysticks[0].is_open() && !race) {
+                const auto c=controller.prefs().controls(0);
+                const int x=joysticks[0].axis_byte(0),y=joysticks[0].axis_byte(1);
+                new_up=new_up || y< -64;new_down=new_down || y>64;new_left=new_left || x< -64;new_right=new_right || x>64;
+                new_enter=new_enter || joysticks[0].button(int(c[0].first));
+                new_escape=new_escape || joysticks[0].button(int(c[1].first));
+            } else if (joysticks[0].is_open() && race && race->paused) {
+                // The pause's list: the stick and the accelerate button (no back:
+                // braking must not leave it; the original's joystick pause key is
+                // not traced).
+                const auto c=controller.prefs().controls(0);
+                const int x=joysticks[0].axis_byte(0),y=joysticks[0].axis_byte(1);
+                new_up=new_up || y< -64;new_down=new_down || y>64;new_left=new_left || x< -64;new_right=new_right || x>64;
+                new_enter=new_enter || joysticks[0].button(int(c[0].first));
+            }
             if (stage==Stage::CardL2 || stage==Stage::CardL3) {
                 // FUN_00413bd0(2): whole seconds of timeGetTime.
                 if (now-stage_start>=2) enter_stage(stage==Stage::CardL2?Stage::CardL3:Stage::Intro,now);
@@ -400,7 +469,9 @@ int main(int argc,char **argv) {
             } else if (stage==Stage::Winner) {
                 // 0x494bf3: the pressed input bits & 0x52aada (0x40, accelerate:
                 // the player's control item 0).
-                const bool accel=wpc_input_code_down(window.get(),wpc::dik_to_linux(controller.prefs().controls(0)[0].first))!=0;
+                const bool pad=controller.prefs().device(0)>=0;   // a joystick: Up (0x40c8be) or its button
+                const bool accel=wpc_input_code_down(window.get(),wpc::dik_to_linux(pad?0xc8u:controller.prefs().controls(0)[0].first))!=0 ||
+                                 (pad && joysticks[0].is_open() && (joysticks[0].poll(),joysticks[0].button(int(controller.prefs().controls(0)[0].first))));
                 const bool skip=accel && !winner_accel;winner_accel=accel;
                 const auto due=uint64_t((now-winner_start)/wpc::menu_update_seconds);
                 bool running=true;
@@ -520,26 +591,55 @@ int main(int argc,char **argv) {
                 } else if (!race->paused) {
                     // The player's keys from the MenuPrefs control table (0x4966f0
                     // defaults: arrows, '/' gadget, right Shift weapon).
-                    const auto controls=controller.prefs().controls(0);
+                    // With a joystick device the control table holds its buttons
+                    // and the keyboard keeps fixed keys (0x40c8be, 0x40ccb7: the
+                    // keyboard defaults).
+                    const auto keys_of=[&](int p) {
+                        auto c=controller.prefs().controls(p);
+                        if (controller.prefs().device(p)>=0) {wpc::MenuPrefs k=controller.prefs();k.set_device(p,-1);k.reset_controls(p);c=k.controls(p);}
+                        return c;
+                    };
+                    const auto controls=keys_of(0);
                     const auto held=[&](size_t action){return wpc_input_code_down(window.get(),wpc::dik_to_linux(controls[action].first))!=0;};
                     wpc::DriveInput input;
                     input.accelerate=held(0); input.brake=held(1); input.left=held(2); input.right=held(3);
                     // Gadget and weapon act on presses: 0x6e42b0 is the input word
                     // ANDed with the previous update's (0x45c205).
-                    const bool gadget_down=held(6);
-                    const bool weapon_down=held(7);
+                    const auto pad1=[&](size_t a){return joysticks[0].is_open() && joysticks[0].button(int(controller.prefs().controls(0)[a].first));};
+                    const bool gadget_down=held(6) || pad1(6);
+                    const bool weapon_down=held(7) || pad1(7);
                     // Control 4 (Return) toggles the camera view on a press
                     // (0x52aad0), control 5 ('.') holds the rear view (0x52aad4).
-                    const bool view_down=held(4);
+                    const bool view_down=held(4) || pad1(4);
                     input.look_back=held(5);
                     // Player 2's keys (MenuPrefs controls 1: G, B, V, N, Z, X).
                     wpc::DriveInput input2;
                     if (race->session->two_players()) {
-                        const auto c2=controller.prefs().controls(1);
+                        const auto c2=keys_of(1);
                         const auto held2=[&](size_t a){return wpc_input_code_down(window.get(),wpc::dik_to_linux(c2[a].first))!=0;};
                         input2.accelerate=held2(0);input2.brake=held2(1);input2.left=held2(2);input2.right=held2(3);
                         input2.gadget=held2(6);input2.weapon=held2(7);
                         input2.look_back=held2(5);
+                    }
+                    // A player's joystick (0x4399b0): the x and y axes beyond +-64
+                    // of the byte scale steer and accelerate / brake (the
+                    // direction bits), its buttons the controls by 0x4966f0's
+                    // joystick defaults. The keyboard keeps working, as the
+                    // original keeps fixed keys bound beside a joystick (0x40c8be).
+                    bool joystick_view[2]={false,false};
+                    for (size_t p=0;p<2;++p) {
+                        wpc::Joystick& j=joysticks[p];
+                        if (!j.is_open()) continue;
+                        wpc::DriveInput& in=p?input2:input;
+                        if (p && !race->session->two_players()) continue;
+                        std::array<int,8> b{};
+                        for (size_t a=0;a<8;++a) b[a]=int(controller.prefs().controls(int(p))[a].first);
+                        const int x=j.axis_byte(0),y=j.axis_byte(1);
+                        in.left=in.left || x< -64 || j.button(b[2]);in.right=in.right || x>64 || j.button(b[3]);
+                        in.accelerate=in.accelerate || y< -64 || j.button(b[0]);in.brake=in.brake || y>64 || j.button(b[1]);
+                        in.look_back=in.look_back || j.button(b[5]);
+                        if (p) {in.gadget=in.gadget || j.button(b[6]);in.weapon=in.weapon || j.button(b[7]);}
+                        joystick_view[p]=j.button(b[4]);
                     }
                     // Fixed original updates; long stalls do not replay more than 5.
                     race->accumulator=std::min(race->accumulator+(now-race_clock),5*wpc::race_update_seconds);
@@ -550,7 +650,7 @@ int main(int argc,char **argv) {
                         race->gadget_key=gadget_down; race->weapon_key=weapon_down;
                         input.view=view_down && !race->view_key; race->view_key=view_down;
                         if (race->session->two_players()) {
-                            const bool down=wpc_input_code_down(window.get(),wpc::dik_to_linux(controller.prefs().controls(1)[4].first))!=0;
+                            const bool down=wpc_input_code_down(window.get(),wpc::dik_to_linux(keys_of(1)[4].first))!=0 || joystick_view[1];
                             input2.view=down && !race->view2_key;race->view2_key=down;
                         }
                         // A demo's input word for this update (0x45ba30); a normal
@@ -558,6 +658,8 @@ int main(int argc,char **argv) {
                         if (race->demo_cursor) input=wpc::ReplayCursor::input(race->demo_cursor->next());
                         else race->recording.record(wpc::Replay::word(input));
                         race->session->update(input,input2);
+                        if (race->hit_type && race->session->updates()==race->hit_at && race->session->hit(-1,uint16_t(race->hit_type)))
+                            wpc_log("Debug hit 0x%x at update %llu",race->hit_type,race->hit_at);
                         for (const auto& item:race->session->take_item_events())
                             wpc_log("Power-up at update %llu: %s",(unsigned long long)race->session->updates(),item.c_str());
                         race->audio->update();

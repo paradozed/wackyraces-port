@@ -74,6 +74,24 @@ void synthetic() {
     require(voice.session().volumes.at(slider.id)==1 && voice.volume(slider)==1,"voice slider step from its default");
     integer(slider,0x193,0);
     require(wpc::MenuController(root).volume(slider)==1,"music slider default");
+    // 0x48a845: JOUEUR's type 5 steps the device with left/right: -1, the
+    // joysticks (past the other player's), -1; both tables reset (0x4966f0).
+    {
+        root=fixture(); auto &pad=root.children[3].children[1]; pad.class_name="WMenuSetValueItem";
+        integer(pad,0x194,5); integer(pad,0x195,0);
+        wpc::MenuController dev(root); dev.set_joysticks({"Pad A","Pad B"});
+        require(dev.value_text(pad)==0x97 && dev.device_label(pad).empty(),"the keyboard shows CLAVIER (0x97)");
+        require(dev.adjust(1).kind==wpc::MenuEvent::ChangedSetting && dev.prefs().device(0)==0,"right steps to joystick 0");
+        require(dev.device_label(pad)=="1:Pad A" && dev.value_text(pad)==0,"the label is number:name");
+        require(dev.prefs().controls(0)[0].first==4 && dev.prefs().controls(0)[2].first==100 && dev.prefs().controls(0)[7].first==3,"joystick buttons 4, 100, ... 3");
+        require(dev.prefs().controls(1)[0].first==0x22,"player 2 keeps its keys");
+        wpc::MenuPrefs other=dev.prefs(); other.set_device(1,1); dev.set_prefs(other);
+        dev.adjust(-1);
+        require(dev.prefs().device(0)==-1,"past the other player's joystick and the count: back to the keyboard");
+        require(dev.prefs().controls(0)[0].first==0xc8,"the keyboard keys come back");
+        wpc::MenuController none(root);
+        require(none.adjust(1).kind==wpc::MenuEvent::None && none.prefs().device(0)==-1,"no joystick: the keyboard stays");
+    }
 }
 void profile() {
     // 0x496590 and the .WSG blocks (0x004b7b40): 20 + 5 + 1 + 80 + 20 bytes.

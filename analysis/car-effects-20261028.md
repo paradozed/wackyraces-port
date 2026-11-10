@@ -464,3 +464,53 @@ Every WackyAuto runs WCarFx.
 - `0x45a270` builds 6 planes per frame (matrix 0 and the wrapped matrix 1): normal ±axis/|axis|, the point being the frame origin with only component i moved by `axis[i] × bound` (exact for unrotated boxes, slightly off for rotated ones such as cc_t1 #14), and the 8 corners for the AABB `+0xdc..+0xf0`. A point is outside when a plane gives `n·p + d < 0` (`0x510124` = 0).
 - `0x456180(camera)`: per box, the wrapped frame when `0x6abb40[brick+0xb4]` (the node's section `+0x104`) says the box lies across the seam from the camera's section; inside any box → 0 (no weather).
 - Native (`RaceTrack::sheltered`, `RaceView::weather`): the normal, wrapped and unwrapped frames are all tested (provisional for the section rule). Corpus: cc_t1 2, cc_t2 2, cc_t3 3, cc_t4 3, ct_t2 6, ct_t3 2, ct_t4 1, dr_t4 3 (ct_t1, dr_t1, dr_b none). Not compared with Wine.
+
+## Rain lighting (2026-11-08)
+
+### Recovered
+
+Three changes apply when rain is on (`0x2a1cc74` set and `0x2a1b2b0` = 0, i.e. not snow):
+
+- **Clear and fog colour (`0x4ae364`, in the frame routine `0x4ae300`).** The colour built from the
+  viewport is turned into (R >> 2, G >> 2, B × 192 >> 9). It is used for the device `Clear`
+  (vtable `+0x28`, flags 3) and for `D3DRS_FOGCOLOR` (state `0x22`).
+- **Textures (`0x4b08b1`, in the conversion `0x4b0550`).** The three channel divisors
+  (`+0x2c`, `+0x38`, `+0x30`) are doubled, so every texture converted for the race comes out at
+  half intensity. The HUD's are included.
+- **The backdrop (`0x4b4347`, in `0x4b41a0`, called by `0x4ae300`).** Every vertex colour of the dome
+  is written as bytes B `0xc0`, G `0x80`, R `0x80`; the alpha is kept.
+
+### Wine (cc_t1, METEO forced to 1 by writing `0x6f464c` at the menu)
+
+The flags read on, rain and cut (01, 0, 01). Against a clear run at the same place:
+
+| Pixel | Clear | Rain |
+|---|---|---|
+| sand | (255, 206, 140) | (123, 97, 66) |
+| water | (0, 146, 255) | (0, 69, 123) |
+| sky | (255, 231, 115) | (58, 57, 41) |
+| a HUD bead | (82, 49, 173) | (33, 16, 82) |
+
+The sky follows halved texture × (0.5, 0.5, 0.75): (61, 55, 41).
+
+### Native
+
+- `RaceView::rain_dim_` halves each texture's RGB at upload (world, general and HUD sprites).
+- The clear and fog colour take the shift rule; the backdrop's vertex colours become (128, 128, 192).
+
+### Native capture (same place, `WPC_WEATHER=1`)
+
+| Pixel | Native | Wine |
+|---|---|---|
+| sky | (64, 58, 43) | (58, 57, 41) |
+| sand | (127, 100, 68) | (123, 97, 66) |
+| water | (1, 72, 126) | (0, 69, 123) |
+| far hills | (44, 29, 0) | (41, 28, 0) |
+
+The differences match the original's quantisation to its 16-bit formats.
+
+### Not ported
+
+- The quantisation itself.
+- Whether textures loaded later in the race (clones) are also halved: in the original, every
+  conversion while the flag is set.

@@ -123,6 +123,9 @@ void wpc_vk_draw_textured_triangles(WpcWindow *window, WpcTexture *texture,
  * is draw flag 0x2000000. Depth testing stays on. */
 #define WPC_DRAW_ADDITIVE 2u
 #define WPC_DRAW_NO_DEPTH_WRITE 4u
+/* 0x4b5550's mode bit 0x2 (a film frame whose material has SILL and SMOO, mode
+ * 10): INVSRCALPHA/INVSRCCOLOR, dst x (1 - src) + src x (1 - alpha). */
+#define WPC_DRAW_INVERSE 8u
 void wpc_vk_set_draw_mode(WpcWindow *window, uint32_t mode);
 /* Original CLAM bits: bit 0 clamps U, bit 1 clamps V; cleared bits repeat.
  * two_sided: when false, back-face culling is enabled for this draw. */

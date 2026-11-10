@@ -1,5 +1,9 @@
 #include "game_config.h"
 #include "game_exe.h"
+#include "linux_joystick.h"
+#include <linux/joystick.h>
+#include <fstream>
+#include <unistd.h>
 #include <cstdint>
 #include <vector>
 #include <cstdio>
@@ -40,6 +44,29 @@ int main() {
         require(wpc::parse_config("[video]\nfullscreen = yes\n","/").fullscreen==true && !wpc::parse_config("[game]\nlanguage = 0\n","/").fullscreen,"fullscreen flag");
         rejected([]{wpc::parse_config("[video]\nfullscreen = maybe\n","/");},"fullscreen must be a flag");
         rejected([]{wpc::parse_resolution("-640x480");},"negative resolution accepted");
+        {
+            const auto j=wpc::parse_config("[input]\njoystick1 = 0\njoystick2 = -1\n","/");
+            require(j.joystick1==0 && j.joystick2==-1,"[input] joystick1/joystick2");
+            require(!wpc::parse_config("[game]\nlanguage = 0\n","/").joystick1,"no joystick by default");
+            rejected([]{wpc::parse_config("[input]\njoystick1 = pad\n","/");},"a joystick must be a number");
+            rejected([]{wpc::parse_config("[input]\njoystick2 = 16\n","/");},"joystick number out of range accepted");
+            rejected([]{wpc::parse_config("[input]\nmouse = 1\n","/");},"unknown [input] key accepted");
+            // The reader on an event file: init events, then an axis and a button.
+            char tmpl[]="/tmp/wpc-js-XXXXXX";const int fd=mkstemp(tmpl);require(fd>=0,"temporary event file");close(fd);
+            {
+                std::ofstream f(tmpl,std::ios::binary);
+                const js_event ev[]={{0,0,JS_EVENT_AXIS|JS_EVENT_INIT,0},{0,1,JS_EVENT_BUTTON|JS_EVENT_INIT,4},
+                                     {10,-20000,JS_EVENT_AXIS,0},{11,32767,JS_EVENT_AXIS,1},{12,0,JS_EVENT_BUTTON,4},{13,1,JS_EVENT_BUTTON,3}};
+                f.write(reinterpret_cast<const char*>(ev),sizeof ev);
+            }
+            wpc::Joystick js;
+            require(js.open_path(tmpl) && js.is_open(),"a joystick event stream opens");
+            require(js.axis_byte(0)==-78 && js.axis_byte(1)==127,"axes on the original's byte scale (-78 is left of -64)");
+            require(!js.button(4) && js.button(3) && !js.button(40),"buttons follow the last event");
+            js.poll();require(js.is_open(),"the end of the stream keeps the state");
+            std::remove(tmpl);
+            require(wpc::joystick_default_buttons[0]==4 && wpc::joystick_default_buttons[2]==100 && wpc::joystick_default_buttons[7]==3,"0x4966f0's joystick defaults");
+        }
         rejected([]{wpc::parse_config("[paths]\ncd = /mnt\n","/");},"unknown key accepted");
         rejected([]{wpc::parse_config("[network]\n","/");},"unknown section accepted");
         rejected([]{wpc::parse_config("[game]\nlanguage = 9\n","/");},"language out of range accepted");

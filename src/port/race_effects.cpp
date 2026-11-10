@@ -78,9 +78,87 @@ void CarEffects::bumm(const Matrix4& frame,float speed) {
     }
     bumms_.push_back(b);
 }
+namespace {
+// 0x4184c0: a piecewise linear curve of (x, y) keys with integer x, held at
+// its ends.
+struct CurveKey {int x;float y;};
+template<size_t N> float curve(const std::array<CurveKey,N>& k,int x) {
+    if(x<=k.front().x) return k.front().y;
+    if(x>=k.back().x) return k.back().y;
+    size_t i=1;
+    while(x>k[i].x) ++i;
+    return k[i-1].y+(k[i].y-k[i-1].y)*float(x-k[i-1].x)/float(k[i].x-k[i-1].x);
+}
+// flamesmoke's curves, keyed by twice the age: the scale (0x5264c8, x 2), the
+// turn added to the spin (0x526528) and the alpha (0x526588, x 255).
+constexpr std::array<CurveKey,11> smoke_scale{{{0,0},{10,0.2f},{20,0.3f},{30,0.4f},{40,0.5f},{50,0.58f},{60,0.64f},{70,0.7f},{80,0.75f},{90,0.79f},{100,0.83f}}};
+constexpr std::array<CurveKey,11> smoke_turn{{{0,0},{10,0.6981317f},{20,0.6632251f},{30,1.3264502f},{40,1.8849555f},{50,2.3038347f},
+                                              {60,2.7925267f},{70,3.3161256f},{80,3.5953782f},{90,3.6302848f},{100,3.7699111f}}};
+constexpr std::array<CurveKey,11> smoke_alpha{{{0,0},{10,0.5f},{20,0.5f},{30,0.4f},{40,0.4f},{50,0.3f},{60,0.3f},{70,0.2f},{80,0.2f},{90,0.1f},{100,0}}};
+}
+void CarEffects::hit_smoke(const Matrix4& frame,bool flip) {
+    // 0x4181e0: velocity (0, 30, 0), spin rand x 2 pi (0x430fc0). Then
+    // 0x47ee15 zeroes the position and 0x47ee53 negates the spin on flip.
+    HitSmoke h;h.base=frame;h.velocity={{0,30,0}};
+    h.spin=unit()*6.2831855f;
+    if(flip) h.spin=-h.spin;
+    hit_smokes_.push_back(h);
+}
+void CarEffects::tank_chunks(const Matrix4& frame) {
+    // 0x47e7b6: for v = 30, 34 .. 70 a clone at the car's frame (0x40644c),
+    // its WReszecske at the car's position + v up (+0x24..+0x2c). The init
+    // (0x47d050): v = ((rand % 180 - 90) x 0.2, rand % 90 x 0.2 + 20,
+    // (rand % 180 - 90) x 0.2) x (rand % 60 x 0.01 + 0.7), +0x40 = 0.
+    for(int v=30;v<0x4a;v+=4) {
+        Chunk c;c.frame=frame;c.position={{frame[12],frame[13]+float(v),frame[14]}};
+        const float x=(float(random_.next()%180)-90)*0.2f,y=float(random_.next()%90)*0.2f+20,z=(float(random_.next()%180)-90)*0.2f;
+        const float k=float(random_.next()%60)*0.01f+0.7f;
+        c.velocity={{x*k,y*k,z*k}};
+        chunks_.push_back(c);
+    }
+}
 void CarEffects::update(const Matrix4& frame,float speed,const std::array<WheelContact,4>& wheels,bool splash,
                         const Matrix4& splash_frame,bool skid) {
     ++updates_;
+    for(HitSmoke& h:hit_smokes_) {
+        // 0x418310: t = 2 x age. Past 10 the rise slows by 0.99 and the drift
+        // along x grows by 0.2 an update; the curves give the scale (+0x152),
+        // the angle (+0x14a, the spin plus or minus the turn) and the alpha
+        // (+0x1ba). Past 100 the clone is flagged for deletion.
+        ++h.age;
+        const float t=float(h.age)*2;
+        if(t>10) {h.velocity[1]*=0.99f;h.velocity[0]+=0.2f;for(size_t i=0;i<3;++i) h.position[i]+=h.velocity[i];}
+        const int x=int(t);
+        h.scale=curve(smoke_scale,x)*2;
+        h.angle=h.spin>0?h.spin+curve(smoke_turn,x):h.spin-curve(smoke_turn,x);
+        h.alpha=int(curve(smoke_alpha,x)*255);
+    }
+    hit_smokes_.erase(std::remove_if(hit_smokes_.begin(),hit_smokes_.end(),[](const HitSmoke& h){return h.age*2>100;}),hit_smokes_.end());
+    for(Chunk& c:chunks_) {
+        // 0x47d130: the first update scales the axes by rand % 110 x 0.01 + 1
+        // each (0x402027); past +0x40 = 30 the clone ends (0x405a6a). Else the
+        // fall (y - 1.5), the step, the axes x (0.92, 0.92, 0.91), a turn
+        // about x by 0.1 (0x43b2b0) and about y by 0.2 (0x43b4a0).
+        Matrix4& m=c.frame;
+        if(c.age==0) for(size_t a=0;a<3;++a) {const float k=float(random_.next()%110)*0.01f+1;for(size_t r=0;r<3;++r) m[a*4+r]*=k;}
+        if(c.age>30) {++c.age;continue;}
+        c.velocity[1]-=1.5f;
+        for(size_t i=0;i<3;++i) {c.position[i]+=c.velocity[i];m[12+i]=c.position[i];}
+        const float k[3]={0.92f,0.92f,0.91f};
+        for(size_t a=0;a<3;++a) for(size_t r=0;r<3;++r) m[a*4+r]*=k[a];
+        const auto turn=[&](size_t p,size_t q,float angle,bool about_y) {
+            const float cs=std::cos(angle),sn=std::sin(angle);
+            for(size_t r=0;r<3;++r) {
+                const float u=m[p*4+r],w=m[q*4+r];
+                if(about_y) {m[p*4+r]=cs*u+sn*w;m[q*4+r]=cs*w-sn*u;}   // x' = c x + s z, z' = c z - s x
+                else {m[p*4+r]=cs*u-sn*w;m[q*4+r]=sn*u+cs*w;}          // y' = c y - s z, z' = s y + c z
+            }
+        };
+        turn(1,2,0.1f,false);
+        turn(0,2,0.2f,true);
+        ++c.age;
+    }
+    chunks_.erase(std::remove_if(chunks_.begin(),chunks_.end(),[](const Chunk& c){return c.age>31;}),chunks_.end());
     // 0x47a460: the tracks, then the POUSSIERE puffs, dust and ripples.
     update_tracks(frame,wheels,skid);
     for(auto& b:bumms_) for(auto& p:b.pieces) {

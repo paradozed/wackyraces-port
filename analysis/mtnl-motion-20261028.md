@@ -149,3 +149,112 @@ So only controller 0 runs on the car-selection page:
 - No clip has been compared with Wine; the original plays none in the menu.
 - The rotation signs and order are taken from the helpers. A Wine capture of a clip started by a power-up action (`0x4d4f08`…) would confirm them.
 - The car names for `0xb8` and `0xca` are inferred from the row order.
+
+## Controller 0 in the race (2026-11-08)
+
+### Recovered
+
+- **The constructor (`0x440be0`).** It takes the model's world position, with the velocity at 0 and
+  the weight `+0x20` = 1. It configures the filters (`0x440d40`) with these gains:
+  - translation (0.1, 0.8, 0.1);
+  - rotation: the GDHModel's `+0x17e`. Its constructor `0x437720` sets (0.25, 0.25, 0.5), and the car
+    init `0x469bf0` overwrites a body's by vehicle (jump table `0x46a294`, cases `0x469f87..0x46a126`,
+    before the body's vtable `+0x4c` builds the controllers):
+
+    | Vehicle | Gains | `+0x937` |
+    |---|---|---|
+    | 0 | (0.6, 0.25, 0.3) | 0.0489 |
+    | 1 | (0.7, 0.25, 0.4) | 0.0436 |
+    | 2 | (0.7, 0.25, 0.4) | 0.0524 |
+    | 3 | (0.7, 0.25, 0.25) | 0.0559 |
+    | 4 | (0.7, 0.25, 0.6) | 0.0524 |
+    | 5 | (0.7, 0.25, 0.4) | 0.0471 |
+    | 6 | (0.7, 0.25, 0.3) | 0.0506 |
+
+    The same cases write the steer step `+0x937`, which matches the port's table for each vehicle.
+    Read under Wine on vehicle 3's body: (0.7, 0.25, 0.25);
+  - scale (0, 0.1, 0).
+- **The filters (`0x440d40`).** Each is set by `0x440ab0(gain, alpha, omega)`:
+
+  | Filter | Alpha | Omega |
+  |---|---|---|
+  | translation x | 0.2 | 0.35 |
+  | translation y | 0.6 | 0.3 |
+  | translation z | 0.3 | 0.3 |
+  | rotation x | 0.7 | 0.4 |
+  | rotation y | 0.9 | 0.5 |
+  | rotation z | 0.9 | 0.4 |
+  | scale y | 0.9 | 0.6 |
+
+  - Coefficients: c0 = 2a cos w, c1 = −a², b0 = (1 − c0 − c1) × gain × 0.28985509,
+    b1 = 1.8 b0, b2 = 0.65 b0.
+  - The step (`0x440b40`): w = c1 s1 + c0 s0 + x, y = b1 s0 + b2 s1 + b0 w.
+- **The update (`0x440e30`).**
+  1. v = p − p', a = v − v'; with the model's flag `0x40000000` the velocity is kept.
+  2. l = (x·a, y·a, z·a) with the frame's axes (`0x43ba80`).
+  3. The inputs:
+     - translation −l, clamped to ±15;
+     - rotation (0, 1, 0.2) × l (`0x452ed0`: arg1 × arg2), clamped to ±15;
+     - y scale −0.01 l.y, clamped to ±20.
+  4. The nine values (t, r, 0, s, 0) × the weight go into every segment's pairs (`0x4410f1`): the
+     largest positive in a, the smallest non-positive in b, locked slots left alone.
+- **The time base.** `frame_time_factor` keeps at least two units (33 ms), so the original runs one
+  update per drawn frame at 30 Hz. Stepping once per race update is equivalent to its per-draw step.
+
+### Native
+
+- `SwayController` (`game_motion`) implements the update.
+- `RaceView::bodies_` holds each vehicle's first GDHModel: its transform in the group (composed as
+  `WorldBuilder` does) and a mask of the group's other batches.
+- `sways_` holds one posed instance per car, stepped once per race update with the matrix it is
+  drawn at. The hit tint is applied to the posed copy.
+
+### Checks
+
+- At rest on the grid, the player's car is pixel-identical to the static rest pose (0 of 48000
+  pixels differ).
+- `native_drive_test`, synthetic: a steady drive settles; one lateral kick rolls by b0 × −15 on the
+  next step, in every segment's b, then rings and settles.
+- Scratch harness, robot 0 for 1200 updates, peaks of the values:
+
+  | Course | Translation | Rotation (degrees) | Scale y | Updates with roll above 5° |
+  |---|---|---|---|---|
+  | `cc_t1` | (1.5, 7.2, 0.5) | (1.2, 1.9, 10.1) | 0.04 | 80 |
+  | `dt_t1` | (1.5, 6.7, 0.9) | (1.7, 3.0, 9.5) | 0.03 | 69 |
+  | `sh_t1` | (1.5, 8.1, 1.0) | (1.8, 1.5, 10.9) | 0.12 | 37 |
+  | `ct_t2` | (1.5, 3.9, 0.9) | (2.2, 2.1, 10.2) | 0.02 | 67 |
+
+- On screen (native), the player's tower leans in a turn.
+- The breath head follows the posed segment 1 (`pose_mesh`'s segment matrices). It is unchanged
+  at rest.
+- **Compared with Wine (cc_t1, vehicle 3, the player driving with XTest keys).**
+  - `wmem logsway` logs the body's world matrix (`+0x98`, `+0xc0`) and its six posed segment
+    records (`[+0x15e] +0xc`, 0x34 bytes each: basis 9, one float, translation 3) every 4 ms.
+  - The original drew 117 distinct frames in 6.3 s, about 18.6 frames a second under Xvfb.
+  - Fed one frame at a time with the logged world matrices, `SwayController` with vehicle 3's gains
+    reproduces segment 0's translation, basis and y scale to 10⁻³ for frames 0 to 91.
+  - One sample (frame 75) straddles a frame. After a 1.3 s gap in the log (frame 92) the states
+    differ, as the native saw one large jump.
+  - With the constructor's gains (0.25, 0.25, 0.5) instead, the roll was 2.8 times smaller and the
+    yaw twice larger; that is how the per-vehicle table was found.
+
+## The gadgets' body animations (2026-11-09)
+
+- **`0x4383b0(segment, rx, ry, rz, flag)`** (thunk `0x40275c`): flag −1 clears `+0x17a` bit 0;
+  otherwise it sets the bit, allocates `+0x176` if needed, and locks the rotation slots 3..5 of the
+  segment: with a flag, a = −1 and b = rx, ry, rz (degrees); with flag 0, a = b = 0. (The compiler
+  reads the three arguments from the same stack slot between pops.) `0x437f70` does the same for the
+  scale slots 6..8 (b = s − 1).
+- **Callers on the car body** (`[car +0x24f]`), from FlyPower and TurboSpeed
+  (`analysis/weapons-bomba-20261029.md`, `analysis/wfire-20261109.md`): FlyPower vehicles 0 and 1
+  play clip 0 (`0x440970(0, 0, 1, −1)`; vehicle 1 first calls the vtable `+0x4c`); vehicle 2 locks
+  segment 5's z rotation at 153 × `+0x64` degrees each update and clears the locks at its end;
+  vehicle 5 locks segment 6's x rotation at 35° and clears them at its end. TurboSpeed: vehicle 1
+  locks segment 1's scale at (1, 1, 1) (never cleared by its end); vehicle 4 plays clip 0 (MTNL
+  `0x1034d`: clip 0 chains to clip 1, which loops) and clip 2 at the end.
+- **Native:** `RaceView::body_gadgets` reads the session's gadget effect and FlyPower counter at each
+  body step and drives the body instance's clip controller beside controller 0 (both accumulate into
+  the same pairs, as `0x437d00` runs every active controller), then applies the locks.
+- **Captures** (native, `cc_t1`, `WPC_GADGET`): vehicle 4's turbo swings both clubs; vehicle 1's
+  FlyPower opens the umbrella over the car. Not compared with Wine.
+

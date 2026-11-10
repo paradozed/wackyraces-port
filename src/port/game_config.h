@@ -32,6 +32,10 @@ struct GameConfig {
     std::optional<bool> dust;
     std::optional<std::pair<int,int>> resolution;
     std::optional<bool> fullscreen;
+    // [input] joystick1 / joystick2: the Linux joystick (/dev/input/jsN) a
+    // player drives with, as the original's MenuPrefs device +0x18 / +0x1c
+    // (-1, the default, is the keyboard). Native: the menu cannot pick it.
+    std::optional<int> joystick1,joystick2;
 };
 // "WIDTHxHEIGHT", each 320..16384; throws std::runtime_error otherwise.
 std::pair<int,int> parse_resolution(const std::string& text);

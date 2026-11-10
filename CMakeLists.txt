@@ -84,6 +84,7 @@ set(WPC_PORT_SRC
     src/port/menu_view.cpp
     src/port/linux_main.cpp
     src/port/linux_platform.cpp
+    src/port/linux_joystick.cpp
     src/port/linux_platform.h
     src/port/wpc_platform.h
     src/port/wpc_iat_stubs.h
@@ -176,9 +177,9 @@ if(WPC_NATIVE_PORT)
         add_test(NAME native-race COMMAND native_race_test)
         add_executable(native_drive_test tests/native_drive.cpp src/port/game_drive.cpp src/port/race_session.cpp src/port/race_camera.cpp src/port/race_effects.cpp src/port/race_weapons.cpp src/port/race_robot.cpp
             src/port/race_track.cpp src/port/race_objects.cpp src/port/game_race.cpp src/port/game_ground.cpp src/port/game_mode.cpp
-            src/port/game_scene.cpp src/port/game_assets.cpp src/port/game_mesh.cpp src/port/game_material.cpp)
+            src/port/game_scene.cpp src/port/game_assets.cpp src/port/game_mesh.cpp src/port/game_material.cpp src/port/game_motion.cpp)
         add_test(NAME native-drive COMMAND native_drive_test)
-        add_executable(native_config_test tests/native_config.cpp src/port/game_config.cpp src/port/game_exe.cpp)
+        add_executable(native_config_test tests/native_config.cpp src/port/game_config.cpp src/port/game_exe.cpp src/port/linux_joystick.cpp)
         add_test(NAME native-config COMMAND native_config_test)
         add_executable(native_movie_test tests/native_movie.cpp src/port/game_avi.cpp src/port/movie_decoder.cpp)
         if(WPC_LIBAVCODEC_FOUND)

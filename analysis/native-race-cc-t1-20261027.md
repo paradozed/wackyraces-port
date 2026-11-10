@@ -27,7 +27,7 @@ championships is not recovered, so those requests remain pending.
 | Portals | route `+28/+30` | 70→69, 472→463, 634→632 |
 | Loop | WMOD transform carrying exit 632 onto entry 70 | +73386.5, −0.13, −31976.5 |
 | Start | route-zero `WStartLine` | `0x44` |
-| Fog | `0x4ae060`: D3D linear fog from far×0.5 to far; Glide `0x433930` colors fog with the viewport background | 10000–20000, (222,165,82) |
+| Fog | `0x4ae060`: D3D linear fog to far, from far − 3000 with table W fog in the raster caps (Wine), else far × 0.5 (2026-11-07, [on-screen checks](on-screen-checks-20261107.md)); Glide `0x433930` colors fog with the viewport background | 17000–20000 (was 10000), (222,165,82) |
 | Sky | `GDViewport m_BackDrop` (`0xc8`) | `GDModel 0x19`, 5000-unit dome |
 
 WGNR record flags seen on the course: `0x2` road and sand, `0x1` banks, `0x4`

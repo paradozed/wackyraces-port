@@ -212,6 +212,9 @@ the new key. The pairs are (DIK code, action bit) from +0x24 (player 1) or
 **Glyph advance.**
 - `0x42dc50`/`0x42de80` advance each glyph by its texture width (`+0x1c`) less the text descriptor's `+0x150` less 1, times `+0x152` and the screen factor.
 - `0x42dd99` uses less 4 instead when `0x5299b0`, `0x6e4585` and `0x6f5958` are all 0. Wine's widths fit less 1.
+  (2026-11-09: `0x6f5958` is the renderer, 1 under Wine, as the port draws, so the -4 branch belongs to
+  renderer 0 only and is not ported. `0x5299b0` is written at `0x431cbe`, `0x6e4585` at `0x4316aa`,
+  `0x431fab`, `0x4903aa` and `0x490553`; not traced further.)
 - The descriptor maps property k to `+0x130 + 8 × (k − 0x4a)`. So `+0x150` is property `0x4e`.
 - In `menu.WGM`, `0x4e` is 4 only on the controller values #552 and #178 (CLAVIER); 0 elsewhere.
 

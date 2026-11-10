@@ -67,6 +67,13 @@ struct MenuPrefs {
     // A player's twelve (key, action bit) pairs from +0x24 (+0x84 for player
     // 2): DirectInput scan codes when the device +0x18/+0x1c is -1.
     std::array<std::pair<uint32_t,uint32_t>,12> controls(int player) const;
+    // +0x18 / +0x1c: the player's input device, -1 the keyboard, else a joystick.
+    int device(int player) const {return int(word(player?0x1c:0x18));}
+    void set_device(int player,int device) {set_word(player?0x1c:0x18,uint32_t(device));}
+    // 0x4966f0 (called for both players after a device change, 0x48a8c7): the
+    // keyboard keys, or with a joystick its buttons 4, 5, 100 (none), 100, 0,
+    // 1, 2, 3 (player 2's joystick branch is not traced: the same, provisional).
+    void reset_controls(int player);
     std::vector<uint8_t> record() const;
     // The original ignores a record of another size (0x178 word); so does this.
     static MenuPrefs parse(const std::vector<uint8_t>& record);

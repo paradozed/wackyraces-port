@@ -142,14 +142,20 @@ void RaceSession::set_course(int environment,int course) {
     environment_=environment;course_=course;rank_row_=rank_row(environment,course);
     for(Opponent& o:opponents_) o.rank_boost=1+rank_row_.boost+o.rank_unit*rank_row_.boost*0.25f;
 }
+float RaceSession::progress_length(int section) const {
+    // The rows' route lengths (+0x34): the lap is their sum (0x4a3ba0, the
+    // manager's +0xf38), and a car's distance in its row that row's length x
+    // its fraction (0x4a3937: the cursor polygon's +0x17 x the length >> 8).
+    return float(track_.row_length(section));
+}
 int RaceSession::race_distance(int car) const {
     const RaceCar& c=car<0?player_:opponents_.at(size_t(car)).car;
     float lap=0,before=0;
     for(size_t s=0;s<track_.sections();++s) {
-        const float l=track_.section_length(int(s));
+        const float l=progress_length(int(s));
         lap+=l;if(int(s)<c.section) before+=l;
     }
-    return int(float(c.loops)*lap+before+fraction(car)*track_.section_length(c.section));
+    return int(float(c.loops)*lap+before+fraction(car)*progress_length(c.section));
 }
 int RaceSession::race_rank(int car) const {
     const auto finished=[&](int i)->const Body& {return i<0?body_:opponent_bodies_.at(size_t(i));};
@@ -225,21 +231,25 @@ void RaceSession::robot_items(size_t i) {
         const Vec3& q=t<0?player_.position:opponents_[size_t(t)].car.position;
         return std::sqrt((q[0]-c.position[0])*(q[0]-c.position[0])+(q[1]-c.position[1])*(q[1]-c.position[1])+(q[2]-c.position[2])*(q[2]-c.position[2]));
     };
-    // The targets' angle and range are the weapon template's +0x100 and
-    // (provisionally) TNT's 60 degrees and 5000.
+    // The targets' angle and range: the item's WPowerUpSprite m_visangle and
+    // ftol(m_range) (0x4e5b0a).
     const auto target=[&](float angle,int range) {return find_target(c.position,c.yaw,c.section,angle,range,int(i));};
+    const auto aim=[&](int icon) {const ItemAim& a=aims_.at(size_t(std::clamp(icon,0,26)));return target(a.angle,int(a.range));};
     if(it.gadget_state==0xff && it.field_wait==0) {
         bool use=false;
         switch(it.gadget) {
             case 8: use=b.turbo==0;break;                       // 0x2ab07ac: not already boosted
-            case 7: use=(c.surface&0x80007c)!=0;break;          // 0x2ab07a8
-            case 9: {                                            // 0x2ab07b0
-                const int t=target(tnt_angle,int(tnt_range));
+            case 7:                                              // 0x2ab07a8; 0x4e5a4b: or a WRotoHill's +0x1c7 = 0xb
+                use=(c.surface&0x80007c)!=0 || o.effect==0xb;
+                if(use && o.effect==0xb) o.effect=0;             // 0x4e5d68
+                break;
+            case 9: {                                            // 0x2ab07b0 (0x4e5b61)
+                const int t=aim(9);
                 use=t!=-2 && distance(t)>700 && (t<0 || !it.prefer_player); // 0x516b54
                 if(use) it.prefer_timer=0;
                 break;
             }
-            case 10: use=b.hit.guard==1 && !b.hit.active() && target(2*pi,5000)!=-2;break; // 0x2ab07b4
+            case 10: use=b.hit.guard==1 && !b.hit.active() && aim(10)!=-2;break; // 0x2ab07b4 (5000, 2 pi)
             default: break; // the vehicle's own gadget: +0x1c7 states 1/0xb (not ported)
         }
         if(use) it.gadget_state=5;
@@ -248,7 +258,7 @@ void RaceSession::robot_items(size_t i) {
         switch(it.weapon) {
             case 0x11:case 0x12:case 0x13:case 0x15:case 0x17: it.weapon_state=5;break; // dropped at once
             default: {
-                const int t=target(tnt_angle,int(tnt_range));
+                const int t=aim(it.weapon);   // 0x4e5af8 (11..16, 20, 22, 24, 25)
                 // 0x4e5ea1: a brick's +0x1c7 = 3 (or 4) fires without the wait,
                 // and is cleared by firing (0x4e5ef5).
                 if(t!=-2 && distance(t)>700 && (t<0 || !it.prefer_player) && (it.weapon_wait<1 || t<0 || o.effect==3 || o.effect==4)) {
@@ -533,7 +543,11 @@ void RaceSession::human_items(Items& it,int vehicle,int place,Body& body,bool ca
                 // 0x4d2970 clones world object 0x6f2c50[icon]: 0x483a20
                 // follows each data record's next-sibling id (+0x10, set
                 // at 0x41b4bd), so icon i is WFirstPowerUp's i+1th sibling.
+                // 0x4d24f0: the action's +0x5c is the look-back key (input
+                // 0x4, mask 0x52aad4) of a human driver, 0 for robots.
+                use_backward_=input.look_back;
                 use_weapon(it.weapon,car);
+                use_backward_=false;
                 it.weapon=-1;it.weapon_state=4;
             }
             break;
@@ -558,17 +572,19 @@ void RaceSession::update_bend_arrow() {
     }
 }
 std::vector<RaceSession::StripRacer> RaceSession::strip() const {
+    // 0x499d90: x = 220 x the distance into the lap (+0x1a3) / the lap
+    // length (+0xf38, 0x4a3ba0), with the race distance's lengths.
     std::vector<StripRacer> out;
-    const float sections=float(track_.sections());
+    float lap=0;for(size_t s=0;s<track_.sections();++s) lap+=progress_length(int(s));
     size_t opponent=0;
     for(const auto& placed:grid_.racers) {
         StripRacer r;r.vehicle=placed.racer.vehicle;r.player=placed.racer.player;
-        float p;
-        if(r.player) {p=player_progress();r.finished=phase_==Phase::Finished;}
+        float d;
+        if(r.player) {d=float(race_distance(-1));r.finished=phase_==Phase::Finished;}
         else {
-            p=opponent_progress(opponent);r.finished=opponent_bodies_.at(opponent).finished;++opponent;
+            d=float(race_distance(int(opponent)));r.finished=opponent_bodies_.at(opponent).finished;++opponent;
         }
-        r.lap_fraction=r.finished?1.f:std::clamp(std::fmod(std::max(0.f,p),sections)/sections,0.f,1.f);
+        r.lap_fraction=r.finished?1.f:lap>0?std::clamp(std::fmod(std::max(0.f,d),lap)/lap,0.f,1.f):0.f;
         out.push_back(r);
     }
     return out;
@@ -694,6 +710,7 @@ void RaceSession::step(const DriveInput& raw) {
     update_tnts();
     update_storms();
     update_strikes();
+    update_kicks();
     update_barriers();
     update_mines();
     update_blasts();
@@ -737,9 +754,15 @@ void RaceSession::drive_opponent(Opponent& o,Body& b,bool controlled) {
     const bool far=controlled && !robots_near_ && (std::abs(dx)>=5000 || std::abs(dz)>=5000 || dx*dx+dz*dz>24999999);
     if(far!=o.far) {o.far=far;car.speed.speed=o.tuning.top_speed*0.8f;car.speed.brake_state=0;}
     const float time=frame_time_factor(race_update_seconds*1000);
+    // 0x4e53df: in the far state (0x1000) a running WackyAutoBomba (+0x2c set)
+    // skips the far step, so the car update moves the robot with its last
+    // control: held for the hit, then driving, until the hit ends. Wine,
+    // cc_t1, robot 0 about 40000 away hit with 0x80: still for about 25
+    // frames, accelerating 0.0216 a frame, gliding again at the hit's end.
+    const bool hit=b.hit.active();
     // 0x4e53f0: a far robot waiting at a crossing (+0x1c7 = 5) stays put.
-    if(far && !b.finished && o.effect==5) {o.previous=start;return;}
-    if(far && !b.finished) {
+    if(far && !b.finished && !hit && o.effect==5) {o.previous=start;return;}
+    if(far && !b.finished && !hit) {
         Vec3 from=start;
         // The last section's ground runs past its route (cc_t1: about 200
         // units); there the route continues only through the loop
@@ -785,9 +808,19 @@ void RaceSession::drive_opponent(Opponent& o,Body& b,bool controlled) {
         b.sliding=true;settle(car,b,false);b.sliding=false;
         if(car.loops!=loops) from=transform_point(car.loops>loops?track_.wrap():track_.unwrap(),from);
         crossings(car,b,from,false);
-        // A far robot slides at its top speed, so a hold does not stop it
-        // (provisional: the far motion ignores +0x3ef).
+        // No hit runs here (see 0x4e53df above); a type 0 bomba still steps.
         bomb_step(car,b);
+        // Provisional: the car update 0x46a4a0 consumes its slots (0x4727b0,
+        // 0x472890) and counts the motion counter up (0x46a70d) without
+        // testing the far state. So a hit taken while far (its hop, its 4 pi
+        // spin, the -5 hold) runs out as the robot slides. The far motion skips
+        // move(), so natively they waited for the return to near mode (dr_t2:
+        // 76 s later the robot spun in place, turned round and fell). They run
+        // out here without moving the car. Not checked under Wine.
+        if(b.motion<=0) ++b.motion;
+        decay_spin(b.spin);
+        for(Body::Push& p:b.pushes) {for(float& c:p.force) c*=p.decay;p.yaw*=p.yaw_decay<0?p.decay:p.yaw_decay;}
+        b.pushes.erase(std::remove_if(b.pushes.begin(),b.pushes.end(),[](const Body::Push& p){return dot(p.force,p.force)<2 && std::abs(p.yaw)<1e-3f;}),b.pushes.end());
         o.previous=from;
         return;
     }
@@ -807,7 +840,14 @@ void RaceSession::drive_opponent(Opponent& o,Body& b,bool controlled) {
         if(b.finished) {
             o.control={car.speed.speed< -0.1f?1:car.speed.speed>0.1f?2:0,0};
             if(o.control.throttle==0) car.speed.speed=0;
-        } else if(!b.hit.active()) o.control=o.robot.drive(track_,state,random_);
+        } else if(!b.hit.active()) {
+            o.control=o.robot.drive(track_,state,random_);
+            // 0x4e75c0: a WSaw's +0x1c7 = 7 or 8 steers aside for +0x1cb (3) updates.
+            if(o.effect==7 || o.effect==8) {
+                if(o.side_timer>0) {--o.side_timer;o.control.steer=o.effect==7?0.17453292f:-0.17453292f;}
+                else o.effect=0;
+            }
+        }
         // 0x4e53df: no driving decision while WackyAutoBomba runs (the last
         // control stays; provisional).
         const SpeedState before=car.speed;
@@ -847,13 +887,21 @@ void RaceSession::drive_human(size_t i,const DriveInput& input) {
 void RaceSession::update_objects() {
     // The course objects run after the cars (provisional order). Car 0 is
     // the player, then the robots in grid order.
-    std::vector<CarProbe> cars{{player_.position,false,false,body_.bridge,forward_of(player_.yaw),player_.section,body_.hit.active()}};
-    for(size_t i=0;i<opponents_.size();++i) cars.push_back({opponents_[i].car.position,!opponents_[i].human,opponent_bodies_[i].hidden,opponent_bodies_[i].bridge,forward_of(opponents_[i].car.yaw),opponents_[i].car.section,opponent_bodies_[i].hit.active()});
+    std::vector<CarProbe> cars{{player_.position,false,false,body_.bridge,forward_of(player_.yaw),player_.section,body_.hit.active(),body_.effect<0,player_.surface}};
+    for(size_t i=0;i<opponents_.size();++i) cars.push_back({opponents_[i].car.position,!opponents_[i].human,opponent_bodies_[i].hidden,opponent_bodies_[i].bridge,forward_of(opponents_[i].car.yaw),opponents_[i].car.section,opponent_bodies_[i].hit.active(),opponent_bodies_[i].effect<0,opponents_[i].car.surface});
     object_effects_.resize(cars.size());
     for(size_t i=0;i<opponents_.size();++i) object_effects_[i+1]=opponents_[i].effect;
     objects_.update(cars,object_hits_,object_effects_,player_.section,track_.sections());
     // 0x4cd9eb: a dynamite hole's blast.
-    for(const CarPush& p:objects_.pushes()) (p.car==0?body_:opponent_bodies_[p.car-1]).pushes.push_back({p.force,p.decay});
+    for(const CarPush& p:objects_.pushes()) (p.car==0?body_:opponent_bodies_[p.car-1]).pushes.push_back({p.force,p.decay,p.yaw,p.yaw_decay});
+    // 0x4cfa50: a WRotoHill holds the car: stopped, its slots cleared, turned and
+    // placed, with airtime 0; +0x93b = 0 takes the ground rays' reach below away.
+    for(size_t i=0;i<objects_.hovering().size();++i) (i==0?body_:opponent_bodies_[i-1]).hover=objects_.hovering()[i];
+    for(const CarHeld& h:objects_.held()) {
+        RaceCar& car=h.car==0?player_:opponents_[h.car-1].car;
+        Body& b=h.car==0?body_:opponent_bodies_[h.car-1];
+        car.speed.speed=0;b.pushes.clear();car.position=h.position;car.yaw=wrap_angle(car.yaw+h.yaw);car.airtime=0;
+    }
     // 0x4c2547: the rolling log turns the cars on it.
     for(const CarPlacement& m:objects_.rolled()) (m.car==0?player_:opponents_[m.car-1].car).position=m.position;
     // 0x4c92cb: a car held by a geyser stops (+0x3ef, +0x403, its pushes).
@@ -876,7 +924,11 @@ void RaceSession::update_objects() {
     };
     ride(player_,body_);
     for(size_t i=0;i<opponents_.size();++i) ride(opponents_[i].car,opponent_bodies_[i]);
-    for(size_t i=0;i<opponents_.size();++i) opponents_[i].effect=object_effects_[i+1];
+    for(size_t i=0;i<opponents_.size();++i) {
+        const int was=opponents_[i].effect,now=object_effects_[i+1];
+        if((now==7 || now==8) && was!=7 && was!=8) opponents_[i].side_timer=3;   // 0x4c0d38
+        opponents_[i].effect=now;
+    }
     // 0x4d1c80/0x4cb27b: a touched car whose WackyAutoBomba is idle gets
     // type 0x200 (the squash).
     for(const ObjectHit& h:object_hits_) {
@@ -957,23 +1009,28 @@ void RaceSession::use_gadget(int icon,int car) {
             // the gravity +0x98 x 0.17 (0x516228, the old value kept in +0x6c),
             // the top-speed row x 1.2 (0x512a74), airtime 4, +0x385 = 1, the
             // +0x3df sound. The per-vehicle branches (0x4d5354: wings,
-            // propeller, parachute, boulder models) are not ported.
+            // propeller, parachute, boulder models) are drawn by RaceView for
+            // vehicles 3, 4 and 6 only (WPU_Propeller's own update 0x4d8110 is empty).
             VehicleTuning& t=car<0?tuning_:opponents_.at(size_t(car)).tuning;
             RaceCar& rc=car<0?player_:opponents_.at(size_t(car)).car;
             if(b.fly>0) break;
             b.fly=1;b.fly_gravity=t.gravity;b.fly_top=t.top_speed;
             t.gravity*=0.17f;t.top_speed*=1.2f;
+            // 0x4d4e19, 0x4d5172, 0x4d523f: vehicles 3, 4 and 6 halve it again.
+            if(rc.vehicle==3 || rc.vehicle==4 || rc.vehicle==6) t.gravity*=0.5f;
+            // 0x4d520f, 0x4d5309 -> 0x4d5337: vehicles 1 and 2 by 0.3 (0x512a04).
+            if(rc.vehicle==1 || rc.vehicle==2) t.gravity*=0.3f;
             b.pushes.push_back({{{0,62,0}},0.92f});
             rc.airtime=4;b.effect=1;
             item_events_.push_back("used gadget "+std::to_string(icon)+" (FlyPower)"+who);
             break;
         }
         case 7:
-            // MonsterTires (init 0x4d6380, update 0x4d6560): +0x385 = 7 while the
-            // tyres grow (m_tomaxframenum 10), settle (3), stay (300) and shrink
-            // (5). Their physics (+0x15b = 0x52b800[vehicle], the contact
-            // spread) and models are not ported.
-            b.monster=318;b.effect=7;
+            // MonsterTires (init 0x4d6380): the tyre scale +0x6c = 1, stage +0x68
+            // and counter +0x64 = 0. The original sets +0x385 = 0 (natively 7).
+            // Its physics (+0x15b = 0x52b800[vehicle], the contact spread, and
+            // the wheel records +0x44b = 24) are not ported.
+            b.monster=1;b.monster_count=0;b.monster_scale=1;b.effect=7;
             item_events_.push_back("used gadget 7 (MonsterTires)"+who);
             break;
         case 9:
@@ -1002,26 +1059,65 @@ void RaceSession::update_gadgets() {
     one(body_);
     for(Body& b:opponent_bodies_) one(b);
     // WPU_FireSiren (update 0x4e0130): each update the query 0x405051 (angle
-    // 2 pi, flags 7, range the action's +0x2c, 0 here: no distance test,
-    // 0x4a7eca) takes every other car in the user's section, whose speed is
-    // x m_rSpeedMod (0.9); past the life the effect ends (+0x385 = -1).
+    // 2 pi, flags 7, range the action's +0x2c) takes every other car in the
+    // user's section within the range on each axis (0x4a7e70), whose speed is
+    // x m_rSpeedMod (0.9); past the life the effect ends (+0x385 = -1). The
+    // use 0x4d2970 sets +0x2c/+0x30 from the icon's WPowerUpSprite m_range
+    // and m_visangle (icon 9: 5000, 2 pi).
     const auto siren=[&](const RaceCar& user,Body& b) {
         if(b.siren<=0) return;
         if(--b.siren<0 || b.siren==0) {b.siren=0;if(b.effect==9) b.effect=-1;return;}
-        const auto slow=[&](RaceCar& c,const Body& cb){if(&c!=&user && !cb.hidden && c.section==user.section) c.speed.speed*=0.9f;};
+        const float range=aims_[9].range;
+        const auto within=[&](const RaceCar& c) {
+            if(!(range>0)) return true; // 0x4a7eca: no distance test
+            for(size_t k=0;k<3;++k) if(!(std::abs(c.position[k]-user.position[k])<range)) return false;
+            return true;
+        };
+        const auto slow=[&](RaceCar& c,const Body& cb){if(&c!=&user && !cb.hidden && c.section==user.section && within(c)) c.speed.speed*=0.9f;};
         slow(player_,body_);
         for(size_t i=0;i<opponents_.size();++i) slow(opponents_[i].car,opponent_bodies_[i]);
     };
-    const auto tyres=[&](Body& b){if(b.monster>0 && --b.monster==0 && b.effect==7) b.effect=-1;};
-    // FlyPower (update 0x4d5510): the gravity doubles at the 20th update;
-    // past 95, once down (airtime < 3), it and the top speed come back
-    // (provisional: the per-vehicle branches 0x4d5b8c/0x4d5ba8).
-    const auto fly=[&](const RaceCar& c,Body& b,VehicleTuning& t) {
+    // MonsterTires' update (0x4d6560, table 0x4d6918; general.wgm 0x2c0's
+    // members): the counter +0x64 counts; stage 0 grows the scale by
+    // m_tomaxscalediff (0.2) until m_tomaxframenum (10), 1 by m_tonormscalediff
+    // (-0.1) until m_tonormframenum (3), 2 waits m_innormframenum - 30 (270,
+    // 0x4d661e), 3 adds m_tominscalediff (-0.4) until m_tominframenum (5); each
+    // limit resets the counter. Stage 4 ends it (0x4d6659): 289 updates.
+    const auto tyres=[&](Body& b){
+        if(b.monster<=0) return;
+        static const int limit[4]={10,3,300-30,5};
+        static const float step[4]={0.2f,-0.1f,0,-0.4f};
+        const int stage=b.monster-1;
+        if(stage==4) {b.monster=0;b.monster_scale=1;if(b.effect==7) b.effect=-1;return;}
+        ++b.monster_count;
+        b.monster_scale+=step[stage];
+        if(b.monster_count>=limit[stage]) {b.monster_count=0;++b.monster;}
+    };
+    // FlyPower (update 0x4d5510): the gravity doubles at the 20th update,
+    // then the per-vehicle branch (table 0x4d5b8c) decides the end (0x4d5a56:
+    // the gravity and the top speed come back):
+    //   vehicles 0 and 1 (0x4d59ed): once down (airtime < 3);
+    //   vehicle 5 (0x4d5555): at update 10 the gravity halves again and the
+    //     airtime is set to 4 (0x4d56a2); past update 17, once down;
+    //   the others (0x4d5a2e): past update 95, once down.
+    const auto fly=[&](RaceCar& c,Body& b,VehicleTuning& t) {
         if(b.fly<=0) return;
         ++b.fly;
         if(b.fly==20) t.gravity*=2;
-        if(b.fly>95 && c.airtime<3) {t.gravity=b.fly_gravity;t.top_speed=b.fly_top;b.fly=0;if(b.effect==1) b.effect=-1;}
+        if(c.vehicle==5 && b.fly==10) {t.gravity*=0.5f;c.airtime=4;}
+        const int last=c.vehicle==0 || c.vehicle==1?0:c.vehicle==5?17:95;
+        if(b.fly>last && c.airtime<3) {t.gravity=b.fly_gravity;t.top_speed=b.fly_top;b.fly=0;if(b.effect==1) b.effect=-1;}
     };
+    // 0x469a1c..0x469a7a: vehicle 5's turret, with no weapon running (+0x389
+    // = -1), comes back to 0 by 3 degrees (0x512a24) an update.
+    const auto turret=[](const RaceCar& c,Body& b) {
+        if(c.vehicle!=5 || b.weapon.id>=0) return;
+        if(b.turret<-0.05235988f) b.turret+=0.05235988f;
+        else if(b.turret>0.05235988f) b.turret-=0.05235988f;
+        else b.turret=0;
+    };
+    turret(player_,body_);
+    for(size_t i=0;i<opponents_.size();++i) turret(opponents_[i].car,opponent_bodies_[i]);
     fly(player_,body_,tuning_);
     for(size_t i=0;i<opponents_.size();++i) fly(opponents_[i].car,opponent_bodies_[i],opponents_[i].tuning);
     tyres(body_);for(Body& b:opponent_bodies_) tyres(b);
@@ -1030,6 +1126,17 @@ void RaceSession::update_gadgets() {
 }
 void RaceSession::bomb_step(RaceCar& car,Body& b) {
     const BombStep s=update_bomb(b.hit);
+    if(s.smoke) b.fx.hit_smoke(car.frame(),s.flip);
+    if(s.pool) b.hit.pool.car=car.frame();
+    if(s.tank_chunks) b.fx.tank_chunks(car.frame());
+    if(s.tank_axes || s.tank_position) {
+        // 0x47e2c8..0x47e60d: the car's frame (0x404def): its axes (0x405065,
+        // 0x401f64, 0x4024fa) while following, its position (0x4038f5).
+        const Matrix4 f=car.frame();
+        auto& m=b.hit.tank.frame;
+        if(s.tank_axes) for(size_t i=0;i<12;++i) m[i]=f[i];
+        for(size_t i=12;i<16;++i) m[i]=f[i];
+    }
     if(s.hold) {car.speed.speed=0;b.motion=-5;}
     if(s.boost) b.boost=20;
 }
@@ -1041,86 +1148,125 @@ void RaceSession::use_weapon(int icon,int car) {
         case 17: drop_mine(car,false,true);break; // WPU_OilSpill
         case 18: {                                 // WPU_BeeHive
             const RaceCar& d=car<0?player_:opponents_.at(size_t(car)).car;
-            mines_.push_back(drop_hive(d.position,d.yaw,car));mines_.back().section=d.section;
+            mines_.push_back(drop_hive(d.position,d.yaw,car));
+            const int k=slot_section(mines_.back().position);mines_.back().section=k>=0?k:d.section;
             break;
         }
         case 20: case 22: {
             // 0x4e23fc: the target is the query's car (0x403d69 from the user,
-            // flags 1; its range and angle are the action's +0x2c/+0x30, not
-            // identified: provisional 10000 and 60 degrees), else the user;
-            // the object starts ahead of it; the user is never stopped (+0x70).
-            const int t=find_target(c.position,c.yaw,c.section,1.0471976f,10000,car);
+            // flags 1; range and angle the action's +0x2c/+0x30, set by the use
+            // 0x4d2970 from the icon's WPowerUpSprite: 5000 and 60 degrees for
+            // both), else the user; the object starts ahead of it; the user is
+            // never stopped (+0x70).
+            const ItemAim& a=aims_[size_t(icon)];
+            const int t=find_target(c.position,c.yaw,c.section,a.angle,int(a.range),car);
             const RaceCar& base=t==-2?c:t<0?player_:opponents_[size_t(t)].car;
             barriers_.push_back(drop_barrier(base.position,base.yaw,car,icon==20));
-            barriers_.back().section=base.section;barriers_.back().stopped=1u<<unsigned(c.vehicle&31);
+            const int k=slot_section(barriers_.back().position);
+            barriers_.back().section=k>=0?k:base.section;barriers_.back().filed=k>=0;
+            barriers_.back().stopped=1u<<unsigned(c.vehicle&31);
             break;
         }
-        case 11: case 12: {
-            // Template: range 2000 (+0x3c), spd 200 (+0x44), angle 1.047 (+0x4c).
-            Vec3 from=c.position;
-            const int t=find_target(from,c.yaw,c.section,1.0471976f,2000+1000,car);
-            Strike s;s.owner=car;s.target=t;s.type=icon==11?0x100:0x200;
-            if(t!=-2) {
-                const Vec3& at=t<0?player_.position:opponents_[size_t(t)].car.position;
-                float d=0;for(size_t i=0;i<3;++i) d+=(at[i]-from[i])*(at[i]-from[i]);
-                s.wait=int(std::ceil(std::sqrt(d)/200));
-                strikes_.push_back(s);
-            }
-            w={0xb,s.wait+2,-1,icon}; // 0x4d9aa8: +0x389 = 0xb while the arm runs
+        case 11: {
+            // WPU_BootKicker (0x4d8830): +0x389 = 0xb while the arm runs; the
+            // target 0x403d69(user, frame, section, range + 1000, angle, 0, 0, 2).
+            Kick k;k.owner=car;k.backward=use_backward_;
+            const float yaw=use_backward_?wrap_angle(c.yaw+pi):c.yaw;
+            k.target=find_target(c.position,yaw,c.section,1.0471976f,2000+1000,car);
+            k.angle=k.backward?pi:0;
+            kicks_.push_back(k);
+            w={0xb,100000,-1,icon};
+            break;
+        }
+        case 12: {
+            // WPU_Flipper (0x4d9a20): +0x389 = 0xb while the arm runs; the
+            // target as the kicker's (range + 1000, 60 degrees).
+            Flip f;f.owner=car;f.backward=use_backward_;
+            const float yaw=use_backward_?wrap_angle(c.yaw+pi):c.yaw;
+            f.target=find_target(c.position,yaw,c.section,1.0471976f,2000+1000,car);
+            f.angle=f.backward?pi:0;
+            flips_.push_back(f);
+            w={0xb,100000,-1,icon};
             break;
         }
         case 19: drop_mine(car);break;
         case 23: drop_mine(car,true);break;
         // 0x4da500/0x4da5a0: +0x389 = 0x19 for 40 updates, firing at once.
-        case 25: w={0x19,40,-1,icon};fire(icon,car);break;
+        case 25: w={0x19,40,-1,icon};fire(icon,car,use_backward_);break;
         // 0x4dab40/0x4dac70: 0xe for 33 updates, firing when 28 are left.
         case 14: w={0xe,33,28,icon};break;
         // 0x4db980/0x4dba50: 0x10, firing on the first update, then 20.
-        case 16: w={0x10,21,-1,icon};fire(icon,car);break;
+        case 16: w={0x10,21,-1,icon};fire(icon,car,use_backward_);break;
         // 0x4dc110/0x4dc180: fires and ends at once.
-        case 15: fire(icon,car);break;
+        case 15: fire(icon,car,use_backward_);break;
         // 0x4db280: +0x389 = 0xd while it runs; one paint shot (provisional:
         // m_nWaitShot 5 and the shot count are not traced).
-        case 13: w={0xd,20,-1,icon};fire(icon,car);break;
+        case 13: w={0xd,20,-1,icon};fire(icon,car,use_backward_);break;
         case 21: {
             // 0x4e15f0: 400 above the car, along its forward axis at spd.
             Storm st;st.owner=car;st.position=c.position;st.position[1]+=storm_height;
             const Vec3 f=forward_of(c.yaw);
             for(size_t i=0;i<3;++i) st.velocity[i]=f[i]*storm_speed;
-            st.mask=1u<<unsigned(c.vehicle);
+            st.mask=1u<<unsigned(c.vehicle);st.backward=use_backward_;
+            // 0x4a6b30: the slot row holding it, else the thrower's (native).
+            {const int k=slot_section(st.position);st.section=k>=0?k:c.section;}
             storms_.push_back(st);
             break;
         }
         case 24: {
-            // 0x4dcac0: aimed at a car in view of the thrower (not itself).
-            const Vec3 f=forward_of(c.yaw);
+            // 0x4dcac0: aimed at a car in view of the thrower (not itself);
+            // with +0x5c the frame is turned by pi first (0x4dcaff).
+            const float yaw=use_backward_?wrap_angle(c.yaw+pi):c.yaw;
+            const Vec3 f=forward_of(yaw);
             Vec3 from=c.position;from[1]+=100;
-            const int t=find_target(from,c.yaw,c.section,tnt_angle,int(tnt_range),car);
+            const int t=find_target(from,yaw,c.section,tnt_angle,int(tnt_range),car);
             const Vec3* at=t==-2?nullptr:t<0?&player_.position:&opponents_[size_t(t)].car.position;
             tnts_.push_back(throw_tnt(c.position,f,car,at));
-            tnts_.back().section=c.section;
+            {const int k=slot_section(tnts_.back().position);tnts_.back().section=k>=0?k:c.section;}
             break;
         }
         default:
             item_events_.push_back("used weapon "+std::to_string(icon)+" (effect not ported)"+(car<0?"":" (robot "+std::to_string(car)+")"));
             return;
     }
-    item_events_.push_back("used weapon "+std::to_string(icon)+(car<0?"":" (robot "+std::to_string(car)+")"));
+    if(w.id>=0) w.backward=use_backward_;
+    item_events_.push_back("used weapon "+std::to_string(icon)+(use_backward_?" backward":"")+(car<0?"":" (robot "+std::to_string(car)+")"));
 }
-void RaceSession::fire(int icon,int owner) {
+void RaceSession::fire(int icon,int owner,bool backward) {
     Projectile p;
     if(!breath_weapon(icon,p)) return;
     const RaceCar& c=owner<0?player_:opponents_.at(size_t(owner)).car;
     // The clone takes the car's frame, moved 100 along its forward axis
-    // (0x43b140), and leaves along it at ABSspd (0x474e30).
-    const Vec3 f=forward_of(c.yaw);
+    // (0x43b140), and leaves along it at ABSspd (0x474e30). With the
+    // action's +0x5c the frame is first turned by pi about y (0x403279 with
+    // 0x40490fda: the missile 0x4da605, the tank gun 0x4dbbaa, the boomerang
+    // 0x4dc213; the breath's head frame 0x4dacea), so it leaves backward.
+    const float yaw=backward?wrap_angle(c.yaw+pi):c.yaw;
+    const Vec3 f=forward_of(yaw);
     for(size_t i=0;i<3;++i) {p.position[i]=c.position[i]+f[i]*100;p.velocity[i]=f[i]*p.p.speed;}
-    p.owner=owner;p.section=c.section;
+    // 0x4a6b30: registered in the first slot row whose box holds it (the
+    // same boxes as 0x4a6d20), whose section becomes its group; none: the
+    // tracker is not registered (native: the thrower's section).
+    p.owner=owner;
+    {const int k=slot_section(p.position);p.section=k>=0?k:c.section;}
     // The tank gun and the boomerang pick and aim at their target at once
     // (0x474c80, 0x474d50); the others look for one every update.
     if(icon==16 || icon==15) {
-        p.target=find_target(p.position,c.yaw,p.section,p.p.angle,int(p.p.range),p.owner);
+        p.target=find_target(p.position,yaw,p.section,p.p.angle,int(p.p.range),p.owner);
         if(p.target!=-2) aim_projectile(p,p.target<0?player_.position:opponents_[size_t(p.target)].car.position);
+    }
+    // 0x4dbc06..0x4dbc76: the tank gun turns the car's turret +0x3ab to the
+    // shot's heading less the (turned) frame's (0x496f90: wrapped into
+    // (-pi, pi]) when it has a target, else to pi (backward) or 0.
+    if(icon==16) {
+        Body& ob=owner<0?body_:opponent_bodies_.at(size_t(owner));
+        ob.turret=p.target!=-2?wrap_angle(std::atan2(-p.velocity[0],p.velocity[2])-yaw):backward?pi:0.f;
+    }
+    // 0x4ea7d0: every tail point starts at the clone, with its axes x 1.
+    {
+        RaceCar at;at.position=p.position;at.yaw=std::atan2(-p.velocity[0],p.velocity[2]);
+        const Matrix4 f=at.frame();
+        for(auto& t:p.tail) t={p.position,{{f[4],f[5],f[6]}},{{f[0],f[1],f[2]}},1};
     }
     projectiles_.push_back(p);
 }
@@ -1128,7 +1274,7 @@ void RaceSession::update_weapons() {
     const auto one=[&](Body& b,int car) {
         WeaponEffect& w=b.weapon;
         if(w.id>=0) {
-            if(--w.timer==w.fire_at) fire(w.icon,car);
+            if(--w.timer==w.fire_at) fire(w.icon,car,w.backward);
             if(w.timer<=0) w=WeaponEffect{};
         }
     };
@@ -1141,6 +1287,12 @@ void RaceSession::update_weapons() {
         // update, about the projectile's heading (its frame follows the
         // velocity, 0x475822). Its section is the route's under it.
         {
+            // The tail's points cross with it (provisional: the original's are
+            // world positions that 0x4a23c2 does not move).
+            if(const int k=carry_across_seam(p.position,p.section,{&p.velocity})) {
+                const Matrix4& m=k>0?track_.wrap():track_.unwrap();
+                for(auto& t:p.tail) {t.position=transform_point(m,t.position);t.up=rotate(m,t.up);t.side=rotate(m,t.side);}
+            }
             const RaceTrack::Route r=track_.route(p.position);
             if(r.hit) p.section=r.section;
             p.target=find_target(p.position,std::atan2(-p.velocity[0],p.velocity[2]),p.section,p.p.angle,int(p.p.range),p.owner);
@@ -1168,6 +1320,12 @@ void RaceSession::update_weapons() {
                 if(int(i)!=p.owner && !opponent_bodies_[i].hidden && spheres_touch(opponents_[i].car.position,p.position,car_sphere+p.radius)) p.struck=int(i);
         }
         p.travelled+=p.p.speed;
+        // WRocketTail runs after WBreath (the DragonBreath's action order).
+        {
+            RaceCar at;at.position=p.position;at.yaw=std::atan2(-p.velocity[0],p.velocity[2]);
+            const Matrix4 f=at.frame();
+            update_tail(p,{{f[4],f[5],f[6]}},{{f[0],f[1],f[2]}});
+        }
         // 0x475908: a brick the projectile touches takes the hit (slot +0x34:
         // WChiselCrossover, WRolling), and the projectile flies on.
         objects_.projectile_hit(p.position,p.radius);
@@ -1198,6 +1356,7 @@ void RaceSession::update_tnts() {
     for(Tnt& t:tnts_) {
         if(t.done) continue;
         if(--t.life<=0) {t.done=true;continue;}
+        carry_across_seam(t.position,t.section,{&t.velocity});
         // 0x4dced1: gravity, then sub-steps of speed / the sphere radius,
         // each testing the cars but the thrower's (0x4040e8).
         t.velocity[1]-=tnt_gravity;
@@ -1234,6 +1393,8 @@ void RaceSession::update_storms() {
     const auto car_at=[&](int id)->const RaceCar& {return id<0?player_:opponents_.at(size_t(id)).car;};
     for(Storm& st:storms_) {
         if(st.done) continue;
+        if(const int k=carry_across_seam(st.position,st.section,{&st.velocity}))
+            st.waypoint=transform_point(k>0?track_.wrap():track_.unwrap(),st.waypoint);
         switch(st.state) {
             case 0: {
                 // 0x4e1410: on a new route polygon, head for its first
@@ -1243,8 +1404,11 @@ void RaceSession::update_storms() {
                 if(r.hit && (r.polygon!=st.polygon || r.section!=st.section)) {
                     st.polygon=r.polygon;st.section=r.section;
                     const RouteNode node=track_.route_node(r.section,r.record,r.polygon);
-                    if(!node.forward.empty()) {
-                        st.waypoint=track_.route_point(r.section,node.forward.front().point);
+                    // 0x4e14e0: with the action's +0x5c the first backward
+                    // link (after the forward ones); none keeps the waypoint.
+                    const std::vector<RouteLink>& links=st.backward?node.backward:node.forward;
+                    if(!links.empty()) {
+                        st.waypoint=track_.route_point(r.section,links.front().point);
                         st.waypoint[1]+=storm_height;
                         Vec3 d{{st.waypoint[0]-st.position[0],st.waypoint[1]-st.position[1],st.waypoint[2]-st.position[2]}};
                         const float l=std::sqrt(dot(d,d));
@@ -1283,7 +1447,7 @@ void RaceSession::update_storms() {
                 if(--st.timer<1) {st.done=true;break;}
                 st.velocity[1]+=4;
                 for(size_t i=0;i<3;++i) st.position[i]+=st.velocity[i];
-                st.fade=float(st.timer)*0.025f;
+                st.angle=float(st.timer)*0.025f; // 0x4e196a
                 break;
         }
     }
@@ -1297,7 +1461,34 @@ void RaceSession::set_model_colours(int vehicle,const std::array<float,3>& lo,co
 void RaceSession::drop_mine(int car,bool detour,bool oil) {
     const RaceCar& c=car<0?player_:opponents_.at(size_t(car)).car;
     mines_.push_back(detour?drop_detour(c.position,c.yaw,car,false):oil?drop_oil(c.position,c.yaw,car):drop_landmine(c.position,c.yaw,car));
-    mines_.back().section=c.section;
+    // The detour's query range is its action's +0x2c (0x4e373a), the icon's
+    // WPowerUpSprite m_range set by the use 0x4d2970 (icon 23: 5000); the
+    // strict 150 test (0x4e37d0) follows.
+    if(detour) mines_.back().trap=aims_[23].range;
+    const int k=slot_section(mines_.back().position);
+    mines_.back().section=k>=0?k:c.section;
+}
+int RaceSession::slot_section(const Vec3& p) const {
+    // 0x4a6d20 (WPU_OilSpill, BeeHive, Landmine, FallingTree, BrickWall and
+    // Detour): the dropped object goes into the power-up table of the first
+    // enabled slot whose row has a brick (+0x58) and whose box (the row's
+    // +0x1c..+0x30, copied to the slot's +0x78 by 0x4a89c0) holds its x and z.
+    // The slots are each tracker's previous, current and next rows, player 1's
+    // first (0x49dc90 at the start, 0x4a0880 on a move back; 3 x 0x94 bytes
+    // per player from +0x830, six with two players). On a hit the group
+    // (+0x104) is that row's section (0x49c890).
+    // Not ported: none holding it, the original leaves the group 0xffff
+    // (always drawn); natively the callers keep the dropper's section.
+    const int n=int(track_.sections());
+    if(n<=0) return -1;
+    const auto look=[&](int s)->int {
+        if(s<0) s=0;
+        for(const int d:{-1,0,1}) {const int k=((s+d)%n+n)%n;if(track_.row_box_holds(k,p[0],p[2])) return k;}
+        return -1;
+    };
+    int k=look(player_.section);
+    if(k<0 && two_players()) k=look(opponents_[0].car.section);
+    return k;
 }
 void RaceSession::update_blasts() {
     for(Blast& b:blasts_) ++b.age;
@@ -1309,7 +1500,9 @@ void RaceSession::update_barriers() {
         if(--w.life<=0) {w.fade=w.scale_num;continue;}
         if(!w.landed) {
             const TrackSurface g=ground(w.position[0],w.position[2],w.position[1],w.position[1]-100);
-            if(g.hit) {w.position[1]=g.y;w.landed=true;if(g.section>=0) w.section=g.section;}
+            // Filed in a slot row (0x4a6d20), it keeps that group; otherwise
+            // the ground's section (native, provisional).
+            if(g.hit) {w.position[1]=g.y;w.landed=true;if(g.section>=0 && !w.filed) w.section=g.section;}
             else w.position[1]-=100;
             continue;
         }
@@ -1339,6 +1532,87 @@ void RaceSession::update_strikes() {
         s.wait=-1000;
     }
     strikes_.erase(std::remove_if(strikes_.begin(),strikes_.end(),[](const Strike& s){return s.wait<=-1000;}),strikes_.end());
+}
+void RaceSession::update_kicks() {
+    const auto car_at=[&](int id)->const RaceCar& {return id<0?player_:opponents_.at(size_t(id)).car;};
+    const auto body_at=[&](int id)->Body& {return id<0?body_:opponent_bodies_.at(size_t(id));};
+    const auto turned_y=[](float a) {Matrix4 r=identity_matrix();const float c=std::cos(a),s=std::sin(a);r[0]=c;r[2]=s;r[8]=-s;r[10]=c;return r;}; // 0x43c380
+    for(Kick& k:kicks_) {
+        if(k.done) continue;
+        const RaceCar& user=car_at(k.owner);
+        // 0x4d8710: the brick takes the car model's frame (+0x14), moved to
+        // the offset in it (0x43b880).
+        const Matrix4 model=initial_vehicle_model_frame(user.frame());
+        const Vec3 off=k.backward?Vec3{{0,20,-160}}:Vec3{{0,20,190}};
+        k.brick=model;
+        for(size_t r=0;r<3;++r) k.brick[12+r]=model[r]*off[0]+model[4+r]*off[1]+model[8+r]*off[2]+model[12+r];
+        const Vec3 from{{k.brick[12],k.brick[13],k.brick[14]}};
+        // 0x4d88fc: the GDHModel's local matrix is reset to the identity, then
+        // only turned (0x43c380 writes the axes).
+        const auto boot_frame=[&]{return multiply_matrix(k.brick,turned_y(k.angle));};
+        if(k.state==0) {
+            // 0x4d8b4b..0x4d8bf9: the aim is the target's yaw in the brick's
+            // frame (0x43bb00), within +-m_angle (1.047) of 0, or of pi
+            // backward; none: pi or 0.
+            float a=k.backward?pi:0;
+            if(k.target!=-2) {
+                const Vec3& t=car_at(k.target).position;
+                const Vec3 d{{t[0]-from[0],t[1]-from[1],t[2]-from[2]}};
+                const float lx=d[0]*k.brick[0]+d[1]*k.brick[1]+d[2]*k.brick[2];
+                const float lz=d[0]*k.brick[8]+d[1]*k.brick[9]+d[2]*k.brick[10];
+                a=std::atan2(-lx,lz);
+                const float lim=1.0471976f;
+                if(!k.backward) a=std::clamp(a,-lim,lim);
+                else if(a>0) a=std::max(a,pi-lim); else a=std::min(a,lim-pi);
+            }
+            k.angle=a;
+            // 0x4d8d84: the speed x 1.1 (0x516450); 0x4d8d9c: substeps of
+            // the sphere's radius (100), at least one.
+            k.vel[2]*=1.1f;
+            const int n=std::max(1,int(std::max(1.f,k.vel[2]/100.f)));
+            const Matrix4 g=boot_frame();
+            bool struck=false;
+            for(int i=0;i<n && !struck;++i) {
+                for(size_t j=0;j<3;++j) k.ext[j]+=k.vel[j]/float(n);
+                const Vec3 boot=transform_point(g,k.ext);
+                // 0x4040e8: the first other car whose sphere (100) touches
+                // the boot's (100).
+                const auto touches=[&](int id){return id!=k.owner && !(id>=0 && opponent_bodies_[size_t(id)].hidden) && spheres_touch(boot,car_at(id).position,car_sphere+100);};
+                int hit_car=-2;
+                if(touches(-1)) hit_car=-1;
+                for(size_t r=0;r<opponents_.size() && hit_car==-2;++r) if(touches(int(r))) hit_car=int(r);
+                if(hit_car==-2) continue;
+                struck=true;
+                // 0x4d8f04..0x4d8fa1: a +0x48b slot along the unit direction
+                // brick -> car x 80 (0x512a3c), 40 up, decay 0.8; then the
+                // hit type 0x100 if its bomba is idle (0x404edf) and voice 6.
+                const Vec3& t=car_at(hit_car).position;
+                Vec3 d{{t[0]-from[0],t[1]-from[1],t[2]-from[2]}};
+                const float l=std::sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2]);
+                if(l>0) for(float& v:d) v/=l;
+                body_at(hit_car).pushes.push_back({{{d[0]*80,40,d[2]*80}},0.8f});
+                if(hit(hit_car,0x100)) item_events_.push_back("boot kicker hit car "+std::to_string(hit_car));
+                voice_events_.push_back({user.vehicle,6});
+                // 0x4d9045..0x4d90d2: back to the hit, less 100.
+                k.ext={{0,0,l-100}};k.vel={{0,0,-100}};k.state=1;k.count=10;
+            }
+            // 0x4d90d5: past the range (2000) it holds there.
+            if(!struck && k.ext[2]>2000) {k.ext[2]=2000;k.vel={{0,0,-100}};k.state=1;k.count=10;}
+        } else if(k.state==1) {
+            // 0x4d8cc9: the bounce, x -0.8 (0x51644c) for 10 updates; then
+            // back at (0, 10, spd x -0.7) (0x516448).
+            for(size_t j=0;j<3;++j) k.ext[j]+=k.vel[j];
+            k.vel[2]*=-0.8f;
+            if(--k.count<=0) {k.state=2;k.vel={{0,10,-140}};}
+        } else {
+            // 0x4d8c18: home, x 1.1; past z < 0 the arm ends (+0x389 = -1).
+            for(size_t j=0;j<3;++j) k.ext[j]+=k.vel[j];
+            k.vel[2]*=1.1f;
+            if(k.ext[2]<0) {k.done=true;WeaponEffect& w=body_at(k.owner).weapon;if(w.icon==11) w=WeaponEffect{};continue;}
+            if(k.ext[1]>k.ext[2]) k.ext[1]=k.ext[2];
+        }
+    }
+    kicks_.erase(std::remove_if(kicks_.begin(),kicks_.end(),[](const Kick& k){return k.done;}),kicks_.end());
 }
 void RaceSession::slip(int car) {
     RaceCar& c=car<0?player_:opponents_.at(size_t(car)).car;
@@ -1483,7 +1757,34 @@ void RaceSession::solid_contacts(RaceCar& car,Body& b) {
     // A sphere primitive (0x482190): the normal runs from its centre to the
     // car. A WRolling's handler refuses a car (0x4c7745) but keeps its timer.
     if(!touched) for(const SolidSphere& s:objects_.solid_spheres()) {
+        if(s.cylinder) {
+            const TrackCylinder c{s.centre,s.radius,s.height};
+            if(!sphere_cylinder(car.position,car_sphere,c)) continue;
+            Vec3 n{{0,-1,0}};
+            if(car.position[1]>=c.base[1]) n={{0,1,0}};
+            if(car.position[1]>=c.base[1] && car.position[1]<=c.base[1]+c.height)
+                n=unit({{car.position[0]-c.base[0],0,car.position[2]-c.base[2]}});
+            contact(n);
+            break;
+        }
         if(!spheres_touch(car.position,s.centre,car_sphere+s.radius)) continue;
+        // 0x4c67d0: a WGoldenGate door opens, stops the car and pushes it by the
+        // normal x m_a8, 10 up (flags 1, decay m_b0); returning 1, no bounce.
+        if(s.golden>=0) {
+            const Vec3 n=unit({{car.position[0]-s.centre[0],car.position[1]-s.centre[1],car.position[2]-s.centre[2]}});
+            objects_.door_touched(s.golden,s.door,n);
+            const GoldenGate& g=objects_.golden_gates()[size_t(s.golden)];
+            car.speed.speed=0;
+            b.pushes.push_back({{{n[0]*g.force,10,n[2]*g.force}},g.decay});
+            break;
+        }
+        // 0x4ceba0: a WBumSteer gate opens, and squashes the car that hit it.
+        if(s.bump>=0) {
+            objects_.gate_touched(s.bump,s.gate);
+            int who=-1;
+            for(size_t i=0;i<opponents_.size();++i) if(&opponents_[i].car==&car) who=int(i);
+            hit(who,0x200);
+        }
         objects_.car_touched(s.rock);
         contact(unit({{car.position[0]-s.centre[0],car.position[1]-s.centre[1],car.position[2]-s.centre[2]}}));
         break;
@@ -1549,6 +1850,12 @@ void RaceSession::move(RaceCar& car,Body& b,const VehicleTuning& tuning,bool pla
     // Native safety, not in the original: a car thrown out of any course's
     // range returns to the road rather than failing the ground queries.
     for(const float c:car.position) if(!std::isfinite(c) || std::abs(c)>5e6f) {respawn(car,b,player);return;}
+    // The same for the speed: +0x8bf doubles each update of the boost counter
+    // where no contact rewrites it (0x466df6; in the air, surface 0), so a
+    // held car's speed can compound past any range (cc_t2, a robot struck by
+    // the storm: -5.9, -11.8 ... -188 an update) and its front probe, which
+    // stretches with the speed, past the ground query's integer range.
+    if(!std::isfinite(car.speed.speed) || std::abs(car.speed.speed)>1e4f) {respawn(car,b,player);return;}
     if(glide(car,b)) return;
     solid_contacts(car,b);
     b.last=car.position;b.has_last=true;
@@ -1580,6 +1887,14 @@ void RaceSession::move(RaceCar& car,Body& b,const VehicleTuning& tuning,bool pla
     // yaw, pushes and ground contact still run.
     if(b.motion<=0) ++b.motion;
     const float distance=b.motion>0?forward_step(car.speed.speed,time):0;
+    // 0x46b0d2..0x46b157: the wheel spin +0x2a4 moves by 0.05 (0x512a6c) x the
+    // step's length (the probe step accumulated at 0x46ac23), added when the
+    // speed copy [esp+0x44] is negative, else subtracted, wrapped at +-2 pi.
+    {
+        const float x=std::abs(distance)*0.05f;
+        if(car.speed.speed<0) {b.wheel_spin+=x;if(b.wheel_spin>6.283185f) b.wheel_spin-=6.283185f;}
+        else {b.wheel_spin-=x;if(b.wheel_spin<-6.283185f) b.wheel_spin+=6.283185f;}
+    }
     // 0x46ab98: the step runs along the rear-to-front probe axis, which
     // carries the car's pitch, so a ramp's lip launches it.
     Vec3 move=car_forward(car);
@@ -1732,6 +2047,28 @@ void RaceSession::cross_seam(RaceCar& car,Body& b,int step,bool player) {
     if(&car==&player_) cameras_[0].carry(m);
     else if(two_players() && &car==&opponents_[0].car) cameras_[1].carry(m);
 }
+int RaceSession::carry_across_seam(Vec3& at,int& section,std::initializer_list<Vec3*> along) const {
+    // The manager tracks a thrown or fired object (0x4a6b30: registered in
+    // the player's tracker slot whose box holds it) and steps its row when
+    // it passes the row's exit or entry WPortal (0x4a1a20). From the last
+    // row of the last section into section 0 its matrix is multiplied by
+    // the WMOD transform count + 3 (0x4a23c2, flag 0x100000), and back by
+    // count + 5 (0x4a25b5, 0x200000). Natively (provisional, as for the far
+    // robots): no route under it, but one through the transform.
+    const int last=int(track_.sections())-1;
+    if(last<=0 || (section!=0 && section!=last) || track_.route(at).hit) return 0;
+    for(const int k:{1,-1}) {
+        if(k>0?section!=last:section!=0) continue;
+        const Matrix4& m=k>0?track_.wrap():track_.unwrap();
+        const Vec3 moved=transform_point(m,at);
+        const RaceTrack::Route r=track_.route(moved);
+        if(!r.hit) continue;
+        at=moved;section=r.section;
+        for(Vec3* v:along) *v=rotate(m,*v);
+        return k;
+    }
+    return 0;
+}
 TrackSurface RaceSession::ground(float x,float z,float top,float bottom) const {
     TrackSurface s=track_.ground(x,z,top,bottom);
     last_log_={{-1,-1}};last_bridge_=-1;
@@ -1804,7 +2141,7 @@ void RaceSession::settle(RaceCar& car,Body& b,bool player) {
         // (0x46cf8a) the car sits at the hit + its normal x 3 (0x511894),
         // the normal becoming its up axis.
         Vec3 from{},to{};
-        for(size_t i=0;i<3;++i) {from[i]=car.position[i]+up[i]*1.3f*ray_above*2;to[i]=car.position[i]-up[i]*1.3f*ray_below;}
+        for(size_t i=0;i<3;++i) {from[i]=car.position[i]+up[i]*1.3f*ray_above*2;to[i]=car.position[i]-up[i]*1.3f*(b.hover?0.f:ray_below);}
         const TrackSurface g=ray(from,to);
         if(g.hit) {b.log_ride=last_log_[0];b.log=last_log_[1];b.bridge=last_bridge_;}
         if(g.hit) {
@@ -1831,7 +2168,7 @@ void RaceSession::settle(RaceCar& car,Body& b,bool player) {
             // 0x46c7f6: the up axis x 1.3 (0x512a40) serves these rays too, so
             // 104 above to 39 below (Wine, sh_t1: a car landing on the barrier
             // 39 above the ground has airtime 1 at once).
-            const TrackSurface g=ground(p[0],p[2],p[1]+1.3f*ray_above,p[1]-1.3f*ray_below);
+            const TrackSurface g=ground(p[0],p[2],p[1]+1.3f*ray_above,p[1]-1.3f*(b.hover?0.f:ray_below));
             if(g.hit) {
                 mask|=1<<i;hit[i]={{p[0],g.y,p[2]}};touched=g.flags;
                 if(g.flags&0x1000001) {b.glide=i+1;b.glide_dir=g.normal;++walls;}

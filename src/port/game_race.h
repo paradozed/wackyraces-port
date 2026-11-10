@@ -16,6 +16,10 @@ struct RaceTemplates {
     std::array<uint32_t,2> camera_ids{},follow_action_ids{};
 };
 RaceTemplates load_race_templates(const Node& general_root);
+// The first 27 WPowerUpSprites in tree order (the icons 0..26): m_range
+// (0x284) and m_visangle (0x285); missing ones keep fallback.
+struct SpriteAim {float range=0,angle=0;};
+std::array<SpriteAim,27> load_sprite_aims(const Node& general_root,const std::array<SpriteAim,27>& fallback);
 
 // 0x430e40/0x430f60. State is shared by successive roster initializations.
 uint32_t race_random(uint32_t& state);

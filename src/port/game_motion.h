@@ -48,6 +48,15 @@ public:
     void stop_at_end() {flags_|=2;}
     void freeze_at_end() {flags_|=8;}
     bool active() const {return (flags_&1)!=0;}
+    // Flag 4: frozen on the last values (command 2 reached the clip's end).
+    bool frozen() const {return (flags_&4)!=0;}
+    // Flag 1 set or cleared directly, as FlyPower's vehicle 6 does
+    // (0x4d57a3, 0x4d5818: [GDHModel +0x166][1] +0x28).
+    void set_active(bool on) {flags_=on?flags_|1:flags_&~1u;}
+    // 0x440290 command 3: flag 4 toggled (frozen on the current values).
+    void toggle_freeze() {flags_^=4;}
+    // The controller's time (+0x2c), as WPU_Flipper writes it (0x4d9bff, 0x4da02e).
+    void set_time(int32_t t) {time_=t;}
     // Advance by dt and accumulate into pairs (9 per segment); pairs may be
     // null, as for the zero step that play makes.
     void update(int32_t dt,MotionPairs* pairs);
@@ -63,10 +72,48 @@ private:
     std::vector<Channel> channels_;
 };
 
+// Controller 0 (0x440e30; built by 0x440be0, filters 0x440d40): a GDHModel's
+// procedural sway. Each step differentiates the model's world position twice,
+// turns the acceleration a into model space (0x43ba80: the dot products with
+// the frame's axes), and filters seven inputs (0x440b40, coefficients
+// 0x440ab0(gain, alpha, omega)):
+//   translation -a (clamped to +-15), gains (0.1, 0.8, 0.1);
+//   rotation (0, 1, 0.2) x a (0x452ed0, clamped to +-15), gains GDHModel
+//   +0x17e (0.25, 0.25, 0.5 from the constructor 0x437720; a car's body
+//   gets body_sway_gains);
+//   y scale -0.01 a.y (clamped to +-20), gain 0.1.
+// The nine values (t, r, (0, s, 0)) go into every segment's pairs as the clip
+// controllers do: the largest positive in a, the smallest non-positive in b,
+// locked slots (a = -1) left alone.
+// 0x469f87..0x46a126 (the car init 0x469bf0, by vehicle, before the body's
+// vtable +0x4c builds its controllers): the body GDHModel's +0x17e.
+std::array<float,3> body_sway_gains(int vehicle);
+class SwayController {
+public:
+    explicit SwayController(const std::array<float,3>& rotation_gain={{0.25f,0.25f,0.5f}});
+    // world: the GDHModel's world matrix (column-major, axes in columns 0..2).
+    void update(const std::array<float,16>& world,MotionPairs& pairs);
+    // The last step's nine values (translation, rotation in degrees, scale - 1).
+    const std::array<float,9>& values() const {return values_;}
+private:
+    struct Biquad {
+        float c0=0,c1=0,b0=0,b1=0,b2=0,s0=0,s1=0;
+        Biquad()=default;
+        Biquad(float gain,float alpha,float omega);
+        float step(float x);
+    };
+    std::array<Biquad,7> filters_;
+    std::array<float,3> position_{},velocity_{};
+    std::array<float,9> values_{};
+    bool started_=false;
+};
+
 // 0x440650: rebuilds each segment matrix (identity, scale 1 + v, then X, Y
 // and Z rotations, translation = SEGS translation + v, then times the
 // parent's) and transforms each vertex's rest position by its segment.
 // pairs.size() must be 9 x mesh.segments.size().
-void pose_mesh(Mesh& mesh,const MotionPairs& pairs);
+// segments, when given: each segment's posed matrix (row-vector basis, nine
+// floats, then the translation), as the GDHModel keeps them (+0x15e -> +0xc).
+void pose_mesh(Mesh& mesh,const MotionPairs& pairs,std::vector<std::array<float,12>>* segments=nullptr);
 }
 #endif
