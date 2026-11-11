@@ -316,7 +316,7 @@ Action vtables share `+4` = `0x41b3f0`, `+0xc` = `0x4115b0`, `+0x18` = `0x41b5e0
 | 15 | `WPU_Boomerang` | `0x5166a0` | `0x4dc180` (97) | `0x4dc110` (35) | |
 | 16 | `WPU_TankGun` | `0x516634` | `0x4dba50` (204) | `0x4db980` (51) | clones `DragonBreath` `0x3a8` |
 | 17 | `WPU_OilSpill` | `0x516778` | `0x4ddcf0` (355) | `0x4ddb90` (89) | |
-| 18 | `WPU_BeeHive` | `0x5167e4` | `0x4de9b0` (448) | `0x4de850` (90) | plus `WBeeHive` (`0x475040`, 680) |
+| 18 | `WPU_BeeHive` | `0x5167e4` | `0x4de9b0` (448) | `0x4de850` (90) | plus `WBeeHive` (vtable `0x512bac`; `0x475040` was a misreading: it is WBreath's update) |
 | 20 | `WPU_FallingTree` | `0x516928` | `0x4e09e0` (424) | `0x4e0710` (184) | held preview |
 | 21 | `WPU_Storm` | (other layout) | `0x4e1890` | | type `0x400` |
 | 22 | `WPU_BrickWall` | `0x516a0c` | `0x4e2650` (429) | `0x4e2380` (184) | held preview |
@@ -537,8 +537,10 @@ So icon i is `WFirstPowerUp`'s (i+1)th following sibling in `GDWorld`: the order
 
 **Native.**
 - `Barrier`, `drop_barrier` and `RaceSession::update_barriers`; `RaceView` draws each template's model.
-- The query range and angle at placement are provisional (10000, 60°).
-- The fall animation and the camera shake are not ported.
+- The query range and angle at placement are the icons' WPowerUpSprite `m_range`/`m_visangle` (5000,
+  60°) since 2026-11-08 (the actions' `+0x2c`/`+0x30`, written by the use `0x4d2970`).
+- The camera shake is ported since 2026-11-09 (below). There is no fall animation beyond the drop of
+  m_rGravity an update (already ported).
 - `native_drive_test` (practice): the wall lands 2000 ahead of the user, and the user drives through without being stopped.
 - Not compared with Wine.
 
@@ -550,7 +552,7 @@ So icon i is `WFirstPowerUp`'s (i+1)th following sibling in `GDWorld`: the order
 - The fall, lock and arming are the mine's.
 - **Armed** (`0x4dec73`): `0x403d69(no owner, range m_rTrapRange, 2π, flags 1)` takes any car. Then:
   - the hive leaves the object list (`0x404fe8`) and is hidden;
-  - its sound plays and the sibling (the bees, WBeeHive `0x475040`) is activated;
+  - its sound plays and the sibling (the bees, WBeeHive, see "The bees" below) is activated;
   - state 3 starts with `+0x3c` = m_nTrapTime;
   - voice event 5 goes to the car.
 - **State 3** (`0x4ded9e`): the bees follow the car.
@@ -887,4 +889,211 @@ query: the port's sphere test, 100 + 100; the bomba `+0x86` and `[car +0x369]` t
 reach 90, home after 12 updates" (the robot ahead is within the first step). Capture (`cc_t1`,
 vehicle 0, `WPC_WEAPON=11`): the scissor arm stretches out ahead with the boot at its end, holds,
 and folds back.
+
+## The Flipper's arm (2026-11-09)
+
+Static reading of the init `0x4d9a20`, the update `0x4d9c90` and the placement `0x4d9890`; a
+`native_drive_test` check and a native capture; no Wine comparison.
+
+- **Template:** brick `0x32f` (m_range 2000, m_spd 200, m_angle 1.047), its GDHModel `0x337` (GHMS
+  `0x102f3`, MTNL `0x10359`: clip 0 of 190, clip 1 of 30 looping) and GDSound `0x35a`.
+- **Init:** the offsets `0x2ab11e8` = (0, 20, 100) and (0, 20, −100); `+0x389` = `0xb`; the
+  GDHModel's local matrix reset and its controllers built (vtable `+0x4c`); the brick on the car
+  model's frame; the target `+0x74` as the kicker's; the reach vector `+0x68` = 0; the state `+0x78`
+  = 1; the type `+0x64` = 0x200; `+0x7c` = `+0x80` = 0; clip 0 played (`0x440970(0, 0, 1, −1)`) and
+  its controller's time `+0x2c` set to 11 (`0x4d9bff`).
+- **Each update:** the aim a (raw and within ±m_angle of 0, or of π backward, as the kicker's); d =
+  |the target in the brick's frame| − 350 (`0x5129b0`), or m_range − 350 without a target, 1 when
+  negative; `+0x80` = reach × 3 (`0x511894`) / d.
+- **State 1:** the controller's time = 51 (`0x4da02e`), frozen by command 3 (`0x440290`: flag 4
+  toggled) if it is not; `+0x7c` = a; the reach += spd × 1.7 (`0x512dcc`); at d it holds d, command 3
+  again (the clip runs on), state 2, the sound.
+- **State 2:** `+0x7c` = a; the reach = d while m_range > d; the hit once (`+0x3c`) when the time ≥ 40,
+  a target, the reach ≥ d and a equal to the raw aim (the target within the angle): the type if its
+  bomba is idle, voice 6 to the user's vehicle and 5 to the target's; when the controller goes
+  inactive (the clip's end), state 3.
+- **State 3:** the reach −= spd; at 0 the action ends (`+0x389` = −1).
+- **Placement** (`0x4d9890`): the brick at the offset in the car model's frame; the GDHModel's axes
+  turned about y by `+0x7c`; segment 1's translation locked at the reach vector (0, 0, reach)
+  (`0x4381a0`); segment 2's scale at min(1, `+0x80`), segment 4's at `+0x80` (`0x437f70`).
+- `0x4d96d0` (thunk `0x404764`, after states 1 and 2) casts a ray (`0x402199`, mask `0x1e000ff`)
+  from the brick to the arm's end; a hit sets state 3 and scales the reach vector by the hit fraction.
+  Ported (2026-11-09) with `RaceTrack::contact` (the same mask, any slope); the fraction is read from
+  the result's `+0x44` (provisional). dt_t1's check then reads "arm home after 15 updates" (16
+  before); no case was built that sends the arm into a wall.
+
+Native: `RaceSession::Flip`/`update_flips` replace the timed strike for the flipper (the clip's time
+steps 10 a race update, provisional, and its end is the clip's 190); `RaceView::submit_flips` drives
+the GDHModel's controller (`MotionController::set_time`, `toggle_freeze`) and the locks.
+`native_drive_test` (dt_t1, vehicle 3 at the back of the grid): "flipper struck at update 1, arm
+home after 16 updates"; with the hit disabled the check fails. Capture (`cc_t1`, vehicle 1,
+`WPC_WEAPON=12`): a telescopic pole with a mallet head reaches far ahead, holds, and draws back.
+
+## The Paintball and WPaintShot (2026-11-09)
+
+Static reading; a `native_drive_test` check and a native capture; no Wine comparison.
+
+- **WPU_Paintball** (template brick `0x35b`: m_idClonable `0x396` at `+0x3c`, m_nWaitShot 5 at
+  `+0x44`; its first child is a GDSound, hidden at the init):
+  - init `0x4db280`: `+0x389` = `0xd`; the brick added to the scene; the user's body plays clip 2
+    (`0x440970(2, 0, 1, −1)`); `+0x3c` = 0, state `+0x34` = 1;
+  - update `0x4db320`, each update the brick takes the car model's frame; state 1 counts `+0x3c`
+    down (from 0: at once) to state 2 with m_nWaitShot × 6 = 30; state 2 counts down, and at 0
+    sets 20 and state `0xffff`; on each multiple of m_nWaitShot (25, 20, 15, 10, 5) it clones
+    `0x396` at the first child's frame, its z axis moved by rand(100) × 0.0004 − 0.02 (`0x516608`,
+    `0x516604`, `0x430f60`) in x and in y, then 100 along it (`0x43b140`); the shot's action gets
+    `+0x24` = the user and its init; state `0xffff` ends it (`+0x389` = −1, command 2 on the body's
+    clip 2).
+- **WPaintShot** (registration `0x498a90`, string `0x52ccf8`, factory `0x498ae0`, vtable
+  `0x514890`; GDModel `0x396`, GMDL `0x102e5`, sphere 50): members m_idPaintFx 0 (`+0x24`),
+  m_idExplosion `0x3af` (`+0x2c`), m_nFrameLifeTime 180 (`+0x34`), m_nUnlockCount 10 (`+0x3c`),
+  m_rSpeed 350 (`+0x44`), m_nSpherePhaseNum 3 (`+0x4c`), m_nTrapTime 120 (`+0x54`),
+  m_aMaxSteerMod 0.5236 (`+0x5c`), m_rTargetSpeed 0.3 (`+0x64`); the last two have no reader in the
+  update.
+  - init `0x4990f0`: a tracker slot (`0x402117`, none: the shot ends); life `+0x28` = 180;
+    `+0x38` = 1 / 3; the velocity `+0x2c` = the frame's z axis × m_rSpeed; state `+0x40` = 0.
+  - update `0x4991c0`, state 0: the life counts down (at 0, state 10); the next point is the
+    position + the velocity; while the life is at least m_nUnlockCount the sphere takes 3 phases of
+    velocity / 3 from the position, querying the cars (`0x4040e8`); a car but the owner, with
+    `[car +0xc]` bit 2, gets type 4 if its bomba is idle, `+0x3a7` = `0xd` (and, for a human's
+    car, the HUD paint), and the shot's flag 1 (it also sets state 1 with m_nTrapTime, overwritten
+    by state 10 below). Without a car, a ray to the next point (mask `0x1e000ff`) stops it at the
+    hit; without a wall, the solid objects (`0x402b26`, 0x10000) give flag 2. It moves to the next
+    point; with a flag, state 10, hidden, and m_idExplosion cloned at its frame.
+  - state 10: the tracker removed; the action ends once its sound is done; the car's `+0x3a7` = −1.
+- **`0x3af`:** a GD3dSprite (GMAT `0x10159`) with WExplosion m_Size 200, (11, 7, 208).
+
+Native: `RaceSession::PaintGun`/`PaintShot`/`update_paint` (the scatter from the session's random
+stream, provisional), `Blast` with its size and colour (`paint` for `0x3af`'s sprite);
+`RaceView` draws the shots and plays the body's clip 2. The objects' query is a touch of
+`CourseObjects::solid_spheres` (the shot's sphere 50; the objects' handler `+0x34` taken as a hit,
+provisional; 2026-11-09): `native_drive_test` sends a shot at each course's first solid sphere from
+its radius + 140 ("cc_t4: r 580, burst at update 0", "dr_t2: r 250, burst at update 1", "sh_t4: r 60,
+burst at update 2"); with the query disabled it fails. The brick-flag velocity change
+(`0x4991ef..0x499243`) is the loop seam: with the frame's flag 0x100000 or 0x200000 (the seam
+crossing marks of `0x4a23c2`/`0x4a25b5`), the velocity is turned (`0x43b980`, a 3 × 3 product) by
+the matrix of the table `[0x5472b8] +0x18` (index `+0x1c` + 3 or + 5, wrapped at `+0x40`); ported as
+`carry_across_seam` with the velocity, as the other projectiles. `native_drive_test` sends a shot
+along the last section's exit on every course ("cc_t1: across the seam 1, 34 updates after"; on
+dr_t3 it bursts on the grid past the seam, counted as across); without the call it fails on cc_t1.
+Not ported: the HUD paint. `native_drive_test` (dt_t1, vehicle 3
+at the back of the grid): "paintball fired 5+ shots, painted 1, blue blast 1, gun ended at update
+31"; with the shots disabled it fails. Capture (`cc_t1`, vehicle 2, `WPC_WEAPON=13`): a line of
+small blue paint balls leaves the biplane.
+
+### The paint on the hit player's screen (2026-11-09)
+
+- WPaintShot's hit on a human's car (`0x499585..0x499609`) walks the list `[[0x5472b8] +0xc] +0x94`
+  for an object of class `0x402559` → `0x4aab50` = record `0x6f5900`, **WPaintFx** (string
+  `0x52d250`, factory `0x4aa8a0`, vtable `0x514c14`: init `0x4aac30`, draw `0x4aae40`); found, it
+  sets its `+0x24` (1 for the second player in two-player mode, else 0) and, when the car's bomba
+  `+0x86` is 1, calls its init.
+- No WPaintFx exists at run time: its factory's thunk `0x402252` has no caller, and no node or action
+  of the class is in general.wgm, swgeneral.wgm or the courses (its name is only in their member
+  tables). So the walk finds nothing, and the shipped game shows no paint on screen.
+- The car's `+0x3a7` (set to `0xd` by the hit, to −1 at the shot's end and the car init `0x469c51`)
+  has no reader.
+- Nothing to port. Not checked under Wine.
+
+## The FireSiren's light (2026-11-09)
+
+Static reading of the init `0x4dff20`, the per-viewport placement `0x4e00a0` and the update
+`0x4e0130`; a native capture; no Wine comparison.
+
+- **Template:** brick `0x311` (m_nLifeTime 150, m_rTargetSpeed 0.2, m_rSpeedMod 0.9), children
+  GDSound `0x322` (played at the init) and GDSprite `0x12e`: GMAT `0x10222`, m_CenterX/Y 16, white,
+  render setting `0x180042`. A GDSprite is a screen sprite: `+0x12a`/`+0x132` are m_PosX/m_PosY.
+- **Init:** the sprite's local frame at the origin; its position (273, 128) for a robot's car
+  (`[template +0xc0]` = 1), else (160, 74), or (160, 32) in two-player mode; `+0x3c` = 1.
+- **Each viewport** (`0x4e00a0`, by the viewport index `[[[0x5472b8] +0x1838] +0xbc] +0x13a`): (160,
+  30) when the siren's car is that viewport's player's (`[0x6f2d00] +0x38`, `+0x3c`), else (276, 110).
+- **Each update:** the brick takes the car's frame; the life `+0x38` counts down; each time it is a
+  multiple of 5 the brick toggles: shown again (`+0xc` &= ~0x100, `+0x3c` = 1) when `+0x3c` > 1,
+  else hidden (`+0x3c` = 2). So it starts shown and flips every 5 updates.
+
+Native: `RaceView::siren_lights` draws the GDSprite in each view's HUD for every car whose siren
+runs (`RaceSession::siren_life`), at 2 (x, y) − its centre in the 640 × 480 frame, by the toggle
+count. Capture (`cc_t1`, `WPC_GADGET=9`): a red siren light at the top centre of the HUD, flashing.
+Not compared with Wine; another car's light at (276, 110) was not captured.
+
+## The bees (WBeeHive, 2026-11-09)
+
+Static reading; a native capture; no Wine comparison.
+
+- **The class:** registration `0x474130` (string `0x52b0d8`), record `0x6f1b38`, factory `0x474180`,
+  vtable `0x512bac`: init (slot 4) `0x474580`, update (slot 2) `0x474600`, draw (slot 3)
+  `0x474650`. It is an action on the hive brick `0x36c` (WPU_BeeHive's template): m_BeeNum 32
+  (`+0x24`), m_Radius 150 (`+0x2c`), m_Speed 60 (`+0x34`).
+- **Init:** `+0x24` = 260 (a draw budget); for each bee (`+0x5c` = m_BeeNum, 16 bytes from
+  `+0x60`) two phases rand() & 0xfff and two steps m_Speed.
+- **Update:** each phase += its step, & 0xfff.
+- **Draw** (`0x474650`, a frame argument): while inactive (`+0x20` = 0) it only keeps the frame
+  (`+0x28`); active, it takes the frame ticks `0x5299b4` (the timer step, clamped to 2..4,
+  `0x4ad58b`) from `+0x24` and draws while that stays non-negative. Renderer 1 (`0x474850`): per
+  bee, with the phases a, b used as radians (fild, then fsin/fcos), the centre p = R (sin a cos b,
+  −sin b, cos a cos b), and two triangles: (p, p + (5, 5, 0), p + (5, −5, 0)) with the corners in
+  (13, 0, 0, 173), and (p, p + (−5, 5, 0), p + (−5, −5, 0)) in (255, 255, 0, 173), the centre in
+  (0, 0, 1, 255) (`0x512bf0` = 5); `0x404269(8, …, 2 × m_BeeNum)` in the kept frame. Renderer 0
+  (`0x4746bf`) plots single pixels in a buffer instead.
+
+Native: `RaceView::submit_bees` keeps the phases by trapped car, steps them by race update and
+draws the triangles in the trapped car's frame (provisional: the hive clone follows the car, its own
+frame is not traced) while the hive's state 3 runs (the 260-tick budget is not ported), with the
+WFire draw's state (mode 8: culled, no depth write). Capture (`cc_t1`, vehicle 3, `WPC_WEAPON=18`,
+dropped while standing): small yellow-and-dark triangles swarm about the car once the hive springs.
+
+## The wall's and the tree's camera shake (2026-11-09)
+
+- **Landing** (`0x4e286f` wall, `0x4e0bf0` tree): the counter `+0x68` = 30, and the landing sound.
+- **Each later update** (`0x4e2b2b..0x4e2b7f`; the tree's `0x4e0eb8..0x4e0eff`): the graphics object
+  (`[0x5472b8] +0x1838`) copies its `+0xb4` into `+0xb8`, and that object's `+0x20` and `+0x24` are
+  set to `rand() % 5` each (`0x430f80`) while `+0x68` (counted down) was positive, else 0; past the
+  life (`+0x38`), 0 as well.
+- **Reading:** `+0xb4` is taken to be the active viewport and `+0x20`/`+0x24` its origin in x and y
+  (provisional: their reader in the renderer is not traced).
+- **Native:** `Barrier::shake`, `RaceSession::camera_shake` (the session's MSVC `rand()` stream, as
+  the original's shared one), and `RaceView::draw_view` moving the projection by that many 640 × 480
+  pixels in x and y. `native_drive_test` (dt_t1, practice): "brick wall landed at update 9, viewport
+  shaken 29 updates, last at 39"; with the counter left at 0 it fails. No capture (a 0..4 pixel shake
+  does not show on stills); not compared with Wine.
+
+## DragonBreath's rotangle (2026-11-09)
+
+- DragonBreath's update `0x4762c0` first adds its template's `rotangle` (member `0x138`, `+0x90`) to
+  the angle `+0x14a` of its first visual child (`+0x126`; for a film, the turn of its corners about
+  the view axis, see "the film" in `analysis/hit-smoke-20261107.md`).
+- general.wgm: 0.0872665 (5°) for the breath `0x39a` (its GD3DFilm `0x39d`), 0 for the missile
+  `0x38c`, the boomerang `0x3a1` and the tank shell `0x3a8`. So the boomerang's model (GDModel
+  `0x3a4`, already drawn) does not spin.
+- Native: `Projectile::rotangle`/`spin`, added each update, and the breath's film drawn at that
+  angle. A synthetic check in `native_drive_test` reads the values; no capture of the turning film.
+
+## WExplosion (2026-11-09)
+
+Static reading; a `native_drive_test` check; no capture, no Wine comparison.
+
+- **The class:** registration `0x47fa10` (string `0x52b470`), factory `0x47fa60`, vtable
+  `0x513050`: init `0x4803c0`, update `0x480580`, draw `0x4806f0`. Members (template): m_Resolution
+  `+0x24`, m_GrowTime `+0x2c`, m_FadeOutTime `+0x34`, m_Size `+0x3c`, m_FinalSize `+0x44`,
+  m_Red/m_Green/m_Blue `+0x4c/+0x54/+0x5c`, m_isRing `+0x94`; `0x3ac`: 10, 2, 20, 500, 0,
+  (255, 64, 0), 0; `0x3af`: the same with 200 and (11, 7, 208).
+- **Init:** the record `+0x3c` = (m_Red, m_Green, m_Blue, 255), radius word `+0x40` = 0, segments
+  `+0x42` = m_Resolution, then three ring records (`+0x43`, `+0x51`, `+0x5f`) used only with
+  m_isRing; the step `+0x28` = m_Size / m_GrowTime; the state `+0x24` = 0; an object-list slot
+  (`0x4050f1`) and its GDSound.
+- **Update** (`0x480580`, table `0x480690`): state 0 adds the step to the radius until the counter
+  passes m_GrowTime (three updates: 250, 500, 750 for `0x3ac`); state 1 sets the step to (m_Size −
+  m_FinalSize) / m_FadeOutTime; state 2 takes it off the radius and sets the alpha `+0x3f` = ftol(255
+  × (m_FadeOutTime − counter) / m_FadeOutTime) until the counter passes m_FadeOutTime (21 updates);
+  state 3 waits for the sound, leaves the object list and ends.
+- **Draw** (`0x4806f0`): while its tick budget `+0x70` (150, less `0x5299b4` a draw) lasts, the
+  disc of the record `+0x3c` through `0x4b44e0` (renderer 1; the rocket glow's routine: a fan of the
+  segments facing the camera, the centre in the record's colour, the rim transparent) at the object's
+  position moved a fifth of the way to the camera (`0x510ef0` = 0.2); with m_isRing, the three rings
+  (`0x40402a`, `0x405088`). Its GD3dSprite node carries flag 0x100, so the textured sprite is not
+  drawn.
+- **Native:** `RaceSession::Blast` runs the states (`update_blasts`), `RaceView::effects` draws the
+  fan (no depth write, both faces); the earlier textured quad of the sprite (provisional since
+  2026-11-01) is gone. Not ported: the rings, the tick budget. `native_drive_test` (dt_t1): "TNT
+  explosion radius up to 750, 25 updates more, last alpha 0".
 

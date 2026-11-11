@@ -450,7 +450,8 @@ Every WackyAuto runs WCarFx.
 
 **Native.**
 - `RaceSession::snowing()` reflects the course choice.
-- `RaceView::weather` draws after the scene, before the HUD: rain as about-1-pixel strips, snow as discs on a native 16 × 16 texture.
+- `RaceView::weather` draws after the scene, before the HUD: rain as about-1-pixel strips, snow as plain white squares (since 2026-11-09; before, discs on a native 16 × 16 texture).
+- **The flake texture (2026-11-09).** `0x4b6840` reads renderer `+0x23969`; no instruction writes that field (renderer 1 is the zeroed global `0x26fae78`; the nearby queue at `+0x2396d` is a separate array), so it stays null and `0x4b6888` calls SetTexture(0, NULL), then FOGENABLE 0 (`0x1c`), ALPHABLENDENABLE 1 (`0x1b`), SRCBLEND 5, DESTBLEND 6. The FVF `0x102` (XYZ, TEX1) has no diffuse colour, so each flake is a white square. A native capture (`ct_t1`, `WPC_WEATHER=1`) shows small white squares falling. Not compared with Wine.
 - It steps once per race update, with its own MSVC generator.
 - `WPC_WEATHER=0/1/2` forces METEO.
 - Xvfb captures show the slanted grey streaks on cc_t1 and small flakes on ct_t1.

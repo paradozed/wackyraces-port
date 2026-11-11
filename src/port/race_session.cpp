@@ -711,6 +711,8 @@ void RaceSession::step(const DriveInput& raw) {
     update_storms();
     update_strikes();
     update_kicks();
+    update_flips();
+    update_paint();
     update_barriers();
     update_mines();
     update_blasts();
@@ -1199,9 +1201,8 @@ void RaceSession::use_weapon(int icon,int car) {
         case 16: w={0x10,21,-1,icon};fire(icon,car,use_backward_);break;
         // 0x4dc110/0x4dc180: fires and ends at once.
         case 15: fire(icon,car,use_backward_);break;
-        // 0x4db280: +0x389 = 0xd while it runs; one paint shot (provisional:
-        // m_nWaitShot 5 and the shot count are not traced).
-        case 13: w={0xd,20,-1,icon};fire(icon,car,use_backward_);break;
+        // 0x4db280: +0x389 = 0xd while the gun runs (update_paint).
+        case 13: w={0xd,100000,-1,icon};paint_guns_.push_back({car});break;
         case 21: {
             // 0x4e15f0: 400 above the car, along its forward axis at spd.
             Storm st;st.owner=car;st.position=c.position;st.position[1]+=storm_height;
@@ -1320,6 +1321,7 @@ void RaceSession::update_weapons() {
                 if(int(i)!=p.owner && !opponent_bodies_[i].hidden && spheres_touch(opponents_[i].car.position,p.position,car_sphere+p.radius)) p.struck=int(i);
         }
         p.travelled+=p.p.speed;
+        p.spin+=p.rotangle;   // 0x4762d4: DragonBreath's own update
         // WRocketTail runs after WBreath (the DragonBreath's action order).
         {
             RaceCar at;at.position=p.position;at.yaw=std::atan2(-p.velocity[0],p.velocity[2]);
@@ -1491,18 +1493,34 @@ int RaceSession::slot_section(const Vec3& p) const {
     return k;
 }
 void RaceSession::update_blasts() {
-    for(Blast& b:blasts_) ++b.age;
-    blasts_.erase(std::remove_if(blasts_.begin(),blasts_.end(),[](const Blast& b){return b.age>22;}),blasts_.end());
+    // WExplosion's update (0x480580, table 0x480690): state 0 adds the step
+    // (m_Size / m_GrowTime, the init's +0x28) to the radius until the counter
+    // passes m_GrowTime; state 1 takes the step (m_Size - m_FinalSize) /
+    // m_FadeOutTime; state 2 takes it off and sets the alpha 255 x
+    // (m_FadeOutTime - counter) / m_FadeOutTime until the counter passes
+    // m_FadeOutTime; state 3 ends it (once its sound is done).
+    const int grow=2,fade=20;
+    for(Blast& b:blasts_) {
+        ++b.age;
+        if(b.age==1) b.step=int(b.size)/grow;   // 0x4804d0
+        switch(b.state) {
+            case 0: b.radius+=b.step;if(++b.count>grow) {b.count=0;b.state=1;} break;
+            case 1: b.step=int(b.size)/fade;b.state=2;break;
+            case 2: b.radius-=b.step;b.alpha=int(float((fade-b.count)*255)/float(fade));if(++b.count>fade) b.state=3;break;
+            default: b.done=true;break;
+        }
+    }
+    blasts_.erase(std::remove_if(blasts_.begin(),blasts_.end(),[](const Blast& b){return b.done;}),blasts_.end());
 }
 void RaceSession::update_barriers() {
     for(Barrier& w:barriers_) {
         if(w.fade>0) {if(--w.fade<=0) w.done=true;continue;}
-        if(--w.life<=0) {w.fade=w.scale_num;continue;}
+        if(--w.life<=0) {w.fade=w.scale_num;if(w.landed) shake_={{0,0}};continue;}
         if(!w.landed) {
             const TrackSurface g=ground(w.position[0],w.position[2],w.position[1],w.position[1]-100);
             // Filed in a slot row (0x4a6d20), it keeps that group; otherwise
             // the ground's section (native, provisional).
-            if(g.hit) {w.position[1]=g.y;w.landed=true;if(g.section>=0 && !w.filed) w.section=g.section;}
+            if(g.hit) {w.position[1]=g.y;w.landed=true;w.shake=30;if(g.section>=0 && !w.filed) w.section=g.section;}
             else w.position[1]-=100;
             continue;
         }
@@ -1516,6 +1534,11 @@ void RaceSession::update_barriers() {
         };
         stop(player_,body_);
         for(size_t i=0;i<opponents_.size();++i) stop(opponents_[i].car,opponent_bodies_[i]);
+        // 0x4e2b2b..0x4e2b7f (the tree's 0x4e0eb8..): the graphics object's
+        // viewport (+0xb4, copied to +0xb8) takes +0x20/+0x24 = rand() % 5
+        // each while the counter runs, else 0.
+        if(w.shake-->0) {const int x=int(random_.next()%5);const int y=int(random_.next()%5);shake_={{x,y}};}
+        else shake_={{0,0}};
     }
     barriers_.erase(std::remove_if(barriers_.begin(),barriers_.end(),[](const Barrier& b){return b.done;}),barriers_.end());
 }
@@ -1613,6 +1636,159 @@ void RaceSession::update_kicks() {
         }
     }
     kicks_.erase(std::remove_if(kicks_.begin(),kicks_.end(),[](const Kick& k){return k.done;}),kicks_.end());
+}
+void RaceSession::update_flips() {
+    const auto car_at=[&](int id)->const RaceCar& {return id<0?player_:opponents_.at(size_t(id)).car;};
+    const auto body_at=[&](int id)->Body& {return id<0?body_:opponent_bodies_.at(size_t(id));};
+    for(Flip& f:flips_) {
+        if(f.done) continue;
+        const RaceCar& user=car_at(f.owner);
+        // 0x4d9890: the brick on the car model's frame at the offset
+        // (0x2ab11e8, by the backward flag).
+        const Matrix4 model=initial_vehicle_model_frame(user.frame());
+        const Vec3 off=f.backward?Vec3{{0,20,-100}}:Vec3{{0,20,100}};
+        f.brick=model;
+        for(size_t r=0;r<3;++r) f.brick[12+r]=model[r]*off[0]+model[4+r]*off[1]+model[8+r]*off[2]+model[12+r];
+        const Vec3 from{{f.brick[12],f.brick[13],f.brick[14]}};
+        // 0x4d9cb1..0x4d9e3d: the aim a (within +-m_angle, as the kicker's)
+        // and the reach to the target d = |its position in the brick's frame|
+        // - 350 (0x5129b0), 1 when negative; no target: m_range - 350.
+        float raw=f.backward?pi:0,a=raw,d=2000;
+        if(f.target!=-2) {
+            const Vec3& t=car_at(f.target).position;
+            const Vec3 v{{t[0]-from[0],t[1]-from[1],t[2]-from[2]}};
+            const float lx=v[0]*f.brick[0]+v[1]*f.brick[1]+v[2]*f.brick[2];
+            const float ly=v[0]*f.brick[4]+v[1]*f.brick[5]+v[2]*f.brick[6];
+            const float lz=v[0]*f.brick[8]+v[1]*f.brick[9]+v[2]*f.brick[10];
+            raw=a=std::atan2(-lx,lz);
+            const float lim=1.0471976f;
+            if(!f.backward) a=std::clamp(a,-lim,lim);
+            else if(a>0) a=std::max(a,pi-lim); else a=std::min(a,lim-pi);
+            d=std::sqrt(lx*lx+ly*ly+lz*lz);
+        }
+        d-=350;if(d<0) d=1;
+        // 0x4d9e3d: +0x80 = reach x 3 (0x511894) / d.
+        f.scale=f.reach*3/d;
+        if(f.state==1) {
+            // 0x4da025: the clip held at time 51 (frozen); the reach grows by
+            // spd x 1.7 (0x512dcc) up to d, then the clip runs on (state 2).
+            f.time=51;f.angle=a;
+            f.reach+=200*1.7f;
+            if(f.reach>=d) {f.reach=d;f.state=2;f.struck=false;}
+        } else if(f.state==2) {
+            // 0x4d9efa: the reach follows d within m_range; once the clip's
+            // time is at least 40 (0x28), with the target within the angle and
+            // reached, the hit (0x4d9f81): type 0x200 if its bomba is idle,
+            // voice 6 to the user's vehicle and 5 to the target's. When the
+            // clip ends (190, MTNL 0x10359), state 3.
+            f.angle=a;
+            if(2000>d) f.reach=d;
+            f.time+=10;   // one controller step a race update (provisional, as the bodies)
+            if(f.time>=40 && f.target!=-2 && f.reach>=d && a==raw && !f.struck) {
+                f.struck=true;
+                if(hit(f.target,0x200)) item_events_.push_back("flipper hit car "+std::to_string(f.target));
+                voice_events_.push_back({user.vehicle,6});voice_events_.push_back({car_at(f.target).vehicle,5});
+            }
+            if(f.time>190) f.state=3;
+        }
+        if(f.state==1 || f.state==2) {
+            // 0x4d96d0 (after states 1 and 2, 0x4da0bf): a ray (0x402199, mask
+            // 0x1e000ff) from the brick to the arm's end, the reach vector in
+            // the GDHModel x brick frame (0x402c61, 0x43b880); a hit sends the
+            // arm home (state 3) with the reach scaled by the hit's fraction
+            // (the result's +0x44, provisional reading).
+            const float c=std::cos(f.angle),sn=std::sin(f.angle);
+            const Vec3 end{{from[0]+(f.brick[8]*c-f.brick[0]*sn)*f.reach,from[1]+(f.brick[9]*c-f.brick[1]*sn)*f.reach,from[2]+(f.brick[10]*c-f.brick[2]*sn)*f.reach}};
+            const TrackContact w=track_.contact(from,end);
+            if(w.hit) {f.state=3;f.reach*=w.fraction;}
+        } else if(f.state==3) {
+            // 0x4d9e9c: the reach comes back by spd; at 0 the arm ends.
+            f.reach-=200;
+            if(f.reach<=0) {f.reach=0;f.done=true;WeaponEffect& w=body_at(f.owner).weapon;if(w.icon==12) w=WeaponEffect{};}
+        }
+    }
+    flips_.erase(std::remove_if(flips_.begin(),flips_.end(),[](const Flip& f){return f.done;}),flips_.end());
+}
+void RaceSession::update_paint() {
+    const auto car_at=[&](int id)->const RaceCar& {return id<0?player_:opponents_.at(size_t(id)).car;};
+    const auto body_at=[&](int id)->Body& {return id<0?body_:opponent_bodies_.at(size_t(id));};
+    for(PaintGun& g:paint_guns_) {
+        if(g.done) continue;
+        if(g.state==0xffff) {
+            // 0x4db39d: the end; +0x389 = -1 (the body's clip 2 frozen, RaceView).
+            g.done=true;WeaponEffect& w=body_at(g.owner).weapon;if(w.icon==13) w=WeaponEffect{};continue;
+        }
+        if(g.state==1) {
+            // 0x4db563: the counter runs down (from 0: at once) to state 2 with
+            // m_nWaitShot (5) x 6 (0x4db5b2).
+            if(--g.count<=0) {g.state=2;g.count=5*6;}
+            continue;
+        }
+        // 0x4db3df: past the counter, state 0xffff; every m_nWaitShot updates a
+        // WPaintShot clone (m_idClonable 0x396) on the brick's first child's
+        // frame, the car model's (0x404def), its z axis moved by (rand % 100) x
+        // 0.0004 - 0.02 (0x516608, 0x516604) in x and y, then 100 along it
+        // (0x43b140); the shot's owner +0x24 is the user.
+        if(--g.count<=0) {g.count=20;g.state=0xffff;continue;}
+        if(g.count%5!=0) continue;
+        const RaceCar& user=car_at(g.owner);
+        const Matrix4 f=initial_vehicle_model_frame(user.frame());
+        Vec3 z{{f[8],f[9],f[10]}};
+        z[0]+=float(random_.next()%100)*0.0004f-0.02f;
+        z[1]+=float(random_.next()%100)*0.0004f-0.02f;
+        PaintShot s;s.owner=g.owner;
+        for(size_t i=0;i<3;++i) {s.position[i]=f[12+i]+z[i]*100;s.velocity[i]=z[i]*350;}  // 0x4990f0: z x m_rSpeed
+        {const int k=slot_section(s.position);s.section=k>=0?k:user.section;}
+        paint_shots_.push_back(s);
+    }
+    paint_guns_.erase(std::remove_if(paint_guns_.begin(),paint_guns_.end(),[](const PaintGun& g){return g.done;}),paint_guns_.end());
+    for(PaintShot& s:paint_shots_) {
+        if(s.done) continue;
+        // 0x4991ef..0x499243: across the loop seam (the frame's flags 0x100000
+        // or 0x200000, set by 0x4a23c2/0x4a25b5) the velocity is turned by the
+        // loop transform (0x43b980), as the other projectiles'.
+        carry_across_seam(s.position,s.section,{&s.velocity});
+        // 0x499348: the life m_nFrameLifeTime (180) runs out into state 10.
+        if(s.life--<=0) {s.done=true;continue;}
+        Vec3 next{{s.position[0]+s.velocity[0],s.position[1]+s.velocity[1],s.position[2]+s.velocity[2]}};
+        int flag=0;
+        // 0x4993ce: while the life is at least m_nUnlockCount (10), the sphere
+        // goes along the step in m_nSpherePhaseNum (3) phases, from the start,
+        // querying the cars (0x4040e8): one but the owner, shown, is painted.
+        if(s.life>=10) {
+            Vec3 p=s.position;
+            for(int i=0;i<3 && !flag;++i) {
+                const auto touches=[&](int id){return id!=s.owner && !(id>=0 && opponent_bodies_[size_t(id)].hidden) && spheres_touch(p,car_at(id).position,car_sphere+50);};
+                int hit_car=-2;
+                if(touches(-1)) hit_car=-1;
+                for(size_t r=0;r<opponents_.size() && hit_car==-2;++r) if(touches(int(r))) hit_car=int(r);
+                if(hit_car!=-2) {
+                    // 0x499537: type 4 if its bomba is idle; the car's +0x3a7 = 0xd
+                    // (the paint on the player's screen, not ported).
+                    if(hit(hit_car,4)) item_events_.push_back("paint shot hit car "+std::to_string(hit_car));
+                    flag=1;break;
+                }
+                for(size_t j=0;j<3;++j) p[j]+=s.velocity[j]/3;
+            }
+        }
+        // 0x4994c9: a ray to the next point (mask 0x1e000ff) stops it there.
+        if(!flag) {
+            const TrackContact w=track_.contact(s.position,next);
+            if(w.hit) for(size_t j=0;j<3;++j) next[j]=s.position[j]+(next[j]-s.position[j])*w.fraction;
+            // 0x499629: else the solid objects (0x402b26, sensor group 0x10000)
+            // at the next point give flag 2 (their handler's +0x34 answer is
+            // taken as yes, provisional).
+            else for(const SolidSphere& o:objects_.solid_spheres()) {
+                const bool in=o.cylinder?sphere_cylinder(next,50,TrackCylinder{o.centre,o.radius,o.height}):spheres_touch(next,o.centre,50+o.radius);
+                if(in) {flag=2;break;}
+            }
+        }
+        s.position=next;
+        {const int k=slot_section(s.position);if(k>=0) s.section=k;}
+        // 0x499693: a hit hides it and clones m_idExplosion (0x3af) at its frame.
+        if(flag) {s.done=true;Blast b;b.at=s.position;b.size=200;b.colour={{11/255.f,7/255.f,208/255.f}};b.paint=true;blasts_.push_back(b);}
+    }
+    paint_shots_.erase(std::remove_if(paint_shots_.begin(),paint_shots_.end(),[](const PaintShot& s){return s.done;}),paint_shots_.end());
 }
 void RaceSession::slip(int car) {
     RaceCar& c=car<0?player_:opponents_.at(size_t(car)).car;

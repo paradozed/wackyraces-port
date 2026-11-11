@@ -149,14 +149,17 @@ code before starting one. The follow camera (`0x478070`) has since been ported
     controller reads. `0xb` (WRotoHill) only triggers MonsterTires (ported). So the robots seem
     never to fly; to confirm under Wine.
 - [ ] Weapon visuals (the breath's GD3DFilm and the WRocketTail fins and glow are drawn since
-  2026-11-08 and compared with Wine, `analysis/rocket-tail-20261108.md`; `WExplosion`s since
-  2026-11-01, provisional: its update is not traced). WPU_Breath's model on the car is drawn since 2026-11-08
+  2026-11-08 and compared with Wine, `analysis/rocket-tail-20261108.md`; `WExplosion` since
+  2026-11-09 as the original's disc, update and draw traced, `analysis/weapons-bomba-20261029.md`). WPU_Breath's model on the car is drawn since 2026-11-08
   (`analysis/breath-head-20261108.md`; the race-side animated GDHModel `RaceView::AnimatedModel`),
   its attach point read under Wine, but it stays lower than Wine's (hidden behind the car's tower
-  from the follow camera; the cause is not traced). Not drawn: `FlyPower`'s body animations (vehicles 0, 1, 2, 5), `MonsterTires`, the FireSiren's flashing sprite,
-  the bees (WBeeHive `0x475040`), the Flipper's arm model (the BootKicker's is drawn since 2026-11-09), the wall/tree's fall
-  animation and camera shake, the query range/angle at their placement, `WPU_Boomerang` (survey in
-  `analysis/weapons-bomba-20261029.md`).
+  from the follow camera; the cause is not traced). Drawn since 2026-11-09 (not compared with Wine): FlyPower's
+  models and body animations, MonsterTires, the FireSiren's light, the bees (WBeeHive `0x474650`),
+  the BootKicker's and the Flipper's arms, the wall's and tree's camera shake (they have no fall
+  animation beyond their m_rGravity drop). (The wall's and tree's
+  placement query uses the icons' WPowerUpSprite range and angle since 2026-11-08.) Still open: the
+  Wine comparisons of all of these. (`WPU_Boomerang`'s model was already drawn, and its DragonBreath's rotangle is 0: it does not
+  spin; the breath's film now turns by its rotangle, 2026-11-09).
 - [ ] WFire (2026-11-09, `analysis/wfire-20261109.md`): the jet flames drawn for TurboSpeed (vehicles 0,
   2, 5, 6) and FlyPower (0, 5), with the original's random shape and colours each draw. Open: not
   compared with Wine (the culling of mode 8 hides one triangle of each fin pair; the native capture
@@ -173,12 +176,17 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   the action's `+0x5c` (`0x4d24f0`). Projectiles, the TNT and the breath head turn by π; the storm
   takes backward links. Open:
   - the kicker is ported since 2026-11-09 (its arm, aim, kick and offsets `0x2ab10b0`, see the
-    note's "BootKicker's arm" section); the flipper's query behind is provisional, and its arm
-    offsets (`0x2ab11e8`) and swing are not ported;
+    note's "BootKicker's arm" section); the flipper too (its reach, clip hold and hit, see the
+    note's "Flipper's arm" section); the flipper's wall ray `0x4d96d0` is ported since 2026-11-09
+    (the result's fraction at `+0x44` is a provisional reading; no test reaches a wall);
   - the tank gun's turret `+0x3ab` is ported since 2026-11-09 (see the note's "turret" section);
   - not compared with Wine.
-- [ ] WPaintShot (`0x4991c0`, 397 lines; m_rTargetSpeed 0.3) and
-  WPU_Paintball's m_nWaitShot 5: natively one WBreath-like shot of type 4.
+- [ ] WPaintShot and WPU_Paintball are ported since 2026-11-09 (the note's "Paintball" section): five
+  shots, the scatter, the type-4 paint, the blue explosion `0x3af`, the body's clip 2. Open: the solid
+  objects' handler answer (`0x402b26` is ported as a touch of the port's solid spheres, 2026-11-09),
+  (the player's paint on screen does not exist in the shipped game,
+  2026-11-09: the WPaintFx class is never instantiated, and `+0x3a7` has no reader), not compared with Wine. (The brick flags 0x100000/0x200000 of `0x499243` are
+  the loop seam's crossing marks: the shot's velocity turns by the loop transform, ported 2026-11-09.)
 - [ ] Items still missing (2026-11-01): MonsterTires' physics (since 2026-11-09 its stages, 289 updates,
   the tyre models, the hidden wheels and the raised model `+0x92f` are ported; the contact spread
   `+0x15b` = `0x52b800[vehicle]` (end: `0x52b7f8`), the wheel records `+0x44b` = 24 (end:
@@ -186,8 +194,8 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   Detour, Flipper, BootKicker, Breath, Missile, TankGun, Boomerang,
   Landmine, OilSpill, BeeHive, FallingTree, BrickWall, Paintball), and the
   robots use them.
-- [ ] Weather remainders: the flake texture (renderer `+0x23969` -> `+0x18`;
-  a native disc stands in), D3D line width (native ~1 px strips), the
+- [ ] Weather remainders: (the flake texture is none, 2026-11-09: renderer `+0x23969` is never
+  written, so the flakes are plain white squares, `analysis/car-effects-20261028.md`), D3D line width (native ~1 px strips), the
   shared rand() and per-frame stepping (native per race update).
   - The Zartter shelter cut (`0x4565e0`/`0x456180`) is ported (`RaceTrack::sheltered`, 2026-11-02; its
     section rule is provisional).
@@ -203,7 +211,9 @@ code before starting one. The follow camera (`0x478070`) has since been ported
 - [ ] GDHModel remainders. Done 2026-11-08 (`analysis/mtnl-motion-20261028.md`): controller 0 on
   the cars' bodies (`SwayController`; rotation gains `+0x17e` by vehicle from the car init `0x469bf0`;
   compared with Wine, exact on segment 0), and the scale overrides `0x437f70` (the tank hit). Open:
-  - the override `0x4381a0` (`0x4383b0`, the rotation locks, is ported for the gadgets' bodies, 2026-11-09);
+  - (the overrides `0x4381a0`, translation, and `0x4383b0`, rotation, are ported since 2026-11-09:
+    `AnimatedInstance::moves` for the kicker's and the flipper's arms, `CarSway::turn_locks` for the
+    gadgets' bodies);
   - the race-side clip starts (`0x47394b`, the `WPU_*` actions `0x4d4f08`…);
   - compare a playing clip with Wine.
 - [ ] Compare original and native lighting, shading, alpha, and material state;

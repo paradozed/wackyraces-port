@@ -133,7 +133,7 @@ private:
     // locks of 0x437f70 (scale) and 0x4383b0 (rotation, degrees) while the
     // GDHModel's +0x17a bit 0 is set, and the gadget state last seen.
     struct CarSway {int vehicle=-1;std::unique_ptr<AnimatedInstance> body;SwayController sway;uint64_t stepped=~uint64_t(0);std::vector<WorldBatch> tinted;
-                    int last_effect=-1,last_fly=0;bool locked=false;
+                    int last_effect=-1,last_fly=0,last_weapon=-1;bool locked=false;
                     std::vector<std::pair<size_t,std::array<float,3>>> scale_locks,turn_locks;};
     void body_gadgets(int car,CarSway& w);
     std::map<int,CarSway> sways_;    // by car (-1 the player)
@@ -171,13 +171,24 @@ private:
     AnimatedModel boot_;Matrix4 boot_local_=identity_matrix();
     std::vector<std::unique_ptr<AnimatedInstance>> boots_;
     void submit_kicks(const Matrix4& vp,const Matrix4& view,const std::function<Matrix4(int)>& place);
+    // WPU_Flipper's arm (general.wgm brick 0x32f's GDHModel 0x337, MTNL 0x10359).
+    AnimatedModel flipper_;
+    struct FlipArm {std::unique_ptr<AnimatedInstance> a;bool frozen=false;};
+    std::vector<FlipArm> flip_arms_;
+    void submit_flips(const Matrix4& vp,const Matrix4& view,const std::function<Matrix4(int)>& place);
     std::vector<WpcTexturedVertex3D> fire_tris_;
+    // WBeeHive (action on brick 0x36c; vtable 0x512bac, init 0x474580, update
+    // 0x474600, draw 0x474650): m_BeeNum (32) bees, each two 12-bit phases
+    // stepping by m_Speed (60) an update; by trapped car.
+    struct Swarm {std::vector<std::array<int,4>> bees;uint64_t stepped=0;};
+    std::map<int,Swarm> swarms_;
+    int bee_num_=32,bee_radius_=150,bee_speed_=60;
+    void submit_bees(const Matrix4& vp,const std::function<Matrix4(int)>& place);
     uint32_t fire_random_=1;   // the draw's rand() (0x404363 -> 0x430ef0), view-local
     AnimatedModel tank_hit_;
     std::map<int,std::unique_ptr<AnimatedInstance>> tank_hits_;
     std::vector<WorldBatch> chunk_model_;   // m_Particle (0x151; general.wgm GDModel 0x394)
     void submit_tank_hit(int car,const BombHit& hit,const CarEffects& fx,const Matrix4& vp,const Matrix4& view,const Matrix4& placed);
-    Glyph blast_; // WExplosion's sprite
     float puff_scale_=0.3f;
     // A textured quad in 640x480 HUD space: top-left (x,y) before rotation,
     // turned by angle (radians, clockwise) about (x+px, y+py).
@@ -250,6 +261,10 @@ private:
     std::vector<float> strip_x_; // WackyAuto +0x1ab per racer
     uint64_t hud_update_=0;
     Sprite dial_,needle_;
+    // WPU_FireSiren's light: the template brick 0x311's GDSprite 0x12e
+    // (GMAT 0x10222, centre (16, 16)).
+    Sprite siren_;std::array<int,2> siren_centre_{{16,16}};
+    void siren_lights(int viewer);
     std::array<int,2> dial_xy_{},needle_xy_{};
     float scale_=1;int offset_x_=0,offset_y_=0;
     void release();

@@ -198,12 +198,8 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
             const ByteView data=general_.payload(general_.find("FILM",dust));
             for(uint32_t r=0;r<word(data,4);++r) puff_reels_.push_back(film(dust,r));
             smoke_frames_=film(kids[0].link(0x35,"FILM"));
-            // WExplosion's GD3dSprite 0x3ac (m_MaterialID 0x09), centred.
-            {
-                const Sprite s=sprite(shared.find(0x3ac).link(0x09,"GMAT"));
-                blast_.texture=s.texture;blast_.width=s.width;blast_.height=s.height;
-                blast_.x=blast_.y=-s.width/2;
-            }
+            // (WExplosion's GD3dSprites 0x3ac and 0x3af are hidden, flag 0x100:
+            // the action draws its own disc, see effects.)
             if(kids[3].class_name=="WKBumm") bumm_frames_=film(kids[3].link(0x35,"FILM"));
             // WackyAutoBomba's m_smokeparticle (0x153): a GDStdBrick whose first
             // child is the flamesmoke GD3DFilm (general.wgm 0x1be, 0x1bf).
@@ -347,6 +343,25 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
                 boot_=load_animated(archives,c);boot_local_=node_transform(c);break;
             }
         }
+        if(flipper_.batches.empty()) {
+            std::function<const Node*(const Node&)> f=[&](const Node& n)->const Node* {
+                for(const auto& ac:n.actions) if(ac.class_name=="WPU_Flipper") return &n;
+                for(const auto& c:n.children) if(const Node* r=f(c)) return r;
+                return nullptr;};
+            if(const Node* brick=f(shared.root())) for(const auto& c:brick->children) if(c.class_name=="GDHModel") {flipper_=load_animated(archives,c);break;}
+        }
+        // WBeeHive's members on the hive brick (0x36c): m_BeeNum 0x129,
+        // m_Radius 0x12a, m_Speed 0x12b.
+        {
+            std::function<const Node*(const Node&)> f=[&](const Node& n)->const Node* {
+                for(const auto& ac:n.actions) if(ac.class_name=="WBeeHive") return &ac;
+                for(const auto& c:n.children) if(const Node* r=f(c)) return r;
+                return nullptr;};
+            if(const Node* a=f(shared.root())) {
+                bee_num_=a->integer(0x129,32);bee_radius_=a->integer(0x12a,150);bee_speed_=a->integer(0x12b,60);
+                if(bee_num_<0 || bee_num_>256) bad("implausible WBeeHive m_BeeNum");
+            }
+        }
         if(tyres_[0].empty()) {
             std::function<const Node*(const Node&)> f=[&](const Node& n)->const Node* {
                 for(const auto& ac:n.actions) if(ac.class_name=="MonsterTires") return &n;
@@ -425,17 +440,11 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
         white_=wpc_vk_texture_create(window_,1,1,pixel);
         if(!white_) bad("flat material upload failed");
         owned_.push_back(white_);
-        if(!flake_) {
-            // Provisional: the flake texture (renderer +0x23969 -> +0x18) is
-            // not identified; a soft white disc stands in.
-            std::vector<uint8_t> px(16*16*4);
-            for(int y=0;y<16;++y) for(int x=0;x<16;++x) {
-                const float d=std::sqrt(float((x-7.5f)*(x-7.5f)+(y-7.5f)*(y-7.5f)))/8;
-                uint8_t* p=&px[size_t(y*16+x)*4];p[0]=p[1]=p[2]=255;p[3]=uint8_t(255*std::clamp(1-d,0.f,1.f));
-            }
-            flake_=wpc_vk_texture_create(window_,16,16,px.data());
-            if(flake_) owned_.push_back(flake_);
-        }
+        // The flake texture (renderer +0x23969 -> +0x18, 0x4b6840) is never
+        // written: renderer 1 is a zeroed global (0x26fae78) and no code stores
+        // that field, so 0x4b6888 sets no texture (SetTexture(0, NULL)) and the
+        // FVF 0x102 vertices carry no colour: plain white squares.
+        flake_=white_;
 
         // Two players draw the scene twice; the weather adds up to 15000
         // rain or 9000 snow vertices a view.
@@ -450,6 +459,15 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
         // GDSprite 0xa1/0xa2: the dial's top-left is 2*(x,y)-(0xa1,0xa2) in
         // the Wine frame. The needle turns about its knob (fitted pixel 10,52).
         dial_xy_={{hud->children[0].integer(0xa1),hud->children[0].integer(0xa2)}};
+        {
+            std::function<const Node*(const Node&)> f=[&](const Node& n)->const Node* {
+                for(const auto& ac:n.actions) if(ac.class_name=="WPU_FireSiren") return &n;
+                for(const auto& c:n.children) if(const Node* r=f(c)) return r;
+                return nullptr;};
+            if(const Node* brick=f(shared.root())) for(const auto& c:brick->children) if(c.class_name=="GDSprite") {
+                siren_=sprite(c.link(0x9e,"GMAT"));siren_centre_={{c.integer(0xa1,16),c.integer(0xa2,16)}};break;
+            }
+        }
         font_=film(hud_film);
         if(hud->children.size()<8) bad("shared scene lacks the WHudBrick head film");
         faces_=film(hud->children[7].link(0x35,"FILM"));
@@ -695,7 +713,12 @@ void RaceView::body_gadgets(int car,CarSway& w) {
     // 0x469a84: vehicle 5's turret, body segment 2 turned about y by +0x3ab
     // in degrees (0x512a20), locked each update (0x4383b0(2, 0, a, 0, 1)).
     if(v==5) set_turn(2,{0,session_.turret(car)*57.29578f,0});
-    w.last_effect=effect;w.last_fly=fly;
+    // WPU_Paintball: body clip 2 at its init (0x4db2cf: 0x440970(2, 0, 1,
+    // -1)), frozen at its end when the gun stops (0x4db3cb: command 2).
+    const int weapon=session_.running_weapon(car);
+    if(weapon==13 && w.last_weapon!=13 && clips) clip.play(2);
+    if(w.last_weapon==13 && weapon!=13 && clips) clip.freeze_at_end();
+    w.last_effect=effect;w.last_fly=fly;w.last_weapon=weapon;
 }
 void RaceView::submit_car(int car,int vehicle,const BombHit& hit,const Matrix4& vp,const Matrix4& view,const Matrix4& frame) {
     Matrix4 model=initial_vehicle_model_frame(frame);
@@ -1088,6 +1111,77 @@ void RaceView::submit_kicks(const Matrix4& vp,const Matrix4& view,const std::fun
         submit(a.model.batches,vp,view,multiply_matrix(place(user.section),multiply_matrix(k.brick,g)));
     }
 }
+void RaceView::submit_flips(const Matrix4& vp,const Matrix4& view,const std::function<Matrix4(int)>& place) {
+    // 0x4d9a20: clip 0 (0x440970(0, 0, 1, -1)) at time 11 (0x4d9bff); in
+    // state 1 the clip is held at 51 and frozen (command 3, 0x4da050), state 2
+    // runs it on. 0x4d9890: the GDHModel turned about y by +0x7c (0x43c380);
+    // segment 1 at (0, 0, reach) (0x4381a0), segment 2 scaled by min(1,
+    // +0x80) and segment 4 by +0x80 (0x437f70).
+    const auto& flips=session_.flips();
+    if(flipper_.batches.empty()) return;
+    static const MotionLib none;
+    if(flip_arms_.size()>flips.size()) flip_arms_.resize(flips.size());
+    while(flip_arms_.size()<flips.size()) {
+        FlipArm arm;arm.a=std::make_unique<AnimatedInstance>(flipper_,flipper_.lib?*flipper_.lib:none);
+        if(flipper_.lib) {arm.a->controller.play(0);arm.a->controller.set_time(11);}
+        flip_arms_.push_back(std::move(arm));
+    }
+    for(size_t i=0;i<flips.size();++i) {
+        const auto& f=flips[i];
+        FlipArm& arm=flip_arms_[i];
+        if(f.state==1) {arm.a->controller.set_time(51);if(!arm.frozen) {arm.a->controller.toggle_freeze();arm.frozen=true;}}
+        else if(arm.frozen) {arm.a->controller.toggle_freeze();arm.frozen=false;}
+        const float s2=f.scale<1?f.scale:1;
+        arm.a->overrides={{2,{s2,s2,s2}},{4,{f.scale,f.scale,f.scale}}};
+        arm.a->moves={{1,{0,0,f.reach}}};
+        arm.a->posed=arm.a->posed?arm.a->posed:session_.updates();
+        pose(*arm.a);
+        const RaceCar& user=f.owner<0?session_.player():session_.opponents().at(size_t(f.owner)).car;
+        Matrix4 g=identity_matrix();
+        const float c=std::cos(f.angle),s=std::sin(f.angle);
+        g[0]=c;g[2]=s;g[8]=-s;g[10]=c;
+        submit(arm.a->model.batches,vp,view,multiply_matrix(place(user.section),multiply_matrix(f.brick,g)));
+    }
+}
+void RaceView::submit_bees(const Matrix4& vp,const std::function<Matrix4(int)>& place) {
+    (void)vp;
+    std::map<int,bool> live;
+    for(const auto& m:session_.mines()) {
+        if(!m.hive || m.state!=3 || m.done) continue;
+        live[m.victim]=true;
+        Swarm& w=swarms_[m.victim];
+        const auto rand15=[&]{fire_random_=fire_random_*214013u+2531011u;return int((fire_random_>>16)&0x7fff);};
+        if(w.bees.empty()) {
+            // 0x474580: each bee's phases rand() & 0xfff, both steps m_Speed.
+            for(int i=0;i<bee_num_;++i) {const int a=rand15()&0xfff,b=rand15()&0xfff;w.bees.push_back({a,b,bee_speed_,bee_speed_});}
+            w.stepped=session_.updates();
+        }
+        // 0x474600: each update the phases move on by their steps, wrapped at 0x1000.
+        for(;w.stepped<session_.updates();++w.stepped) for(auto& b:w.bees) {b[0]=(b[0]+b[2])&0xfff;b[1]=(b[1]+b[3])&0xfff;}
+        // 0x474850 (renderer 1): a bee at R (sin a cos b, -sin b, cos a cos b)
+        // (the phases taken as radians), two triangles from it: to (+5, +-5)
+        // in (13, 0, 0, 173) and to (-5, +-5) in (255, 255, 0, 173), the
+        // centre (0, 0, 1, 255); drawn in the swarm's frame (here the trapped
+        // car's, provisional) by 0x4b5550 mode 8.
+        const RaceCar& v=m.victim<0?session_.player():session_.opponents().at(size_t(m.victim)).car;
+        const Matrix4 f=multiply_matrix(place(v.section),v.frame());
+        const float R=float(bee_radius_),h=5;
+        const auto vertex=[&](float x,float y,float z,float r,float g,float b,float a) {
+            WpcTexturedVertex3D w{};
+            w.x=f[0]*x+f[4]*y+f[8]*z+f[12];w.y=f[1]*x+f[5]*y+f[9]*z+f[13];w.z=f[2]*x+f[6]*y+f[10]*z+f[14];
+            w.r=r;w.g=g;w.b=b;w.a=a;return w;
+        };
+        for(const auto& b:w.bees) {
+            const float sa=std::sin(float(b[0])),ca=std::cos(float(b[0])),sb=std::sin(float(b[1])),cb=std::cos(float(b[1]));
+            const float x=R*sa*cb,y=-R*sb,z=R*ca*cb;
+            const WpcTexturedVertex3D c=vertex(x,y,z,0,0,1/255.f,1);
+            const float dk=13/255.f,al=173/255.f;
+            for(const auto& t:{c,vertex(x+h,y+h,z,dk,0,0,al),vertex(x+h,y-h,z,dk,0,0,al),
+                               c,vertex(x-h,y+h,z,1,1,0,al),vertex(x-h,y-h,z,1,1,0,al)}) fire_tris_.push_back(t);
+        }
+    }
+    for(auto it=swarms_.begin();it!=swarms_.end();) it=live.count(it->first)?std::next(it):swarms_.erase(it);
+}
 void RaceView::submit_tank_hit(int car,const BombHit& hit,const CarEffects& fx,const Matrix4& vp,const Matrix4& view,const Matrix4& placed) {
     // The chunks (WReszecske clones of m_Particle) outlive the hit.
     if(!chunk_model_.empty()) for(const auto& c:fx.chunks()) submit(chunk_model_,vp,view,multiply_matrix(placed,c.frame));
@@ -1176,6 +1270,11 @@ void RaceView::effects(const Matrix4& vp,const Matrix4& view,const Matrix4& came
         RaceCar at;at.position=t.position;at.yaw=std::atan2(-t.velocity[0],t.velocity[2]);
         submit(tnt_,vp,view,at_frame(t.section,at.frame()));
     }
+    // WPaintShot's GDModel 0x396, along its velocity.
+    if(const auto it=projectiles_.find(0x396);it!=projectiles_.end()) for(const auto& p:session_.paint_shots()) {
+        RaceCar at;at.position=p.position;at.yaw=std::atan2(-p.velocity[0],p.velocity[2]);
+        submit(it->second,vp,view,at_frame(p.section,at.frame()));
+    }
     for(const Projectile& p:session_.projectiles()) {
         const auto it=projectiles_.find(p.object);
         if(it==projectiles_.end()) continue;
@@ -1244,6 +1343,36 @@ void RaceView::effects(const Matrix4& vp,const Matrix4& view,const Matrix4& came
             wpc_vk_set_mvp(window_,vp.data());
             wpc_vk_set_draw_mode(window_,WPC_DRAW_NO_DEPTH_WRITE);
             wpc_vk_draw_material_triangles(window_,white_,tris.data(),uint32_t(tris.size()),3,1);
+            wpc_vk_set_draw_mode(window_,0);
+        }
+    }
+    // WExplosion's draw (0x4806f0): its sprite node is hidden (flag 0x100),
+    // and the action draws the disc of its record +0x3c through 0x4b44e0 (as
+    // the rocket glow): m_Resolution (10) segments facing the camera, the
+    // centre in (m_Red, m_Green, m_Blue) at the alpha +0x3f, the rim
+    // transparent, the radius +0x40, at the position moved a fifth of the way
+    // to the camera (0x510ef0 = 0.2). m_isRing (0 in both templates) would add
+    // the rings +0x43/+0x51/+0x5f (not ported).
+    {
+        std::vector<WpcTexturedVertex3D> fan;
+        const Vec3 x{{camera_frame[0],camera_frame[1],camera_frame[2]}},y{{camera_frame[4],camera_frame[5],camera_frame[6]}};
+        for(const auto& b:session_.blasts()) {
+            if(b.radius<=0 || b.alpha<=0) continue;
+            Vec3 c=b.at;
+            for(size_t i=0;i<3;++i) c[i]+=(camera_frame[12+i]-c[i])*0.2f;
+            const float r=b.colour[0],g=b.colour[1],bl=b.colour[2],al=float(b.alpha)/255.f,R=float(b.radius);
+            const auto vertex=[&](const Vec3& v,float a){WpcTexturedVertex3D w{};w.x=v[0];w.y=v[1];w.z=v[2];w.r=r;w.g=g;w.b=bl;w.a=a;return w;};
+            const auto rim=[&](int k){
+                const float a=float(2*k)*3.14159265f/float(b.resolution);
+                const float u=std::sin(a)*R,v=std::cos(a)*R;
+                return vertex({{c[0]+x[0]*u+y[0]*v,c[1]+x[1]*u+y[1]*v,c[2]+x[2]*u+y[2]*v}},0);
+            };
+            for(int k=0;k<b.resolution;++k) {fan.push_back(vertex(c,al));fan.push_back(rim(k));fan.push_back(rim(k+1));}
+        }
+        if(!fan.empty()) {
+            wpc_vk_set_mvp(window_,vp.data());
+            wpc_vk_set_draw_mode(window_,WPC_DRAW_NO_DEPTH_WRITE);
+            wpc_vk_draw_material_triangles(window_,white_,fan.data(),uint32_t(fan.size()),3,1);
             wpc_vk_set_draw_mode(window_,0);
         }
     }
@@ -1400,6 +1529,14 @@ void RaceView::draw_view(int human,int width,int height) {
     const Matrix4& camera=session_.camera(human);
     Matrix4 vp=multiply_matrix(projection_,inverse_affine_matrix(camera));
     for(size_t c=0;c<4;++c) {vp[c*4]*=float(w)/width;vp[c*4+1]*=float(h)/height;}
+    // A landed wall or tree shakes the viewport (+0x20, +0x24 of the
+    // graphics object's +0xb4, rand() % 5 for 30 updates): read here as its
+    // origin moved that many 640 x 480 pixels (provisional: the reader of
+    // those fields is not traced).
+    if(const auto sh=session_.camera_shake();sh[0] || sh[1]) {
+        const float dx=2*float(sh[0])*scale_/float(width),dy=-2*float(sh[1])*scale_/float(height);
+        for(size_t c=0;c<4;++c) {vp[c*4]+=vp[c*4+3]*dx;vp[c*4+1]+=vp[c*4+3]*dy;}
+    }
     // A half viewport (Wine, cc_t1 two players, 2026-11-08): the view at
     // 1/sqrt 2 of its full-screen pixel size in both axes (the tower car 205 x
     // 70 pixels at 1024x768 against 290 x 100), centred in the half and cut by
@@ -1609,6 +1746,8 @@ void RaceView::draw_view(int human,int width,int height) {
         submit_breath_head(-1,session_.player(),vp,view,placed);
     }
     submit_kicks(vp,view,seam_place);
+    submit_flips(vp,view,seam_place);
+    submit_bees(vp,seam_place);
     effects(vp,view,camera,seam_place,enabled);
     queue_.flush([&](size_t i) {
         const Queued& q=queued_[i];
@@ -1675,14 +1814,7 @@ void RaceView::draw_view(int human,int width,int height) {
         if(!breath_film_.empty()) for(const Projectile& p:session_.projectiles()) if(p.object==0x39a) {
             const Matrix4 m=seam_place(p.section);
             const Vec3& v=p.position;
-            add(&breath_film_[size_t(p.film)%breath_film_.size()],{{m[0]*v[0]+m[4]*v[1]+m[8]*v[2]+m[12],m[1]*v[0]+m[5]*v[1]+m[9]*v[2]+m[13],m[2]*v[0]+m[6]*v[1]+m[10]*v[2]+m[14]}},1,0,{{1,1,1,1}});
-        }
-        // WExplosion (provisional: its update is not traced): m_Size 500
-        // reached over m_GrowTime (2), then faded over m_FadeOutTime (20),
-        // tinted (m_Red, m_Green, m_Blue) = (255, 64, 0).
-        if(blast_.texture && blast_.width>0) for(const auto& b:session_.blasts()) {
-            const float grow=std::min(1.f,float(b.age)/2.f),fade=std::clamp(1-float(b.age-2)/20.f,0.f,1.f);
-            add(&blast_,b.at,500.f/(6.f*float(blast_.width))*std::max(grow,0.05f),0,{{1,64/255.f,0,fade}});
+            add(&breath_film_[size_t(p.film)%breath_film_.size()],{{m[0]*v[0]+m[4]*v[1]+m[8]*v[2]+m[12],m[1]*v[0]+m[5]*v[1]+m[9]*v[2]+m[13],m[2]*v[0]+m[6]*v[1]+m[10]*v[2]+m[14]}},1,p.spin,{{1,1,1,1}});
         }
         std::stable_sort(quads.begin(),quads.end(),[](const Quad& a,const Quad& b){return a.distance<b.distance;});
         if(quads.size()>200) quads.resize(200);
@@ -1954,6 +2086,7 @@ void RaceView::hud2(int human) {
         if(session_.finish_counter()<5) text(strings_.get(7),320,200,4); // (160,100) in two-player
         return;
     }
+    siren_lights(human?0:-1);
     // Layout rows 1/2 of 0x52bd5c, in the viewport's own frame (the timer at
     // (160,216) and the progress strip fall outside the half and are cut;
     // the dial is hidden): lap (13,30), rank (33,50) and suffix (44,50),
@@ -1983,6 +2116,25 @@ void RaceView::hud2(int human) {
     if(!message.empty()) text(message,160*2,60*2,4);
     powerup_panel(human);
 }
+void RaceView::siren_lights(int viewer) {
+    // WPU_FireSiren's light (0x4e01a2..0x4e01da): the brick shows and hides
+    // by turns each time the life (+0x38, after its decrement) is a multiple
+    // of 5, shown first. Each viewport places the GDSprite (0x4e00a0) at
+    // (160, 30) for its own car's siren, else (276, 110): its top-left is
+    // 2 (x, y) - its centre in the 640 x 480 frame.
+    if(!siren_.texture) return;
+    const auto one=[&](int car) {
+        const int life=session_.siren_life(car);
+        if(life<=0) return;
+        const int toggles=29-(life-1)/5;   // multiples of 5 in [life, 149]
+        if(toggles%2) return;
+        const bool own=car==viewer;
+        const float x=own?160.f:276.f,y=own?30.f:110.f;
+        quad(siren_.texture,x*2-float(siren_centre_[0]),y*2-float(siren_centre_[1]),float(siren_.width),float(siren_.height),false,1);
+    };
+    one(-1);
+    for(size_t i=0;i<session_.opponents().size();++i) one(int(i));
+}
 void RaceView::hud() {
     step_hud();
     if(session_.finish_state()==10) {
@@ -2009,6 +2161,7 @@ void RaceView::hud() {
     // the battle runs in state 9).
     if(session_.finish_state()!=15 && session_.mode()!=1) progress_strip();
     powerup_panel();
+    siren_lights(-1);
     // WHudBrick child 15 (0x4861a0): bend arrow at (160,100). Types 0/1 use
     // frame 0, 3/4 frame 1, 2 frame 2; types 0 and 3 are mirrored.
     if(const int arrow=session_.bend_arrow();arrow>=0) {

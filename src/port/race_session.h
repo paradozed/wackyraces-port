@@ -245,7 +245,20 @@ public:
     const std::vector<Barrier>& barriers() const {return barriers_;}
     // WExplosion clones (m_idExplosion 0x3ac: a landmine's end, the TNT): their
     // position and age in updates (m_GrowTime 2, m_FadeOutTime 20).
-    struct Blast {Vec3 at{};int age=0;};
+    // A WExplosion clone: m_Size and (m_Red, m_Green, m_Blue); 0x3ac (the
+    // mine's, the TNT's) 500 in (255, 64, 0), 0x3af (WPaintShot's) 200 in
+    // (11, 7, 208).
+    // WExplosion (vtable 0x513050, init 0x4803c0, update 0x480580, draw
+    // 0x4806f0): state +0x24, counter +0x2c, step +0x28, the disc's radius
+    // +0x40 and alpha +0x3f; m_GrowTime 2, m_FadeOutTime 20, m_FinalSize 0
+    // in both templates.
+    struct Blast {Vec3 at{};int age=0;float size=500;std::array<float,3> colour{{1,64/255.f,0}};bool paint=false;
+                  int state=0,count=0,step=0,radius=0,alpha=255,resolution=10;bool done=false;};
+    // WPaintShot (vtable 0x514890, init 0x4990f0, update 0x4991c0): the
+    // paintball's shot, general.wgm GDModel 0x396 (sphere 50).
+    struct PaintShot {Vec3 position{},velocity{};int owner=-1,life=180,section=0;bool done=false;};
+    const std::vector<PaintShot>& paint_shots() const {return paint_shots_;}
+    void fire_paint_shot_now(const Vec3& at,const Vec3& velocity) {PaintShot s;s.position=at;s.velocity=velocity;s.owner=-1;paint_shots_.push_back(s);} // tests
     const std::vector<Blast>& blasts() const {return blasts_;}
     const std::vector<Projectile>& projectiles() const {return projectiles_;}
     // 0x4a71e0 on the racer list (+0x48): the nearest racer but owner, with
@@ -265,6 +278,10 @@ public:
     int gadget_effect(int car) const {return (car<0?body_:opponent_bodies_.at(size_t(car))).effect;}
     // FlyPower's counter (+0x64) while the vehicle's own gadget runs, else 0.
     int flying(int car) const {return (car<0?body_:opponent_bodies_.at(size_t(car))).fly;}
+    // WPU_FireSiren's life left (+0x38) while it runs, else 0.
+    int siren_life(int car) const {return (car<0?body_:opponent_bodies_.at(size_t(car))).siren;}
+    // The viewport's shake (0x4e2b57: its +0x20, +0x24), from a landed wall or tree.
+    std::array<int,2> camera_shake() const {return shake_;}
     // The tank's turret yaw (+0x3ab).
     float turret(int car) const {return (car<0?body_:opponent_bodies_.at(size_t(car))).turret;}
     // The steering angle (+0x403).
@@ -498,6 +515,14 @@ public:
 private:
     std::vector<Kick> kicks_;
     std::vector<Flip> flips_;
+    std::array<int,2> shake_{{0,0}};
+    // WPU_Paintball (init 0x4db280, update 0x4db320): its state +0x34 and
+    // counter +0x3c.
+    struct PaintGun {int owner=-1,state=1,count=0;bool done=false;};
+    std::vector<PaintGun> paint_guns_;
+    std::vector<PaintShot> paint_shots_;
+    void update_paint();
+    void update_flips();
     void update_kicks();
     std::vector<Strike> strikes_;
     void update_strikes();

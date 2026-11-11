@@ -238,11 +238,8 @@ bool breath_weapon(int icon,Projectile& out) {
     Projectile p;
     switch(icon) {
         case 25: p.type=8;p.object=0x38c;break;
-        case 14: p.type=8;p.object=0x39a;p.p.maneuver=20;p.radius=151;break;
+        case 14: p.type=8;p.object=0x39a;p.p.maneuver=20;p.radius=151;p.rotangle=0.0872665f;break;
         case 16: p.type=2;p.object=0x3a8;break;
-        // WPU_Paintball's WPaintShot 0x396 (class 0x4991c0, not traced):
-        // provisionally a WBreath with the paint hit type 4.
-        case 13: p.type=4;p.object=0x396;break;
         case 15:
             p.type=0x10;p.object=0x3a1;
             p.p.maneuver=50;p.p.angle=2.1f;p.p.range=10000;p.p.travel=10000;

@@ -521,6 +521,8 @@ void test_effects() {
             wpc::Projectile pr;require(wpc::breath_weapon(25,pr) && pr.type==8 && pr.object==0x38c,"icon 25 is the missile");
             require(wpc::breath_weapon(16,pr) && pr.type==2 && wpc::breath_weapon(15,pr) && pr.type==0x10 && pr.p.maneuver==50,"tank gun and boomerang");
             require(!wpc::breath_weapon(19,pr),"the mine is no projectile");
+            // DragonBreath's rotangle (0x4762d4): only the breath's film turns.
+            {wpc::Projectile b,m;require(wpc::breath_weapon(14,b) && std::abs(b.rotangle-0.0872665f)<1e-6f && wpc::breath_weapon(15,m) && m.rotangle==0,"only the breath's film turns (rotangle)");}
             wpc::breath_weapon(25,pr);pr.velocity={{0,0,300}};
             // The traps' 0x4a71e0 angle 2 pi accepts any direction.
             require(wpc::target_distance({{0,0,-150}},0,6.2831855f,200)==22500 && wpc::target_distance({{150,0,0}},0,6.2831855f,200)==22500,"a 2 pi query sees behind and aside");
@@ -1122,6 +1124,22 @@ void test_course(const std::string& path) {
         require(drop.slot_section({{1e7f,0,1e7f}})==-1,"no slot row holds a point off every box");
     }
     const bool cc=path.find("cc_t1")!=std::string::npos,sh=path.find("sh_t1")!=std::string::npos;
+    // WPaintShot against a solid object (0x499629, flag 2): a shot sent at
+    // the course's first solid sphere ends in the blue explosion.
+    {
+        wpc::RaceSession ps(track,3,1,2);
+        ps.update({});
+        const auto& solids=ps.objects().solid_spheres();
+        if(!solids.empty()) {
+            const auto& o=solids[0];
+            const float r=o.radius+140;   // within one step of 100: no wall between
+            ps.fire_paint_shot_now({{o.centre[0]-r,o.centre[1]+(o.cylinder?o.height*0.5f:0.f),o.centre[2]}},{{100,0,0}});
+            int at=-1;
+            for(int i=0;i<20 && at<0;++i) {ps.update({});for(const auto& b:ps.blasts()) if(b.paint) at=i;}
+            std::printf("%s: paint shot at a solid object (r %.0f%s) burst at update %d\n",path.c_str(),o.radius,o.cylinder?" cylinder":"",at);
+            require(at>=0,"a paint shot bursts on a solid object (0x402b26)");
+        }
+    }
     if(path.find("dt_t1")!=std::string::npos) {
         // dt_t1's WTram (0x4caf40): six light phases (323 updates, as the pass end
         // zeroes the timer), the
@@ -1139,6 +1157,13 @@ void test_course(const std::string& path) {
             bool blasted=false;
             for(int i=0;i<120 && !blasted;++i) {boom.update({});blasted|=!boom.blasts().empty();}
             require(blasted,"the TNT's end shows a WExplosion");
+            // WExplosion 0x3ac (0x480580): the disc grows by 250 to 750 in three
+            // updates, holds one, then shrinks by 25 and fades over 21; it ends
+            // on the next update.
+            int top=0,lived=0,alpha_end=-1;
+            for(int i=0;i<60 && !boom.blasts().empty();++i) {top=std::max(top,boom.blasts()[0].radius);alpha_end=boom.blasts()[0].alpha;++lived;boom.update({});}
+            std::printf("%s: TNT explosion radius up to %d, %d updates more, last alpha %d\n",path.c_str(),top,lived,alpha_end);
+            require(top==750 && alpha_end==0,"WExplosion's disc grows to 750 and fades out (0x480580)");
         }
         // FlyPower (0x4d4d10): the car lifts, flies, and the effect ends once
         // it is down past 95 updates.
@@ -1212,9 +1237,16 @@ void test_course(const std::string& path) {
         {
             wpc::RaceSession pb(track,3,1);
             pb.use_weapon_now(13);
-            bool painted=false;
-            for(int i=0;i<60 && !painted;++i) {pb.update({});for(size_t r=0;r<pb.opponents().size();++r) painted|=pb.bomb(int(r)).type==4;}
-            require(painted,"the paint shot hits a car with type 4");
+            bool painted=false,blue=false;int shots=0,last=0,end=-1;
+            for(int i=0;i<120;++i) {
+                pb.update({});
+                for(size_t r=0;r<pb.opponents().size();++r) painted|=pb.bomb(int(r)).type==4;
+                for(const auto& b:pb.blasts()) blue|=b.paint;
+                const int n=int(pb.paint_shots().size());if(n>last) shots+=n-last;last=n;
+                if(end<0 && pb.running_weapon(-1)!=13) end=i;
+            }
+            std::printf("%s: paintball fired %d+ shots, painted %d, blue blast %d, gun ended at update %d\n",path.c_str(),shots,int(painted),int(blue),end);
+            require(painted && blue && end>=30 && end<=33,"the paint gun's shots paint a car with type 4 (0x4db320, 0x4991c0)");
         }
         // WPU_BeeHive (0x4de9b0): sprung under its dropper, the bees hold
         // the car to 0.3 for 80 updates and kick its steering.
@@ -1237,7 +1269,18 @@ void test_course(const std::string& path) {
         {
             wpc::RaceSession wall(track,3,1,2);
             wall.use_weapon_now(22);
-            for(int i=0;i<40;++i) wall.update({});
+            // 0x4e286f/0x4e2b68: the landing shakes the viewport by rand() % 5
+            // for 30 updates, then 0.
+            int landed_at=-1,shaken=0,last_shake=-1;
+            for(int i=0;i<60;++i) {
+                wall.update({});
+                if(landed_at<0 && !wall.barriers().empty() && wall.barriers()[0].landed) landed_at=i;
+                const auto sh=wall.camera_shake();
+                if(sh[0]||sh[1]) {++shaken;last_shake=i;}
+                if(sh[0]>4||sh[1]>4||sh[0]<0||sh[1]<0) shaken=-1000;
+            }
+            std::printf("%s: brick wall landed at update %d, viewport shaken %d updates, last at %d\n",path.c_str(),landed_at,shaken,last_shake);
+            require(landed_at>=0 && shaken>20 && last_shake<=landed_at+31 && last_shake>landed_at,"the wall's landing shakes the viewport 30 updates");
             require(wall.barriers().size()==1 && wall.barriers()[0].landed,"the brick wall lands ahead");
             const auto& w=wall.barriers()[0];
             const float d=std::hypot(w.position[0]-wall.player().position[0],w.position[2]-wall.player().position[2]);
@@ -1272,9 +1315,13 @@ void test_course(const std::string& path) {
         {
             wpc::RaceSession fl(track,3,1);
             fl.use_weapon_now(12);
-            bool struck=false;
-            for(int i=0;i<30 && !struck;++i) {fl.update({});for(const auto& e:fl.take_item_events()) struck|=e.find("flipper hit car")!=std::string::npos;}
-            require(struck,"the flipper strikes a robot ahead");
+            bool struck=false;int at=-1,updates=0;
+            for(;updates<200 && !fl.flips().empty();++updates) {
+                fl.update({});
+                for(const auto& e:fl.take_item_events()) if(e.find("flipper hit car")!=std::string::npos && !struck) {struck=true;at=updates;}
+            }
+            std::printf("%s: flipper struck at update %d, arm home after %d updates\n",path.c_str(),at,updates);
+            require(struck && fl.flips().empty() && fl.running_weapon(-1)!=12,"the flipper strikes a robot ahead and folds back");
         }
         // WPU_BootKicker (0x4d8aa0): the boot reaches out (x 1.1 an update),
         // kicks a robot ahead with 0x100, bounces 10 updates and comes home.
@@ -1890,6 +1937,29 @@ void test_course(const std::string& path) {
             if(crossed) ++after;
         }
         require(crossed && after>3,"the missile flies on into section 0");
+        // WPaintShot across the seam too (0x499243): sent from the same pose
+        // along the last section's exit, it reaches section 0's route.
+        wpc::RaceSession pa(track,3);
+        pa.set_robots_enabled(false);
+        pa.place(e[12]-fx/l*1500,e[14]-fz/l*1500,std::atan2(-fx/l,fz/l));
+        const wpc::RaceCar& u=pa.player();
+        pa.fire_paint_shot_now({{u.position[0],u.position[1]+120,u.position[2]}},{{fx/l*300,0,fz/l*300}});
+        bool pcrossed=false;int pafter=0;
+        for(int i=0;i<40 && !pa.paint_shots().empty();++i) {
+            pa.update({});
+            if(pa.paint_shots().empty()) {
+                // It may burst on what stands past the seam (the grid's cars):
+                // a burst on section 0's route counts as across.
+                for(const auto& b:pa.blasts()) {const auto r=track.route(b.at);if(b.paint && r.hit && r.section==0) pcrossed=true;}
+                break;
+            }
+            const auto& p=pa.paint_shots()[0];
+            const wpc::RaceTrack::Route r=track.route(p.position);
+            if(p.section==0 && r.hit && r.section==0) pcrossed=true;
+            if(pcrossed) ++pafter;
+        }
+        std::printf("%s: paint shot across the seam %d, %d updates after\n",path.c_str(),int(pcrossed),pafter);
+        require(pcrossed,"the paint shot flies on into section 0");
     }
     std::printf("%s: %d lap%s in %.1f s, %d respawns, %d glides\n",path.c_str(),race.laps_completed(),laps==1?"":"s",race.race_seconds(),race.respawns(),race.player_glides());
 }

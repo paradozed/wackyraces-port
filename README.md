@@ -184,7 +184,7 @@ that WackyAutoBomba type (e.g. `0x80`) at that race update.
   pulsing mound that bursts into chunks (the cars' bodies also sway with their accelerations,
   GDHModel controller 0 with the per-vehicle gains, matching Wine frame for frame; the
   tower car's own gadget spreads two flapping wings, and vehicle 6's unfolds a spinning rotor
-  that folds back at the 70th update, vehicle 5's opens a parachute, the bodies play their gadget clips, MonsterTires grows four big tyres, the wheels roll and the front ones steer, the tank's turret turns to its shot, the boot kicker's arm stretches out and kicks, each vehicle's flight ending
+  that folds back at the 70th update, vehicle 5's opens a parachute, the bodies play their gadget clips, MonsterTires grows four big tyres, the wheels roll and the front ones steer, the tank's turret turns to its shot, the boot kicker's and the flipper's arms stretch out and strike, the paintball fires five paint shots, the siren's light flashes in the HUD, the bees swarm about their car, a landing wall or tree shakes the view, each vehicle's flight ending
   by the original's rule, not compared with Wine; TurboSpeed and FlyPower light the
   WFire jet flames of vehicles 0, 2, 5 and 6, [WFire](analysis/wfire-20261109.md)), and paint leaves a blue
   pool under it (all compared with Wine; [hit visuals](analysis/hit-smoke-20261107.md)). Missiles and

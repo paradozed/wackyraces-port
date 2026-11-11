@@ -154,6 +154,10 @@ struct Projectile {
     float radius=150;    // the DragonBreath's PRIM sphere
     int section=0;       // +0x104 (the slot row's at fire, 0x4a6b30), for the loop seam in 0x4a71e0
     uint32_t object=0;   // the cloned DragonBreath
+    // DragonBreath's rotangle (0x138, template +0x90) is added each update to
+    // its film's angle (+0x126 -> +0x14a, 0x4762d4): 0.0873 for the breath
+    // 0x39a, 0 for 0x38c, 0x3a1 and 0x3a8.
+    float rotangle=0,spin=0;
     bool done=false;
     // WRocketTail (record 0x2ab1a30, instance vtable 0x516b8c; init 0x4ea7d0,
     // update 0x4ea960): the last m_Length (16 in every template) positions,
@@ -299,6 +303,7 @@ struct Barrier {
     int owner=-1,section=0;   // +0x104: its slot row's (0x4a6d20), else the ground's at landing
     bool tree=false,landed=false,done=false,filed=false;
     int life=150,fade=0,scale_num=3;
+    int shake=0;   // +0x68: 30 at the landing (0x4e286f, 0x4e0bf0)
     uint32_t stopped=0;
 };
 Barrier drop_barrier(const Vec3& position,float yaw,int owner,bool tree);
