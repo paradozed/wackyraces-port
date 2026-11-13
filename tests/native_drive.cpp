@@ -66,6 +66,29 @@ void test_speed() {
     const wpc::VehicleTuning dingo=wpc::vehicle_tuning(3);
     near(dingo.top_speed,0.58f,1e-6f,"0x52b558 Dingo top speed");
     near(dingo.steer_step,0.05585054f,1e-7f,"0x4660b0 Dingo steering step");
+    // 0x4677da: a steering key at a speed in [0, 0.1) sets 0.05 and +0x257 = 1
+    // (Wine, cc_t1 grid: Left alone from rest reads 0.0500); not at 0.1 or
+    // in reverse, and not without a key.
+    {
+        wpc::DriveInput left;left.left=true;
+        wpc::SpeedState c;wpc::steer_creep(c,left);
+        require(c.speed==0.05f && c.brake_state==1,"steering from rest creeps at 0.05");
+        c={};c.speed=0.1f;wpc::steer_creep(c,left);require(c.speed==0.1f,"no creep from 0.1 up");
+        c={};c.speed=-0.05f;wpc::steer_creep(c,left);require(c.speed==-0.05f,"no creep in reverse");
+        c={};wpc::steer_creep(c,{});require(c.speed==0 && c.brake_state==0,"no creep without a steering key");
+        wpc::DriveInput axis=left;axis.axis=-30;
+        c={};wpc::steer_creep(c,axis);require(c.speed==0,"no creep on the joystick's analog branch");
+        // 0x46769a..0x467798: the analog branch, then x 0.8 (0x467810).
+        wpc::DriveInput stick;stick.axis=-128;
+        near(wpc::update_steering(0,dingo,stick),0.13962634f*0.8f,1e-6f,"full left stick: at least 8 degrees, x 0.8");
+        near(wpc::update_steering(0.2f,dingo,stick),(0.2f+0.017453292f)*0.8f,1e-6f,"held past 85: a degree an update");
+        stick.axis=-40;
+        near(wpc::update_steering(0.3f,dingo,stick),-40*-0.011363637f*0.13962634f*0.8f,1e-6f,"inside 85: proportional");
+        stick.axis=128;
+        near(wpc::update_steering(0,dingo,stick),-0.13962634f*0.8f,1e-6f,"full right stick: negative");
+        wpc::DriveInput both;both.left=both.right=true;
+        near(wpc::update_steering(0,dingo,both),-dingo.steer_step*0.8f,1e-6f,"both keys: right is tested first (0x52aac4)");
+    }
     wpc::SpeedState s;
     wpc::update_speed(s,dingo,{true,false,false,false});
     // Below 0.8 the target is 0.8 (0x5127ec), approached by row[1].
@@ -1140,6 +1163,107 @@ void test_course(const std::string& path) {
             require(at>=0,"a paint shot bursts on a solid object (0x402b26)");
         }
     }
+    // 0x4cefb7..0x4cf01d: a running WBumSteer runner squashes the cars it
+    // touches (type 0x200; ported in CourseObjects::update). dr_t2: the
+    // player parked where the runner passes at update 200.
+    if(path.find("dr_t2")!=std::string::npos) {
+        // The runner's world position at update 200, from a scout session.
+        float rx=0,rz=0;
+        {
+            wpc::RaceSession scout(track,0,1,0);
+            for(int i=0;i<200;++i) scout.update({});
+            const auto& b=scout.objects().bum_steers().at(0);
+            const wpc::Matrix4 w=wpc::multiply_matrix(b.parent,b.runner_frame[0]);
+            rx=w[12];rz=w[14];
+        }
+        wpc::RaceSession rail(track,0,1,0);
+        rail.place(rx,rz,0);
+        int at=-1;
+        for(int i=0;i<1500 && at<0;++i) {rail.update({});if(rail.bomb(-1).type==0x200) at=i;}
+        std::printf("%s: player on the runner's path at (%.0f, %.0f): squashed (0x200) at update %d\n",path.c_str(),rx,rz,at);
+        require(at>=0,"a running WBumSteer runner squashes a car on its path");
+    }
+    // 0x4a43f4: hidden robots count their laps in the lap pass (section 0,
+    // from a later section, past the start line's distance into row 0). With
+    // the player idle on the grid they run hidden most of the race.
+    if(track.sections()>=4) {
+        // A robot's pose in the middle section, for the idle player.
+        float px=0,pz=0,pyaw=0;bool found=false;
+        {
+            wpc::RaceSession scout(track,0,1,0);
+            for(int i=0;i<6000 && !found;++i) {
+                scout.update({});
+                for(const auto& o:scout.opponents()) if(o.car.section==int(track.sections()/2) && o.car.grounded) {
+                    px=o.car.position[0];pz=o.car.position[2];pyaw=o.car.yaw;found=true;break;}
+            }
+        }
+        wpc::RaceSession idle(track,0,1,0);
+        if(found) idle.place(px,pz,pyaw);
+        int hidden_updates=0,laps=0;
+        for(int i=0;i<12000;++i) {
+            idle.update({});
+            for(size_t r=0;r<idle.opponents().size();++r) if(idle.opponent_hidden(r)) ++hidden_updates;
+        }
+        for(size_t r=0;r<idle.opponents().size();++r) laps=std::max(laps,idle.opponent_laps(r));
+        std::printf("%s: player idle in section %d for 12000 updates: robot-updates hidden %d, best robot laps %d\n",path.c_str(),idle.player().section,hidden_updates,laps);
+        require(!found || hidden_updates==0 || laps>=1,"hidden robots count laps");
+        require(laps<=track.laps(),"no lap counts past the finish");
+    }
+    // 0x4a2108: a robot shown in section 0 right after a lap counted there
+    // (+0x93f) takes m_idStartLineModel's frame, not row 0's entry portal.
+    // The player idles in the middle section until a hidden robot laps in
+    // section 0, then moves into section 1 so section 0 enters its window.
+    if(track.sections()>=4) {
+        const auto pose=[&](int section,float& x,float& z,float& yaw) {
+            wpc::RaceSession scout(track,0,1,0);
+            for(int i=0;i<6000;++i) {
+                scout.update({});
+                for(const auto& o:scout.opponents()) if(o.car.section==section && o.car.grounded) {x=o.car.position[0];z=o.car.position[2];yaw=o.car.yaw;return true;}
+            }
+            return false;
+        };
+        float mx=0,mz=0,my=0,ox=0,oz=0,oy=0;
+        if(pose(int(track.sections()/2),mx,mz,my) && pose(1,ox,oz,oy)) {
+            wpc::RaceSession idle(track,0,1,0);
+            idle.place(mx,mz,my);
+            std::vector<int> before(idle.opponents().size(),0);
+            int robot=-1,at=-1,shown=-1;
+            for(int i=0;i<20000 && robot<0;++i) {
+                idle.update({});
+                for(size_t r=0;r<idle.opponents().size();++r) {
+                    const int l=idle.opponent_laps(int(r));
+                    if(idle.opponent_hidden(r) && idle.opponents()[r].car.section==0 && l>before[r] && l<track.laps()) {robot=int(r);at=i;}
+                    before[r]=l;
+                }
+            }
+            wpc::Vec3 where{};
+            if(robot>=0) {
+                idle.place(ox,oz,oy);
+                for(int i=0;i<10 && shown<0;++i) {idle.update({});if(!idle.opponent_hidden(size_t(robot))) {shown=i;where=idle.opponents()[size_t(robot)].car.position;}}
+            }
+            const wpc::Matrix4 &m=track.start_model(),&e=track.entry_frame(0);
+            const float dm=std::hypot(where[0]-m[12],where[2]-m[14]),de=std::hypot(where[0]-e[12],where[2]-e[14]);
+            std::printf("%s: robot %d lapped hidden in section 0 at update %d, shown %d updates after the player moved: %.0f from the start line model, %.0f from row 0's entry portal\n",
+                path.c_str(),robot,at,shown,dm,de);
+            if(robot>=0) require(shown>=0 && dm<1000,"a robot shown in section 0 after its lap stands at the start line model");
+        }
+    }
+    // 0x4a3d5c: before its first line crossing (+0x19f = 0) a car's lap
+    // distance is 0, so its strip head sits at the start; once a robot
+    // has crossed, its fraction is above 0.
+    {
+        wpc::RaceSession st(track,0,1,0);
+        float player=-1,robot=0;int robots=0;
+        for(int i=0;i<900;++i) {
+            st.update({});
+            const auto racers=st.strip();
+            for(const auto& r:racers) if(r.player) {if(i==200) player=r.lap_fraction;}
+            if(i==899) for(const auto& r:racers) if(!r.player && r.lap_fraction>0) {++robots;robot=std::max(robot,r.lap_fraction);}
+        }
+        std::printf("%s: strip at the start: player %.3f; after 900 updates %d robots past 0 (best %.3f)\n",path.c_str(),player,robots,robot);
+        require(player==0,"a car before its first crossing sits at the strip's start");
+        require(robots>0,"robots that crossed the line move along the strip");
+    }
     if(path.find("dt_t1")!=std::string::npos) {
         // dt_t1's WTram (0x4caf40): six light phases (323 updates, as the pass end
         // zeroes the timer), the
@@ -1199,12 +1323,29 @@ void test_course(const std::string& path) {
         // MonsterTires (0x4d6560): the tyres grow to 3 in 10 updates, settle to
         // 2.7, stay 270 updates (m_innormframenum - 30), shrink; 289 in all.
         {
-            wpc::RaceSession mt(track,0,1,2);
+            // Vehicle 2: its tracks' half width 6 (0x52b804) becomes 24 during
+            // the effect (0x4d6380) and comes back at the end (0x4d6659).
+            wpc::RaceSession mt(track,2,1,2);
             mt.use_gadget_now(7);
-            int updates=0;float top=0;
-            for(;updates<400 && mt.player_effect()==7;++updates) {mt.update({});top=std::max(top,mt.monster_scale(-1));}
-            std::printf("%s: MonsterTires ran %d updates, tyre scale up to %.3g\n",path.c_str(),updates,top);
+            int updates=0;float top=0,width=0;
+            for(;updates<400 && mt.player_effect()==7;++updates) {mt.update({});top=std::max(top,mt.monster_scale(-1));if(updates==100) width=mt.effects().track_half_width();}
+            std::printf("%s: MonsterTires ran %d updates, tyre scale up to %.3g, track half width %.3g then %.3g\n",path.c_str(),updates,top,width,mt.effects().track_half_width());
             require(updates==289 && std::abs(top-3.f)<1e-3f && mt.monster_scale(-1)==0,"MonsterTires' stages (289 updates, scale 3)");
+            require(width==24 && mt.effects().track_half_width()==6,"MonsterTires' tyre tracks (half width 24, then the vehicle's)");
+        }
+        // 0x46ae73: no slide starts during MonsterTires (x = 0 while +0x385 = 0).
+        {
+            int slides[2]={0,0};
+            for(int monster=0;monster<2;++monster) {
+                wpc::RaceSession mt(track,2,1,2);
+                wpc::DriveInput go;go.accelerate=true;
+                for(int i=0;i<150;++i) mt.update(go);
+                if(monster) mt.use_gadget_now(7);
+                go.left=true;
+                for(int i=0;i<120;++i) {mt.update(go);if(mt.skidding()) ++slides[monster];}
+            }
+            std::printf("%s: steering 120 updates, slide updates %d, with MonsterTires %d\n",path.c_str(),slides[0],slides[1]);
+            require(slides[1]==0 && slides[0]>0,"no slide during MonsterTires");
         }
         // The tank's turret +0x3ab (0x4dbc76, 0x469a1c): a backward shot with no
         // target turns it to pi; it holds while the weapon runs, then comes back
@@ -1813,6 +1954,19 @@ void test_course(const std::string& path) {
             for(int i=0;i<1200 && race.gadget_icon()!=3;++i) race.update({});
             require(race.gadget_icon()==3,"the slot returns to the vehicle's own gadget");
         }
+    }
+    // 0x4a2dcf: in two players the first player to finish ends the race
+    // (state 4, both stopped). cc_t1 only (a driven race takes minutes):
+    // player 1 on the test driver, player 2 idle on the grid.
+    if(path.find("cc_t1")!=std::string::npos) {
+        wpc::RaceSession two(track,3,1,0,1);
+        HybridPilot pilot2;
+        int i=0;
+        for(;i<18000 && two.phase()!=wpc::RaceSession::Phase::Finished;++i) two.update(pilot2(two),{});
+        std::printf("%s: two players, player 1 driven: finished %d after %d updates, laps %d and %d\n",path.c_str(),
+                    int(two.phase()==wpc::RaceSession::Phase::Finished),i,two.laps_completed(),two.opponent_laps(0));
+        require(two.phase()==wpc::RaceSession::Phase::Finished && two.laps_completed()==3 && two.opponent_laps(0)==0,
+                "two players: the first to finish ends the race");
     }
     // One lap on sh_t1 covers the tunnel, the pyramid jumps and the seam
     // (the earlier planner took about 300 s a lap there).

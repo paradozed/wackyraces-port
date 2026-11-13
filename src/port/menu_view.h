@@ -42,6 +42,11 @@ private:
         uint32_t road=0; // the GDSprite moved by its WSpriteMove (road_)
         float scale=1;
         uint32_t film=0; // GDFilm2 node drawn from its playback state
+        // The page child this layer comes from (its index in the page's
+        // list, which 0x48cec0 walks): on the controls page 0 is the
+        // keyboard and 1 the joystick image (0x48eff0); on the selection
+        // pages children 2r and 2r + 1 are row r's banner halves.
+        int page_child=-1;
         std::array<float,3> color{{1,1,1}};
         // A volume notch (0x489e30): lit, with the item's 0x190..0x192
         // colour, while its rank x 0.1 is below the item's value.

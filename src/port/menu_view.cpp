@@ -70,6 +70,13 @@ void MenuView::collect(Page &page,const Node &node,int item,int cursor_x,int cur
         // The main common group's tall portraits are replaced by its four-piece
         // film compositions. Their original activation still needs comparison.
         if (common && texture.height>150) return;
+        // m_VisGroup (0x1f) is the selection mask +0x90 that 0x488ba0 and
+        // 0x48cec0 set and clear. A GDSprite outside an item with mask 0 is
+        // therefore hidden until some code sets it: the track pages'
+        // background brick 0x23d holds three such icons at (0, 0)
+        // (0x205, 0x219, 0x21a), absent under Wine with a fresh profile.
+        // Provisional: no writer of their mask was found.
+        if (item<0 && node.class_name=="GDSprite" && node.integer(0x1f)==0) return;
         Layer layer{};
         bool positioned=item>=0 && node.class_name=="WMenuSprite" && node.integer(0x185);
         layer.x=positioned ? cursor_x : node.integer(0x9f)*2;
@@ -203,12 +210,15 @@ void MenuView::prepare() {
     Page page;
     uint32_t background=uint32_t(visual->integer(0x199));
     if (background) collect(page,scene_.find(background),-1,0,0,background==27);
-    int x=visual->integer(0x197)*2,y=visual->integer(0x198)*2,index=0;
+    int x=visual->integer(0x197)*2,y=visual->integer(0x198)*2,index=0,position=0;
     for (const Node &child:visual->children) {
+        const size_t first=page.layers.size();
         if (menu_item_class(child.class_name)) {
             collect(page,child,index++,x,y);
             x+=child.integer(0x18a)*2; y+=child.integer(0x18b)*2;
         } else collect(page,child);
+        for (size_t i=first;i<page.layers.size();++i) page.layers[i].page_child=position;
+        ++position;
     }
     // 0x48ba10 -> 0x48bb20: a page's 0x19a = n > 0 sets the text of the
     // world's first child, a GDPsText (menu.WGM #279 at (160,220)), to
@@ -225,6 +235,12 @@ void MenuView::prepare() {
         // meaning (0x800 keeps x for WMenuText) is not traced.
         label.x=node.integer(0x45)*2; label.y=node.integer(0x46)*2; label.align=4;
         label.scale=node.real(0x3b,1); label.source=&node; label.text=strings_.get(uint32_t(0xc8+help));
+        // Provisional (2026-11-11): Wine's glyph steps on this line fit
+        // (width - 2) x 1.6 at 1024 wide (slope 1.62, offset -1.59 over 39
+        // glyphs), one texel less than WMenuText's rule. The GDPsText draw
+        // 0x42e330 reads a shared font (0x546cf4, 0 on the options page under
+        // Wine), so the path that draws this line is not traced.
+        label.kern=1;
         for (size_t i=0;i<3;++i) label.color[i]=std::clamp(node.integer(0x37+uint32_t(i),255),0,255)/255.f;
         page.labels.push_back(label);
     }
@@ -281,23 +297,35 @@ void MenuView::text(const Label &label,bool selected) {
     auto index=[&glyphs](unsigned char byte) -> size_t {
         return byte>=0x20 && size_t(byte-0x20)<glyphs.size() ? byte-0x20 : '?'-0x20;
     };
+    // 0x42dc50 measures and 0x42de80 draws in screen pixels: the factor is
+    // the screen width x 0x510efc (1/640); a space or control byte adds 10
+    // pixels unscaled; a glyph adds (width - +0x150 - 1) x +0x152 x factor,
+    // truncated into the running total (0x4ee040) each time.
+    const float factor=scale_;
+    const auto advance=[&](int at,unsigned char byte){
+        if (byte<=0x20) return at+10;
+        return int(at+(material(glyphs[index(byte)].material).width-label.kern-1)*label.scale*factor);
+    };
     int width=0;
-    for (unsigned char byte:label.text)
-        width+=byte<=0x20 ? 10 : int((material(glyphs[index(byte)].material).width-label.kern-1)*label.scale);
-    int cursor=label.x;
-    // 0x42dfd6: 0x800 leaves X unchanged; otherwise 4 centers and 0x20000 right-aligns.
+    for (unsigned char byte:label.text) width=advance(width,byte);
+    // The label's X through the screen conversion (vtable +0x38), then
+    // 0x42dfd6: 0x800 leaves it; otherwise 4 centres (width / 2, truncated)
+    // and 0x20000 right-aligns.
+    int cursor=int(std::lround(label.x*factor));
     if (!(label.align&0x800)) {
         if (label.align&4) cursor-=width/2;
         else if (label.align&0x20000) cursor-=width;
     }
     auto color=selected && label.highlight ? highlight_ : label.color;
     for (unsigned char byte:label.text) {
-        if (byte<=0x20) { cursor+=10; continue; }
-        const Placement &glyph=glyphs[index(byte)];
-        image(glyph.material,cursor+int(glyph.x*label.scale),label.y+int(glyph.y*label.scale),color[0],color[1],color[2],label.scale);
-        // 0x42dd83: the glyph width less the descriptor's +0x150 (property
-        // 0x4e: 4 for JOUEUR 1/2's CLAVIER) less 1, times the scale.
-        cursor+=int((material(glyph.material).width-label.kern-1)*label.scale);
+        if (byte>0x20) {
+            const Placement &glyph=glyphs[index(byte)];
+            const Texture &texture=material(glyph.material);
+            if (texture.gpu) wpc_vk_draw_texture_tinted(window_,offset_x_+cursor+int(std::lround(glyph.x*label.scale*factor)),
+                offset_y_+int(std::lround((label.y+int(glyph.y*label.scale))*factor)),
+                int(std::lround(texture.width*factor*label.scale)),int(std::lround(texture.height*factor*label.scale)),texture.gpu,color[0],color[1],color[2],1);
+        }
+        cursor=advance(cursor,byte);
     }
 }
 void MenuView::draw_files() {
@@ -399,10 +427,21 @@ void MenuView::draw(double elapsed) {
 }
 void MenuView::draw_page(int selected,bool ready) {
     const bool two=controller_.two_player_page();
+    const Node *shown_page=two ? controller_.shown_page() : nullptr;
+    const Node *first_child=shown_page && !shown_page->children.empty() ? &shown_page->children.front() : nullptr;
     const Page &page=pages_.at(active_page_);
     const auto chosen=[&](int item){return item==selected;};
+    // 0x48eff0 (mask 0x800000 for player 1, from the page slots 0x48e810..):
+    // with the player's device at -1 (keyboard, 0x6f4580) 0x48cec0 sets the
+    // selection bit on the page's child 0 and clears it on child 1; a
+    // joystick the reverse. So the keyboard shows alone, or the joystick.
+    const Node &shown=controller_.node();
+    int hidden_child=-1;
+    if (shown.class_name=="WMenuNodeControllerConfig")
+        hidden_child=controller_.session().prefs.device(shown.integer(0x1a2))<0 ? 1 : 0;
     for (const Layer &layer:page.layers) {
         if (layer.only_one && layer.item>=0 && !chosen(layer.item)) continue;
+        if (hidden_child>=0 && layer.page_child==hidden_child) continue;
         const std::vector<Placement> *frame=layer.frames.empty() ? nullptr : &layer.frames.front();
         if (layer.film) {
             const Film &film=films_.at(layer.film);
@@ -415,6 +454,12 @@ void MenuView::draw_page(int selected,bool ready) {
         if (!frame) continue;
         std::array<float,3> color=layer.color;
         if (const int grey=layer.item>=0 ? controller_.grey_level(size_t(layer.item)) : 0) color={{grey/255.f,grey/255.f,grey/255.f}};
+        // 0x490d60, 0x4910a0, 0x4913f0: row r's 0x48cec0 call (first 2r,
+        // count 2, the text flag) also sets +0x18a = 2 on the page's sprites
+        // 2r and 2r + 1, the row's banner, when the row is closed. Wine draws
+        // dr's closed banner at 0.22 of its colours (the rows' 0x40).
+        else if (layer.item<0 && layer.page_child>=0 && layer.page_child<controller_.row_banners())
+            if (const int grey=controller_.grey_level(size_t(layer.page_child/2))) color={{grey/255.f,grey/255.f,grey/255.f}};
         if (layer.notch_item) {
             const Node& it=*layer.notch_item;
             const float maximum=it.real(0x18e,1);
@@ -431,7 +476,13 @@ void MenuView::draw_page(int selected,bool ready) {
             label.color={{grey/255.f,grey/255.f,grey/255.f}};label.highlight=false;
         }
         if (label.only_one && label.item>=0 && !chosen(label.item)) continue;
-        if (two && label.inactive && !ready) continue;
+        // 0x48e1c0 (the two-player page's activation): 0x48cec0 clears each
+        // player's selection bit (0x800000, 0x1000000) on the page's child 0,
+        // WMenuText 0x384 SELECTIONNE (string 171); getting ready sets it again
+        // (0x405f79). So it shows in a player's half only while that player is
+        // ready. (Its serialized flags 0x10046012 are those of any shown text,
+        // so the earlier inactive-bit rule drew it from the start.)
+        if (two && first_child && label.source==first_child && !ready) continue;
         if (const uint32_t changed=label.source ? controller_.text_override(*label.source) : 0) {
             Label shown=label; shown.text=strings_.get(changed);
             text(shown,label.item>=0 && chosen(label.item));

@@ -94,7 +94,7 @@ All 24 robots now finish 3 laps in 5400 updates. `native_drive_test` now require
   the native slope filter (other surfaces only when |normal.y| ≤ 0.6)
   stays, provisional. The full normal is kept as the original's; the sh_t1
   driver's respawns are the test pilot's, not compared with Wine.
-- **`+0x157` (not ported).** A wall hit with flags `0x600000` while
+- **`+0x157` (ported since, `RaceSession::glide`; this heading was stale until 2026-11-12).** A wall hit with flags `0x600000` while
   `+0x8a7` > 4 sets `+0x157` = 1 and stores the unit push in `+0x23b`
   (`0x46c607`). Robots lose it in the same update: their ground ray
   (`0x46c858`, `+0xc0` = 1) clears it. For the player the four-probe

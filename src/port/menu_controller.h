@@ -140,6 +140,10 @@ public:
     // 0x48cec0 from the three availability callbacks: an unavailable row's
     // texts and sprites are drawn at 0x40 instead of 0xff.
     bool greyed(size_t index) const { return grey_level(index)!=0; }
+    // The page children whose banner pairs the row callbacks grey: 10 for
+    // the five championships (0x4910a0) and the scenario's dr row 4
+    // (0x490d60, children 8 and 9), 8 for the four variants (0x4913f0).
+    int row_banners() const { const std::string &c=current_->class_name; return c=="WMenuNodeSelectTrack" ? 8 : c=="WMenuNodeSelectCShip" || c=="WMenuNodeSelectScenario" ? 10 : 0; }
     // 0 for a normal row, else the grey the row's texts and sprites take.
     int grey_level(size_t index) const;
     Profile& profile() { return session_.profile; }

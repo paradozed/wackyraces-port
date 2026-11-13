@@ -469,3 +469,207 @@ a far robot on every course:
     with 1.
 - **So** the shipped robots never get their own gadget (FlyPower) and never fly. WGoldenGate's 1 is
   read by nothing. Natively they do not use it either; to confirm under Wine.
+
+## Hidden robots' laps and the shown row (2026-11-12)
+
+**The lap pass** (`0x4a4170`, per car; its hidden branch `0x4a43e2..0x4a444c`): for a car with
+`+0x2b1` & `0xfff0000` (hidden), when its section `+0x1b7` is 0, its previous section `+0x1bb` is
+above 0 and its distance into the row `+0x2b5` exceeds the manager's `+0x34`, the laps `+0x187` and
+`+0x19f` go up, `+0x1bb` = 0 and `+0x93f` = 1. Visible cars count at the line (`0x4a4201..`).
+- The manager's `+0x34` (`0x49e552..0x49e56e`): a ray at the start line (`0x402199`) hitting a
+  route polygon (flag `0x100000`) gives L − (L × the polygon's byte `+0x11`) >> 8, L row 0's length
+  (`[+0x8c8]+0x20`); a miss stores 0 (`0x49e539`). Byte `+0x11` is the remaining fraction of the row,
+  so this is the line's distance into row 0. Native: the line's section fraction × the row length.
+- `+0x1bb` is the previous section: the trackers store the old `+0x1b7` before each change (the
+  player `0x4a13ae`, the robots `0x4a234d`, a hidden car's row wrap `0x4a201d`); a forward crossing
+  sets it to 0 (`0x4a4346`, `0x4a44c4`), a backward one to the last row (`0x4a435a`, `0x4a44dc`).
+- Native: `Body::previous_section` (robots: `seen_section` compares each update), the rule in
+  `virtual_robot`, and no counts once finished. The earlier guess (the line's distance passed during
+  the step, with every section visited) is gone.
+
+**The shown row (provisional).** A hidden robot is shown at its new row's entry WPortal; the original
+then holds that row in `+0x1b7` until its tracker moves on, while the native section comes from the
+ground. On `dr_t2` the ground under row 1's portal at (−39409, −9229) belongs to section 0, so the
+shown robot read section 0, outside the window, and was hidden again 7 updates later at section 0's
+end: with the player idle in section 2 every robot stayed in section 0 (61628 hidden robot-updates of
+72000, no lap). Native: for up to 60 updates a robot shown into a row is not hidden while it stands on
+the previous section.
+
+**`native_drive_test`** (every course with 4 or more sections): the player placed at a robot's pose in
+the middle section and left idle for 12000 updates; the best robot's laps must be at least 1 when
+robots were hidden, and at most the course's laps. Results: `cc_t2` 3221 hidden robot-updates and 3
+laps, `ct_t2` 8943 and 6 (9 laps), `dr_t2` 6647 and 3, and the same on the eight others. Controls on
+`dr_t2`: without the shown-row grace, 0 laps (robots never advance); without the previous section
+of visible robots, 0 laps (robots lap but none counts); without the finish check, 56 laps (a
+finished robot standing at the portal is shown and hidden every 67 updates).
+
+## `+0x93f` and the section-0 placement (2026-11-12; the placement ported later that day, below)
+
+- Writers: the car constructor (`0x4661ef`, 0), the race start (`0x4a07b8`, 0), the lap pass
+  (`0x4a444c`, 1: after a hidden lap; the visible path's lap completion jumps there too,
+  `0x4a450c` → `0x4a4446`), and the hiding (`0x4a27a3`, 0 when the car's group `+0x104` differs from
+  its tracker row `[ebx+0x4]`).
+- Readers: the visible lap path (`0x4a4489`): while `+0x93f` is set, the crossing's result is
+  replaced by 0 (no count). The show placement (`0x4a2108`): shown in group 0 with `+0x93f` set, the
+  frame is that of the manager record's `+0x2c` object, `m_idStartLineModel` (registered at record
+  `+0x28`, 8 bytes, the id resolver reading the second word; `cc_t1`: GDModel `0x3d3`), not the
+  row's entry WPortal (`+0x48`).
+- Read literally, a robot that stays visible counts its first crossing and then no other until it is
+  hidden with group ≠ row, which would stop robots near the player from finishing; so part of
+  this reading is probably wrong (the meaning of `[ebx+0x4]` at the hiding, or which cars take the
+  `0x4a445b` branch). Not ported; a runtime check (robots' `+0x19f` under Wine with the player near
+  them) is needed first.
+- **Runtime check (2026-11-12, Wine memory reads, `cc_t1`, 3 sections, the player idle on the
+  grid; the cars found by the WackyAuto vtable `0x51295c`, sampled every 10 s for 210 s).** The six
+  robots run mostly in the far mode (`+0x2b1` = `0x1000`, which the lap pass's hidden test `0xfff0000`
+  does not take), shown (1, 2) for a few samples. Each lap counts at the line in section 0
+  (`+0x19f` 1 → 2 → 3 → 4 from about 40 s, 100 s, 130–160 s, 160–200 s); right after, `+0x1bb` = 0 and
+  `+0x93f` = 1, and at the next sample, in section 1, `+0x93f` is 0 again. So `+0x93f` only blocks a
+  second count right at the line and is cleared as the robot moves on (the clearing path is not
+  identified; `0x4a27a3` is one candidate). The idle player keeps `+0x19f` 0, `+0x183` 0 and
+  `+0x1bb` = 2 (the last row) the whole time. The native line counter already avoids double counts;
+  the section-0 placement at the start line model applies only to a hidden robot shown in section
+  0 after its hidden lap and stays unported.
+- Robots' laps (sample times): about 60 s a lap from the first crossing, as the strip comparison
+  (`analysis/native-hud-20261028.md`) had shown natively.
+
+## The section-0 placement, ported (2026-11-12)
+
+- `m_idStartLineModel` is the WModManager action's property `0x1e9`
+  (`analysis/native-race-bootstrap.md`). `RaceTrack::start_model()` holds its frame, and the start
+  line's when absent.
+- On 19 of the 20 championship courses that frame equals the WStartLine's (`start_line()`): the same
+  position and axes, within a unit (`dr_t1` 42 in y). On `sh_t3` they differ: the model is at
+  (51522, 1959, 3601), the WStartLine at (170351, 4941, −3379), both facing +x.
+- `Body::lap_mark` stands for `+0x93f`.
+  - `count_lap` sets it, for the hidden lap (`0x4a444c`) and for the visible one (which jumps there,
+    `0x4a450c`).
+  - It is cleared once the car is out of section 0. That is provisional: the Wine reads show it 0 again
+    in section 1, and the clearing path is not identified.
+- `virtual_robot` shows a robot in section 0 with the mark set from `start_model()`, with the same
+  offsets as from the entry portal (`0x4a2108` → `0x4a2131`).
+- The native line counter already avoids double counts, so the visible path's `+0x93f` test
+  (`0x4a4489`) is not needed.
+- `native_drive_test` (courses with 4 or more sections): the player idles in the middle section
+  until a robot laps hidden in section 0, then moves into section 1. The robot shown there must stand
+  within 1000 of the start line model. The results are in TODO.md's item. Not compared with Wine.
+
+## Robots' laps over a whole race against Wine (2026-11-12)
+
+`cc_t1`, the player (Dingo-Limousine, vehicle 3) idle on the grid. Wine: the cars by the WackyAuto vtable
+`0x51295c`, their vehicles `[car+0x18]+0x88`, `+0x19f` and the clock `0x6ab2d0` (1/300 s from the course's
+load) read about once a second for 260 s. Native: `RaceSession(track, 3)`, the opponents' lap counts per
+update. Wine's crossing counts 2, 3, 4 are the native laps 1, 2, 3.
+
+| Vehicle | Wine (s): lap 1, 2, 3 ends | native (updates) | lap 2 and 3 durations, Wine s / native updates |
+|---|---|---|---|
+| 6 | 53.8, 114.7, 176.7 | 1550, 3335, 5149 | 60.9 / 1785, 62.0 / 1814 |
+| 0 | 67.5, 132.5, 197.4 | 1967, 3828, 5687 | 65.0 / 1861, 64.9 / 1859 |
+| 2 | 67.5, 132.5, 197.4 | 1629, 3481, 5339 | 65.0 / 1852, 64.9 / 1858 |
+| 4 | 72.4, 142.3, 212.1 | 2111, 4139, 6145 | 69.9 / 2028, 69.8 / 2006 |
+| 1 | 73.4, 148.2, 218.0 | 1705, 3705, 5701 | 74.8 / 2000, 69.8 / 1996 |
+| 5 | 81.3, 160.0, 238.7 | 2328, 4588, 6862 | 78.7 / 2260, 78.7 / 2274 |
+
+- Every lap duration converts at 28.6–29.3 updates a second (Wine's pace in this run; 27.3 was measured
+  on `dr_t2` under Wine's software GL), so the vehicles' lap paces match within about 3 %, in the same
+  order (6, then 0 and 2, then 4 and 1, then 5).
+- At 28.8 updates a second the first-lap crossings of vehicles 6, 0, 4 and 5 match within 1 % (6: 1549
+  against 1550). Vehicles 1 and 2 finish their first lap 300–400 updates earlier natively. Under Wine,
+  vehicles 0 and 2 cross together on every lap (one held behind the other); natively 2 leads 0 by about
+  340 updates. So the start differs for those two.
+- **The grid explains it.** Read under Wine during the countdown (a RECOMMENCER restart, then the pause
+  at clock 1.3 s): the seven slots are the native ones to the 0.1 unit, but the robots stand in other
+  slots. Slots (2845, −6676), (3142, −6632), (3439, −6588), (3735, −6544), (3038, −6951), (3334, −6907):
+  Wine 2, 0, 4, 1, 5, 6; native (seed 1) 6, 1, 2, 4, 5, 0; the player (vehicle 3) at (3631, −6863) in both.
+  The order is random in the original: `0x49d580` makes count / 2 random pair swaps from the CRT
+  `rand()` stream (`race_roster`), whose state depends on everything drawn before. So the first lap
+  differs with the slots (natively vehicles 1 and 2 start in the front row), not with the driving.
+
+## Robot lines against Wine (2026-11-12)
+
+`cc_t1`, the player idle on the grid.
+- **Wine:** the six robots' translations (`+0x54`/`+0x5c`) polled every 10 ms for 20 s (about 540
+  frames), and their vehicles (`[car+0x18]+0x88`). The watch began some 10 s into the race.
+- **Native:** `RaceSession(track, 3)`, every update for 50 s.
+
+Each Wine point was measured against the same vehicle's native path (the nearest native point):
+
+| Vehicle | Off its native path: median | 90 % | max | Off any native robot's path: median |
+|---|---|---|---|---|
+| 4 | 20 | 33 | 83 | 7 |
+| 6 | 29 | 49 | 203 | 10 |
+| 2 | 21 | 36 | 218 | 8 |
+| 0 | 104 | 6307 | 7086 | 8 |
+| 5 | 890 | 6455 | 7086 | 8 |
+| 1 | 385 | 6384 | 7084 | 8 |
+
+- **The fork:** the last three leave their native path at about (−14600, 15250) and rejoin it at about
+  (−32500, 15200). There the route splits into a north branch (z ≈ 18720 at x −23000) and a south one
+  (z ≈ 11640).
+  - Wine sent vehicles 4 and 5 north and 0, 6, 1, 2 south.
+  - The port sent 4, 0 and 1 north and 6, 5, 2 south.
+  - The choice is the weighted random draw `0x4e9610` (`choose_route_link`), so which vehicle goes
+    where depends on the random stream, which the builds do not share.
+- **The pace:** 20 s of Wine wall time cover 15.7–19.2 s of native updates per vehicle. That is the
+  original's ~28 frames a second against the port's 30 (`analysis/driven-race-20261112.md`); vehicle
+  0's 15.7 s include its branch.
+- **Conclusion:** on the same branch the robots' lines agree within about 20–30 units (90 % within 50),
+  and every Wine point lies within about 10 of some native robot's line.
+- **The start, the same day:** the watch started before the race's load, the robots standing from
+  1.14 s to 3.59 s. Their six positions are exactly the grid slots listed above (the slot assignment
+  differs, as known).
+  - Over the first 12 s each Wine path is 30–75 from its own vehicle's native path (median) and 9–32
+    from some native robot's. The 90 % figures (219–696) come from the start, where the slot order
+    differs.
+- **`dt_t1`, the same day:** the watch from the load, 40 s (1040 frames); native 300 s.
+  - Each Wine path is 22–44 from its own vehicle's native path and 7–14 from any native robot's
+    (medians). The 90 % figures are 34–148 from any robot's line, except vehicle 0.
+  - Vehicle 0 stood near (16180, 19990) from 31 to 34 s, then jumped about 18000 in 3 s to
+    (−1597, 27143): a return to the track, probably at the tram crossing. Its other excursion, near
+    (9918, 12445) for 2.5 s, is also off every native line.
+  - Pace: 40 s of Wine wall time cover 923–1203 native updates (31–40 s). Vehicles 4 and 0 trail
+    (923, 958): vehicle 4's line is on the native ones; vehicle 0's includes the return.
+  - Not compared: the trams' effect (the native trams run, but no native robot returned to the
+    track in this window).
+- **The other 18 courses, the same day:** the same watch from the race load for 40 s (1015–1080 frames
+  each), run by one script that restarts the original for each course. Native: 300 s per course.
+  - Each cell gives three distances, in units: off its own native path (median), off any native
+    robot's path (median), and off any native path (90 %), each Wine point measured against the
+    nearest native point.
+
+| Course | vehicle 4 | vehicle 0 | vehicle 6 | vehicle 5 | vehicle 1 | vehicle 2 |
+|---|---|---|---|---|---|---|
+| `cc_t2` | 29/8/92 | 42/11/104 | 38/12/122 | 26/11/91 | 32/10/106 | 33/11/66 |
+| `cc_t3` | 29/8/15 | 35/10/59 | 40/15/86 | 25/9/94 | 30/11/40 | 43/12/51 |
+| `cc_t4` | 20/8/26 | 252/9/44 | 30/12/43 | 27/10/40 | 1263/11/40 | 79/10/42 |
+| `sh_t1` | 26/8/24 | 28/8/27 | 31/9/27 | 22/9/25 | 27/8/54 | 27/8/22 |
+| `sh_t2` | 17/8/20 | 27/7/18 | 31/9/110 | 23/9/25 | 28/8/46 | 24/6/25 |
+| `sh_t3` | 23/7/17 | 24/7/17 | 27/8/26 | 19/8/25 | 25/7/20 | 25/7/19 |
+| `sh_t4` | 36/10/59 | 27/8/23 | 35/9/34 | 31/9/62 | 26/10/52 | 29/8/24 |
+| `dt_t2` | 19/4/22 | 21/5/21 | 38/17/513 | 19/6/26 | 19/5/29 | 26/9/74 |
+| `dt_t3` | 22/8/41 | 27/9/35 | 27/9/53 | 37/9/37 | 24/8/58 | 23/8/28 |
+| `dt_t4` | 32/12/42 | 31/10/37 | 29/12/46 | 24/12/62 | 245/12/94 | 30/11/35 |
+| `ct_t1` | 24/7/20 | 27/7/23 | 29/7/26 | 22/7/31 | 21/7/26 | 27/7/17 |
+| `ct_t2` | 28/8/25 | 29/8/21 | 37/12/57 | 22/10/83 | 25/9/46 | 27/8/20 |
+| `ct_t3` | 28/10/38 | 32/10/60 | 45/17/156 | 21/10/78 | 31/10/64 | 33/10/59 |
+| `ct_t4` | 39/10/28 | 32/10/25 | 41/14/65 | 31/11/41 | 33/12/41 | 31/10/27 |
+| `dr_t1` | 21/9/45 | 31/8/36 | 38/13/115 | 22/9/54 | 31/8/39 | 30/8/51 |
+| `dr_t2` | 26/9/63 | 28/8/25 | 33/8/60 | 24/8/35 | 27/9/74 | 28/7/22 |
+| `dr_t3` | 23/6/77 | 35/11/75 | 33/14/142 | 28/10/119 | 20/8/101 | 44/13/100 |
+| `dr_t4` | 21/7/25 | 28/7/21 | 38/11/251 | 21/8/76 | 26/7/33 | 30/7/20 |
+
+  - Every Wine robot lies within a median of 4–17 of some native robot's line, so the course choice
+    in the script was right each time (a wrong course would be thousands off).
+  - Own-vehicle medians are 17–45, except `cc_t4` vehicles 0 (252) and 1 (1263) and `dt_t4` vehicle 1
+    (245): another branch at a fork, as on `cc_t1`.
+  - The larger 90 % figures are two incidents, not line differences:
+    - `dr_t4` vehicle 6 (251): from 31.9 s it stays exactly at (−40763, −120830), about 251 off the
+      line its native twin passed at update 866. With the player idle on the grid, this is probably
+      the original hiding a far robot (both builds hide them); it stopped slightly elsewhere.
+    - `dt_t2` vehicle 6 (513): from 27 s to the end of the watch it moves to and fro around
+      (55400, −4300), 300–600 off every native line. The original's robot is trapped there for at
+      least 13 s, while every native robot passes. Reproduced in a second run (33 s). It is the
+      fountain's hold on a far robot, traced in `analysis/lap-line-geyser-20261106.md`; not resolved.
+- **So the robots' lines agree with the original on all 20 courses.** Branch choice is random. One trap
+  seen only under Wine (`dt_t2`'s fountain holding a far robot) is open.
+

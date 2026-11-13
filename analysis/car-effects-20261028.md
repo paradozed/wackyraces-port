@@ -192,7 +192,7 @@ When the frame material's `SMOO` (GMAT `+0x68`, chunk `0x4f4f4d53`) is 0, the qu
    - surface bit 4 or 0xa0: shade 0x30;
    - surface bit 2 while `+0x25b & 1`: shade 0x5c;
    - otherwise inactive.
-3. A = ftol(contact − w × X), B = ftol(contact + w × X), where X is the car's X axis (`0x405065`) and w is `+0x44b`, the vehicle's half width from the table `0x52b804` (24, 8, 6, 6, 7, 16, 8 for vehicles 0..6; `0x4d64e6` sets 0x18 during an item effect).
+3. A = ftol(contact − w × X), B = ftol(contact + w × X), where X is the car's X axis (`0x405065`) and w is `+0x44b`, the vehicle's half width from the table `0x52b804` (24, 8, 6, 6, 7, 16, 8 for vehicles 0..6; `0x4d64e6` sets 0x18 during an item effect: MonsterTires' init, ported 2026-11-11, `analysis/weapons-bomba-20261029.md`).
 
 **`+0x25b`** = `+0x25f || +0x263` (`0x47060f`).
 
@@ -303,7 +303,7 @@ Native:
 Provisional:
 - **Robots' yaw kick** (20261029). It is now on, as in WPC: robots restart every update above the limit. Enabling it first sent `dt_t1`'s robots into orbits at section 0's exit polygon. The cause was a route bug, fixed in `race_robot` (`analysis/robocar-ai-20261028.md`): a link to `0xffff` must give goal 1 its point. With the kick, the robots on `sh_t1` get stuck more often against the tunnel walls (the provisional wall response); there the best robot does 1 lap in 120 s, down from 2.
 - the probe diagonal is rebuilt from the car's current yaw and speed rather than the stored probes;
-- the item-effect case (`+0x385` = 0 forces x = 0) is not handled;
+- the item-effect case: `+0x385` = 0 (MonsterTires) forces x = `0x510124` = 0.0 (`0x46ae73..0x46ae85`); ported 2026-11-11 for the player and the robots. `native_drive_test` (dt_t1, vehicle 2, 120 updates steering after 150 accelerating): 82 slide updates, 0 with MonsterTires; with the rule disabled, 82 and 82 (the check fails);
 - `+0x8a7` < 4 is taken as grounded.
 
 Results of `native_drive_test` on the four courses (before the slide → with the slide → with the surface modifiers too; all checks pass):
@@ -515,3 +515,53 @@ The differences match the original's quantisation to its 16-bit formats.
 - The quantisation itself.
 - Whether textures loaded later in the race (clones) are also halved: in the original, every
   conversion while the flag is set.
+
+## The drowning splash recorded in both builds (2026-11-12)
+
+`cc_t1`, holding Up from the grid into the river, 15 frames a second in both builds (x11grab):
+- **Wine:** two small WalkOnWater ring sets as the car goes in. They spread and merge into one large,
+  bright swirl that stays around the splash until the return. The column rises from about 0.4 s after the
+  first ripple and lasts about 0.8 s.
+- **Native:** the column, the foam patch (the ring model) and the timing are close. The ripples form two
+  ring sets side by side, one per front wheel, for the whole drowning: the car stays frozen on the bank,
+  and so do its wheel contacts.
+- **Tried and withdrawn:** no wheel contacts while drowning. The second ring set went, but so did the
+  swirl that Wine keeps, so the original goes on spawning ripples while the car sinks.
+  - The spawn `0x47bb4c..0x47bb8a` has no drowning test: even counter, a contact that is not the
+    `123456.79` sentinel, surface `0x800000`.
+  - At the drowning's start the car hides its two body models (`+0x136`/`+0x13a`, the pair swapped
+    by `0x469710`) and `[+0x2e0]`'s object with flag `0x100` (`0x470067..0x470093`), and sets
+    `+0x8e7` = 40. The effects object is not hidden.
+  - Not ported: where the sinking car's front-wheel contacts are. It needs the original's drowning
+    motion (the car rolls in, then sinks; `+0x947`), which follows from the provisional native
+    drowning trigger.
+- Also seen: the native window showed the X pointer at its centre (x11grab draws it). The original
+  hides it, so the port now does too (`linux_platform.cpp`, a blank cursor; `SetCursor(NULL)`
+  `0x4ae619`/`0x4abece`, `ShowCursor(FALSE)` until hidden `0x4ac0b0`).
+
+## Brake marks on `dt_t1` against Wine (2026-11-12)
+
+- **What the original computes.** Wine memory, polled every 10 ms on the player car through a hard
+  brake on `dt_t1`'s street (the same timed XTest keys in both builds, about 25 s after the start):
+  - `+0x25b` and `+0x25f` are 1 from the brake until the car stops;
+  - the four wheel contacts' surfaces (`+0x447`, `+0x45b`, `+0x46f`, `+0x483`) are all 2;
+  - the speed `+0x3ef` falls from 0.38 to 0.
+  So by `0x47a61b..0x47a63d` (surface 4 or `0xa0` marks; 2 marks only with `+0x25b & 1`) the original
+  builds shade-`0x5c` segments, exactly as the port does: 4 a frame, up to 64, gone about half a second
+  after the skid.
+- **What is drawn.** The rear view held during the brake shows two grey strips along the port's wheels.
+  A control run with the trail drawing off removes them, so they are the marks. Wine shows nothing
+  there. Without the port's lift of 5 the strips still show, so the truncated coordinates alone do not
+  hide them.
+- **The renderer.** Wine runs the original with renderer 1 (`0x6f5958` = 1; `0x6f4650` POUSSIERE = 0).
+  - `0x47a7c0` draws renderer 0 in software (`0x47a9f0..`, the lift of 5).
+  - Renderers 1 and 2 share one vertex list (`0x47b069..`): the points as stored (integers, no lift),
+    r = g = b = the shade, alpha = the fade.
+  - Renderer 1 passes it to the backend at `0x26fae78` (`0x404269`, mode `0x18`, `0x47b2ce`); renderer 2
+    to the Direct3D device's slot `+0xf0` (`0x47b30d`).
+  - The port follows renderer 2, and Wine's renderer 1 still showed the shade-`0x30` marks on
+    `cc_t1`'s sand (2026-10-29). So the missing `0x5c` marks are either renderer 1's backend or the
+    depth of the flat street.
+- **Not settled:** what renderer 2 shows on a real Direct3D device. That needs the original on a
+  machine where it picks Direct3D. The port's provisional lift of 5 stays.
+

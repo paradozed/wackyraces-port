@@ -88,6 +88,7 @@ public:
     struct TrackSegment {Vec3 a{},b{};bool active=false;int shade=0,fade=0;};
     using TrackStrip=std::array<TrackSegment,16>;
     void set_track_width(float half_width) {track_width_=half_width;}
+    float track_half_width() const {return track_width_;}
     const std::array<TrackStrip,4>& tracks() const {return tracks_;}
     // 0x52b804 by vehicle: the tracks' half width (0x469c78).
     static float track_width(int vehicle);

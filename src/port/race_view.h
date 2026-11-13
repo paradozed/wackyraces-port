@@ -27,7 +27,11 @@ public:
     void model_colours(int vehicle,std::array<float,3>& lo,std::array<float,3>& hi) const;
     RaceView& operator=(const RaceView&)=delete;
     void draw();
+    // One player: drawn inside hud() before the gauge and the speedometer
+    // (the pause's dim, linux_main); empty otherwise.
+    void set_late_dim(std::function<void()> f) {late_dim_=std::move(f);}
 private:
+    std::function<void()> late_dim_;
     // smooth: the frame material's SMOO (GMAT +0x68), which 0x42d280 tests.
     // film: a GD3DFilm frame (drawn by 0x4b5550); smooth/sill: its material's
     // SMOO and SILL are nonzero.
@@ -47,6 +51,8 @@ private:
     Sprite sprite(uint32_t material);
     // 0x42e330: align 4 centres on x; the colour (0..1) tints the font.
     void text(const std::string& value,int x,int y,int align,Colour colour=Colour{1,1,1});
+    // 0x4aa497: the battle winner's pulsing colour (255, v, v).
+    Colour battle_pulse() const;
     void glyph(const Glyph& g,int x,int y,Colour colour=Colour{1,1,1});
     int text_width(const std::string& value) const;
     void hud();
@@ -69,7 +75,7 @@ private:
     WpcTexture* flake_=nullptr;
     // WCarFx's shadow ray (0x47c180): the shadow's frame for a car, kept from
     // the last update that found ground within 50 units above the car.
-    bool shadow_frame(size_t slot,const RaceCar& car,Matrix4& out);
+    bool shadow_frame(size_t slot,const RaceCar& car,Matrix4& out,bool frozen=false);
     std::map<size_t,Matrix4> shadow_frames_;
     size_t knocked_=0;
     std::vector<WorldBatch> splash_column_,splash_ring_,ripple_;
@@ -195,6 +201,9 @@ private:
     void quad(WpcTexture* texture,float x,float y,float width,float height,bool mirror,float alpha,
               float angle=0,float px=0,float py=0);
     void powerup_panel(int human=0);
+    void gauge(int human);
+    void late_panel(int human); // the gauge, then the gadget and weapon icons
+    void radar(int human);      // the battle's radar disc and the opponent's dot
     void progress_strip();
     void standings();
     void step_hud();

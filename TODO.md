@@ -37,16 +37,29 @@ code before starting one. The follow camera (`0x478070`) has since been ported
     - Splashes and ripples follow their car.
   - Left:
     - The crossing test is the far robots' route rule, not the original's portal test `0x4a1a20`.
-    - The skid marks (`0x47a7c0`, matrix from `0x40250e`) stay in place.
+    - The skid marks (`0x47a7c0`) follow their car's group since 2026-11-12 (`0x4a8e60` on the parent
+      node `+0x10`, the car); not compared with Wine.
     - A dropped weapon outside every slot box keeps 0xffff in the original (always drawn).
-    - With two players, both enabled sets are drawn (the second tracker is not traced).
+    - With two players, both enabled sets are drawn: traced 2026-11-12, as the original (the enabled flag
+      is global, both trackers set it; the seam's camera group is reset per view), section-culling note.
     - Robots and weapons across the seam were not compared with Wine.
 - [ ] Runners/gates on `dr_t2` (2026-11-07): the scene matches Wine (sky and fog fixed:
-  `analysis/on-screen-checks-20261107.md`). Not compared: the gates' timing, or a car crushed by the runner.
+  `analysis/on-screen-checks-20261107.md`). The gates' timing matches (2026-11-12, Wine memory reads with
+  the profile's tracks unlocked in memory: the cycle starts at the scene's clock reset and lasts about
+  468 updates, as natively, `analysis/roto-magnet-volcano-20261106.md`). The runner's squash is the
+  original's rule (`0x4cefb7..0x4cf01d`: in state 0 each update gives the cars touching a runner, mask
+  `0x100`, type `0x200` when idle) and `native_drive_test` now checks it on `dr_t2` (the player parked
+  on the runner's path is squashed at update 204); not seen under Wine.
 - [ ] `sh_t3` logs on screen (2026-11-07): the resting logs, the hand-off and the struck log match Wine
   (frames and the six WLogModels' world matrices `+0xc0`, update for update). Once, at 02:00 with
   robots past, Wine showed a seventh log-like object on the left road edge for at least 12 s. It is
-  not identified (six WLogModels only; perhaps a robot's item).
+  not identified (six WLogModels only; perhaps a robot's item). (2026-11-12: `sh_t3` is reachable under Wine with
+  the profile unlocked in memory, and the car can be moved by shifting its fifteen position copies, but a long
+  jump leaves the section culling behind, `analysis/runtime-capture.md`. Later the same day: the car hopped
+  there along a robot's line recorded natively, 233 steps of all fifteen copies, then held at (232800, −4600);
+  the view catches up by race time 02:04, and from 02:04 to 02:49 no log-like object showed on the left road
+  edge. The car kept its own heading, not the earlier yaw −1.107, so the view differs from the sighting's;
+  not identified.)
 - [ ] Test driver (2026-11-07, `analysis/test-driver-20261107.md`): all 20 courses pass `native_drive_test`.
   - The port's RoboDriver now steers the player's car through its keys, and releases the throttle in
     turns past 80% of the 40-degree lock. The look-ahead planner takes over after 300 flat updates.
@@ -90,8 +103,25 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   turn sign and the new weapons): cc_t1 3 laps 116.6 s (1st), sh_t1 1 lap
   97.0 s, dt_t1 112.2 s (1st), ct_t1 105.3 s (1st); sh_t1's robots best 2
   laps in 120 s; the championship check takes the points of its place.
-- [ ] Slides and skid marks not compared with Wine; the item-effect case
-  (`+0x385` = 0) of the slide.
+- [ ] Slides and skid marks not compared with Wine. (The item-effect case, `+0x385` = 0 during
+  MonsterTires forcing the slide's x to 0, `0x46ae73`, is ported since 2026-11-11.)
+  - Tried 2026-11-12 on `dt_t1`, both builds driven by the same timed XTest keys, about 25 s after the start.
+    - A hard brake from about 0.4, then on, viewed with the rear view: no mark showed on the cobbles in
+      either build.
+    - A sharp left at full speed: Wine showed no mark either; the port's car was hit by a robot's item first.
+    - Not conclusive: whether `dt_t1`'s cobbles take marks (the surface table) was not checked, and no
+      road surface known to mark was tried.
+    - By the way: the port's drift at the green light came from contact with the robots still on the
+      grid; after idling, a straight run stays at yaw −1.57.
+  - Later the same day, with the rear view held during the brake, plus Wine memory reads:
+    - the original sets the skid flags (`+0x25b`/`+0x25f` = 1) and all four wheels are on surface 2, so
+      it builds the same shade-`0x5c` segments as the port;
+    - the port draws them as two grey strips (a control run with the drawing off removes them), and
+      Wine's renderer 1 shows none;
+    - renderers 1 and 2 share the vertex list `0x47b069..`, then go to different backends (`0x26fae78`
+      against the Direct3D device's `+0xf0`), and the port follows renderer 2;
+    - so whether the marks show needs the original on a real Direct3D device, not Wine
+      (`analysis/car-effects-20261028.md`).
 - [ ] Hit visuals (2026-11-07, `analysis/hit-smoke-20261107.md`):
   - Done: the smoke clones of 8/0x40/0x80 (`0x47ed6e`, flamesmoke `0x418310`) and the tint of
     every batch of the car model. Compared with Wine on `cc_t1` (a hooked 0x80 hit on the player):
@@ -103,7 +133,8 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   - Done 2026-11-08: the tank gun's hit (type 2, `0x47e277`): the mound `0x393` with its segment
     overrides (`0x437f70`), the car hidden through counter 41, the eleven WReszecske chunks, the
     flattened mound. Compared with Wine (same look; timing and random draws not aligned).
-    Open: whether the shadow hides with the car (`+0x32` not identified).
+    The shadow (2026-11-11, static): `+0x32` is the body model; the shadow `+0x2e0` is flagged only
+    by the far mode (`0x47c1bb`), so it stays drawn during the hit as natively (not re-checked under Wine).
   - Not drawn: the stars' WPalAnim; whether `0x43b190`'s squash persists past stage 2.
   - The storm cloud's `+0x152` is its GD3dSprite's angle about the view axis (`0x419eef` ->
     `0x43b690`), so the cloud turns rather than fades in state 2 (2026-11-08, not compared with Wine).
@@ -138,8 +169,8 @@ code before starting one. The follow camera (`0x478070`) has since been ported
     0 and 1 play body clip 0, 2 turns segment 5 about z by 153° an update, 5 locks segment 6's x
     rotation at 35°; TurboSpeed: vehicle 1's segment 1 scale lock, vehicle 4's clip 0 then 2 at the
     end). Captures show vehicle 4's clubs swinging and vehicle 1's umbrella opening; vehicle 2's
-    propeller is not seen from the follow camera. Not compared with Wine. Open: TurboSpeed's `+0x70`
-    = 1 for vehicle 1 (no reader traced); the body steps once per update (the original per draw);
+    propeller is not seen from the follow camera. Not compared with Wine. TurboSpeed's `+0x70`
+    = 1.0 for vehicle 1 (`0x4d7015`) has no reader (2026-11-11: none in the 11 slots of `0x5162c8`); the body steps once per update (the original per draw);
   - the per-vehicle ends (`0x4d5ba8`): the WFire hiding of vehicles 0 and 5 is followed since
     2026-11-09 (`analysis/wfire-20261109.md`); the body clips of 2 and 5 at the end are not;
   - the robots' own gadget (2026-11-08, a static reading): the controller gives a robot its own
@@ -188,9 +219,10 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   2026-11-09: the WPaintFx class is never instantiated, and `+0x3a7` has no reader), not compared with Wine. (The brick flags 0x100000/0x200000 of `0x499243` are
   the loop seam's crossing marks: the shot's velocity turns by the loop transform, ported 2026-11-09.)
 - [ ] Items still missing (2026-11-01): MonsterTires' physics (since 2026-11-09 its stages, 289 updates,
-  the tyre models, the hidden wheels and the raised model `+0x92f` are ported; the contact spread
-  `+0x15b` = `0x52b800[vehicle]` (end: `0x52b7f8`), the wheel records `+0x44b` = 24 (end:
-  ftol(`0x52b804`)) and the original's `+0x385` = 0 are not); every weapon icon 11..25 now has an effect (Tnt, Storm,
+  the tyre models, the hidden wheels and the raised model `+0x92f` are ported; the wheel records
+  `+0x44b` = 24, the tyre tracks' half width (end: ftol(`0x52b804`)), since 2026-11-11; the contact spread
+  `+0x15b` = `0x52b800[vehicle]` (end: `0x52b7f8`; read 2026-11-11 as midpoint + (probe − midpoint) ×
+  spread, `0x46ca33`, `analysis/vertical-motion-20261030.md`, waiting on the probe solve) and the original's `+0x385` = 0 are not); every weapon icon 11..25 now has an effect (Tnt, Storm,
   Detour, Flipper, BootKicker, Breath, Missile, TankGun, Boomerang,
   Landmine, OilSpill, BeeHive, FallingTree, BrickWall, Paintball), and the
   robots use them.
@@ -206,8 +238,14 @@ code before starting one. The follow camera (`0x478070`) has since been ported
 - [ ] WKBumm not compared with Wine (cactus not reached with key scripts);
   the shadow sits further from the airborne native car than in Wine, and the
   native car still drowns on the bank.
-- [ ] Winner scenes, remainders: not compared with Wine; the scene's music
-  (no `Music\Win*.snd`; native silent), the GDCamera, the WMenuItem's own placement.
+  - The drowning splash was recorded in both builds (2026-11-12, `analysis/car-effects-20261028.md`). The
+    column, foam and timing are close. Wine's WalkOnWater ripples merge into one swirl as the car sinks;
+    the port's stay as two ring sets at the frozen front wheels. That waits on the original's drowning
+    motion (`+0x947`, the car rolling in and sinking).
+- [ ] Winner scenes, remainders: not compared with Wine; the GDCamera, the WMenuItem's own placement.
+  (The music is settled, 2026-11-12, `analysis/native-championship-i-20261028.md`: the sound manager's play
+  `+0x4c` (`0x4273a0`) first destroys the running stream (`+0x44` = `0x427430`, `+0xbc`), then opens
+  `music\WinMean.snd`, which the disc lacks. So the scene is silent after the course music stops, as natively.)
 - [ ] GDHModel remainders. Done 2026-11-08 (`analysis/mtnl-motion-20261028.md`): controller 0 on
   the cars' bodies (`SwayController`; rotation gains `+0x17e` by vehicle from the car init `0x469bf0`;
   compared with Wine, exact on segment 0), and the scale overrides `0x437f70` (the tank hit). Open:
@@ -224,6 +262,11 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   (Wine-checked). Open: untextured parts; whether 2D draws filter (native
   keeps nearest); the other `0x4b1ad0` states (dither, specular) not compared. Fog follows the
   table-W-fog branch, far − 3000 to far (`0x4ae1c3`, `0x4b1c65`; Wine-checked on `dr_t2`, 2026-11-07).
+- [x] Steering from rest (2026-11-12, `analysis/steer-creep-20261112.md`): a steering key at a speed in
+  [0, 0.1) sets 0.05 and `+0x257` = 1 (`0x4677da`), so a stopped car turns on a small circle; compared
+  with Wine on the `cc_t1` grid, same circle. The release's coast to 0 and the 0.0815 rad a frame match Wine
+  exactly. The joystick's analog branch skips it (`axis_steer`). (The `+0x3ff` lock is never set: its only other
+  writer is the car init, 1.) The analog branch and the keys' order are ported too (2026-11-12).
 - [ ] Recover WackyAuto wall/contact response (`0x46a4a0` after the probe
   queries), the gravity scale, the vertical/ramp response, out-of-bounds and
   respawn rules and `0x478070`; replace the native edge guard, ramp launch
@@ -275,8 +318,9 @@ code before starting one. The follow camera (`0x478070`) has since been ported
     (`analysis/weapons-bomba-20261029.md`).
 - [ ] Robot items, remainders (the weapons' and FireSiren's aims are each icon's WPowerUpSprite
   `m_range`/`m_visangle` since 2026-11-08, read under Wine, `analysis/robocar-ai-20261028.md`):
-  FlyPower use on `+0x1c7` 1/`0xb`,
-  battle mode (`+0x34`, `0x4e9050`), the section-cell object list.
+  FlyPower use on `+0x1c7` 1/`0xb`, the section-cell object list. (The robots' battle mode, `+0x34`,
+  `0x4e9050`, is unreachable: battle is two players only and the menu never makes a robot opponent,
+  `analysis/battle-20261102.md`; the native one-player battle exists for tests only.)
 - [ ] Avoidance remainders: not compared with Wine; the target-speed angle
   while avoiding; stale `+0x315/+0x321` with fewer than two shared
   vertices; edges across sections; the two-player gate (`0x6f2d00+0xf30`).
@@ -312,8 +356,8 @@ code before starting one. The follow camera (`0x478070`) has since been ported
     by update (its single ray and probes are taken to be the same).
 - [ ] Robots trapped on wall-flagged slopes (surface `0x1000001`, throttle
   cut `0x4e82cd`): off `cc_t1`'s bend near (-60600, 12400) and `sh_t1`'s
-  jump (22000, -19600). The human slide `0x46a5a3..`/`0x4721f0` is not
-  ported, and does not apply to robots (`0x46c858` clears `+0x157`). With
+  jump (22000, -19600). The human slide `0x46a5a3..`/`0x4721f0` is ported
+  (`RaceSession`'s glide, `player_glides`) and does not apply to robots (`0x46c858` clears `+0x157`). With
   the player parked at the `cc_t1` bend the native line matches Wine's
   (x -60930 against -60849 at z 13000, no fall in 108 passes): the falls
   only come in the always-near test pack (first lap), not compared.
@@ -324,12 +368,21 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   native robot reaching the crossing at 0.817 (always-near test pack)
   flies over the dip before it and stops outside the zone, keeping state
   5; the original's robots arrived at 0.57..0.66.
-- [ ] Other linked nodes: cameras and portals; whether a disabled WPowerUp
-  is untouchable for robots (native: yes) is not checked under Wine.
-- [ ] Hidden robots, remainders: their lap trigger (the visible cars now use
-  the original's `0x49a2f0`) (native: where the
-  run passes the start line's distance into section 0, provisional); the
-  section-0 placement branch with `+0x93f` set (`0x4a2108`); a robot that
+- [ ] Other linked nodes: cameras and portals. (A pickup not in state 0 is untouchable for every car,
+  robots included, as natively: the car update tests `+0x142` before anything else, `0x46aad5..0x46aae0`,
+  and the robot flag `+0xc0` only skips the sound, `0x46ab05`; static reading 2026-11-12,
+  `analysis/native-powerups-20261028.md`; not seen under Wine.)
+- [ ] Hidden robots, remainders: (their lap trigger is ported since 2026-11-12: the lap pass `0x4a43f4`
+  counts a hidden car in section 0 coming from a later one, `+0x1bb` > 0, past the start line's
+  distance into row 0, the manager's `+0x34` from `0x49e552`; `+0x1bb` is the previous section, kept by
+  the trackers `0x4a13ae`/`0x4a234d`/`0x4a201d` and cleared by a forward crossing; and a robot shown
+  into a row is no longer hidden at once on the previous section's ground, which on `dr_t2` held
+  every robot hidden in section 0 with the player two sections ahead, provisional grace of 60
+  updates; `analysis/robocar-ai-20261028.md`); (the section-0 placement with `+0x93f` set, `0x4a2108`,
+  is ported since 2026-11-12: a robot shown in section 0 right after its lap stands at
+  `m_idStartLineModel`'s frame, 611–709 from it on the 11 four-section courses, against 1100–4900 from
+  row 0's portal without the branch; the mark's clearing off section 0 is provisional; not compared with
+  Wine); a robot that
   goes far (not hidden) with `+0x1c7` = 5 outside a crossing's zone stays
   put until it leaves the player's rows (native: after the airborne trap
   below, with the player parked in dt_t1's section 2).
@@ -337,11 +390,17 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   written, at `0x46a47e`/`0x46b3b1`/`0x46b55e`, with no direct reader; voice
   event 4 is ported; the ±6° turn's sign follows RL − RR, `0x46b662`,
   2026-11-01.)
-- [ ] Vertical motion remainders: rays along the car's down axis (native
-  rays are vertical; the second `sh_t1` ramp pitches 0.49 against 0.44), the
+- [ ] Vertical motion remainders: (the second `sh_t1` ramp's pitch matches: per frame under Wine it reaches
+  0.493, the port's 0.491; the old 0.437 was a sampling gap, 2026-11-12, `analysis/vertical-motion-20261030.md`), the
   robots' ×1.3 ray, the lift ray (`0x512a44`), the contact-point spreads
   `+0x15b`/`+0x15f`, the `0x800000` return (`0x4a6730`).
-- [ ] Robot lines not compared with Wine (only lap times); the original's
+- [ ] Robot lines (compared with Wine on `cc_t1`, 2026-11-12: on the same branch within ~20–30 units; the
+  fork's branch is the random `0x4e9610` draw, and from the grid start too; `dt_t1` too, medians 22–44, one robot returned
+  to the track under Wine at the tram crossing; the 18 other courses too: medians 4–17 from some native
+  robot's line, `analysis/robocar-ai-20261028.md`; open: `dt_t2`'s fountain holds one far robot under Wine for 13–33 s,
+  reproduced, where the native far step carries it through; traced in `analysis/lap-line-geyser-20261106.md`: the goals, the
+  link draw and the far step agree with the port; it is a far-mode loop between route polygons 132 and 270 that
+  only a wide approach plus the eastern link produces, never seen natively; no rule difference found); the original's
   far-mode route lookup across sections (`+0x2c5`) and the 5% lap gap are
   not traced.
 - [ ] Robots trapped against walls with the robots always near (seeds 0..5,
@@ -363,15 +422,20 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   edge-guard stop), so the remaining difference is only that its unsticks
   never take it to a new line there (goals behind the cliff stay the same). `native_drive_test` asks one lap per
   robot on `sh_t1`.
-- [ ] Power-up effects: the `WPU_*`/gadget actions of the template spawned by
-  `0x4d2970`; pickup sound (`0x44c380`). (The item keys now come from the
+- [x] Power-up effects (closed 2026-11-12): every gadget 0..10 and weapon 11..25 action of the template
+  spawned by `0x4d2970` has its effect (`analysis/weapons-bomba-20261029.md`); the pickup sound
+  (`0x44c380`) is ported since 2026-11-02 (`analysis/native-powerups-20261028.md`). Their remainders are
+  the MonsterTires, FlyPower, weapon-visual and backward-use items. (The item keys come from the
   MenuPrefs table: '/' gadget, right Shift weapon.)
+- [x] The pickup take's `+0x132 <= +0x13a` test (`0x46aab8`) is WHotSpot's `m_iCounter <= m_iUnlockCount`,
+  always true on the 25 shipped files (0, max 0, unlock 1), so equivalent natively (2026-11-12,
+  `analysis/native-powerups-20261028.md`).
 - [ ] Rest of the object query `0x4a5730`: the route-grid cell scan (native
   tests every course object; `WPrimCylinder` 0x482310, car contacts and
   the 0x10000/0x40000 hits are ported); compare pickup range and roulette
   outcomes with Wine.
-- [ ] Pause remainders: page 243 per player (the strings 198/199 are drawn since
-  2026-11-02, `MenuController::text_override`); the x shift of the list seen under Wine
+- [ ] Pause remainders: (page 243 is not shown in two players either, Wine 2026-11-12: the option list at
+  once, `analysis/pause-menu-20261030.md`; its list sits about 20 px higher than the port's there: static, not a slide, the page data and the layout `0x48bab0` are the same in both modes, source not found, 2026-11-12); the x shift of the list seen under Wine
   between the root and the option node; force-feedback output (`0x417180` on reload).
   - Player 2 has no pause key on the keyboard (2026-11-08): device bit `0x2000` (input `0x800`, the
     pause) is bound only to player 1's Escape (`0x40c87d`, `0x40c9ce`, list 1). Player 2's lists
@@ -391,14 +455,44 @@ code before starting one. The follow camera (`0x478070`) has since been ported
     original's __ftol would not throw).
 - [ ] Race audio, still open (the power-up voice events of the Flipper,
   BootKicker and BeeHive are ported); the exact Windows
-  DirectSound3D pan/HRTF; no Wine capture of the 3D levels.
-- [ ] Battle remainders: the robots' battle mode (`+0x34`, `0x4e9050`; only a
-  one-player battle, which the menu never makes, has a robot), the winner
-  text's pulsing colour, the route choice `+0x8c4`; not compared with Wine
-  (`analysis/battle-20261102.md`).
-- [ ] Menu remainders: right-aligned option labels sit 5-9 px (1024 wide) left
-  of Wine's; the W image natively drawn over the keyboard on the
-  controls page (absent under Wine). (The width routine's -4 branch `0x42dd99` needs the renderer
+  DirectSound3D pan/HRTF; no Wine capture of the 3D levels (2026-11-12: Wine runs silent with an ALSA file
+  tap, `analysis/runtime-capture.md`, but the capture's sample format is not settled).
+- [x] Battle remainders (closed 2026-11-12; the end screen, which needs five hits, was not compared
+  under Wine): the robots' battle mode (`+0x34`, `0x4e9050`; only a
+  one-player battle, which the menu never makes, has a robot), (the winner
+  text's pulsing colour is ported since 2026-11-11, `0x4aa497`; the route `+0x8c4` is always 0, also
+  2026-11-11: its three writers in `0x49dc90` store a zeroed `esi`, so route 0's first row, as natively).
+  The robots' battle mode is unreachable from the menu (`menu.WGM` has one battle node, start code 15,
+  two players). Compared with Wine 2026-11-12 (`cc_b`, two players, `analysis/battle-20261102.md`):
+  - (fixed 2026-11-12: the radar; `0x4aa120` puts the opponent's dot in the manager's `+0xf94..+0xfa0`
+    and the manager film's battle branch `0x499b96` draws frame 0, the disc, at (40, 40) or (32, 32) per
+    viewport and frame 1, the dot, there; `m_nRadarRadius` 20 and `m_nRadarRange` 10000 at run time;
+    `RaceView::radar`, matched to Wine's discs and dots within 2 px);
+  - (fixed 2026-11-12: Wine shows one hit count per half, child 14, the opponent's hits received;
+    child 13, the own count, shows only in one player, `0x486105`; the port now draws the right one only);
+  - (fixed 2026-11-12: the top half's camera; Wine memory reads put player 1's camera at view 0, 800
+    back and 100 up, player 2's at view 1, 900 and 350, and one Return switches player 1 to 900/350:
+    the Return that starts a battle, which has no countdown, reaches player 1's CAMERA key; the port
+    now gives a menu-started battle's first update a view press, provisional mechanism).
+- [ ] Menu remainders: (the right-aligned option labels' 5-9 px shift is fixed since 2026-11-11: the
+  original lays text out in screen pixels, spaces 10 px unscaled and each glyph's step truncated,
+  `0x42dc50`/`0x42de80`; the options page's labels match Wine to the pixel but VOIX (2 px) and
+  LUMINOSITE (1 px); the key-help GDPsText line takes a provisional fitted narrow of 1, path not traced,
+  `analysis/menu-profiles-20261101.md`).
+  - Wine walk 2026-11-11 (main menu → 1 JOUEUR → COURSE SIMPLE → car → environment → variant → race,
+    `analysis/menu-profiles-20261101.md`): the car page's texts match; the closed dr banner is now
+    greyed (page children 2r/2r+1 by row, `0x490d60`/`0x4910a0`/`0x4913f0`); the track pages' three
+    mask-0 icons of brick `0x23d` are hidden (provisional). The pause's dim is ported since 2026-11-11 (the
+    renderer's screen wipe, slots `+0xd0`/`+0xcc`/`+0xc8` = `0x4ae6f0`/`0x4ae6b0`/`0x4ae730`,
+    `analysis/pause-menu-20261030.md`). Open: the port's menu is ~3.6% brighter than Wine's (pixel ratio 0.964:
+    Wine's 239/230/222 against 248/240/232; the region means had said 7%). Wine's frames use only
+    R5G6B5 levels (32 red, 64 green values) and the original sets 16 bpp (`ddraw7_SetDisplayMode … bpp
+    16`), so the original draws into a 16-bit surface; how 248 becomes 5-bit 29 (texture conversion or
+    Wine's) is not traced, and the port keeps 8 bits per channel; behind the pause Wine keeps the power-up gauge and the speedometer undimmed (1.0; the port draws them after the wipe since 2026-11-11, provisional order) and dims the item icons to 0.64 (explained 2026-11-12: compared on the same picture, the uncharged icons' opacity is 0.36 = 0.6², provisional, not 0.6; the port now gives 0.638/0.630, `analysis/native-hud-20261028.md`). The opening wipe at each scene load (`0x431690` → renderer slot `+0x1c`
+    → `+0xcc`(0)) is ported too and matches a Wine recording of a race load (timing within 0.1–0.2 s;
+    the native start is the load's end, the original's before the load). (The W image drawn over the keyboard on the controls page is hidden since 2026-11-11:
+  `0x48eff0` shows the page's child 0, the keyboard, or child 1, the joystick image, by the player's
+  device, `analysis/menu-profiles-20261101.md`.) (The width routine's -4 branch `0x42dd99` needs the renderer
   `0x6f5958` = 0; Wine and the port run renderer 1, so -1 applies, 2026-11-09.)
   - RETOUR DE FORCE's availability (2026-11-08):
     - The controls page's class (vtable `0x513e48`, constructor `0x48e77a`) has slots `+0x38..+0x40`
@@ -413,8 +507,9 @@ code before starting one. The follow camera (`0x478070`) has since been ported
     position, material and `0xa3`, which is a draw priority (1 and 0; 0 on 282 sprites, 1023/1024 on
     backgrounds). The image looks like a joystick, so the page probably shows one per player
     device.
-  - `0x48eff0` branches on the device (`0x6f4580[player]`, −1 keyboard), but it sets the rows'
-    availability (`0x48cec0`) and RETOUR DE FORCE's (below), not the sprites.
+  - `0x48eff0` branches on the device (`0x6f4580[player]`, −1 keyboard): its two `0x48cec0` calls
+    set or clear the selection mask on the page's children 0 and 1, the keyboard (#78) and joystick
+    (#79) sprites (2026-11-11, ported), then RETOUR DE FORCE's availability (below).
 - [ ] Moving course objects: on `sh_t3`, WLogRide's logs move, are drawn and
   carry cars (`0x4cc450`, `0x4cc69e`), with the
   model mesh taken as their ground (`analysis/log-ride-20261102.md`).
@@ -438,14 +533,24 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   the rock, a car's bounce off wall or rock, a projectile on the rock, `ct_t2`,
   `dr_t4`. Provisional: the section of the chisel's route node, the bricks'
   reduced `0x4a71e0`.
-- [ ] Two-player remainders: the viewport projection is fitted to Wine since 2026-11-08 (the view at
-  1/√2 of its full-screen size in each half; where the original halves the camera ratio is not
-  traced), the standings and finish rule, the audio listener, two-player
-  championships (start codes `0xe` + mode). (Player 2's roulette and power-up panel are ported,
-  2026-11-02, `analysis/two-player-20261101.md`; the pause's strings 198/199 too.)
+- [x] Two-player remainders (closed 2026-11-12, `analysis/two-player-20261101.md`):
+  - the viewport projection: the camera ratio is not halved (Wine memory read: both follow cameras
+    keep 100); the Direct3D projection `0x4aec30` takes s = √(viewport height / width × ratio × 0.01),
+    which gives the earlier 1/√2 fit exactly; `RaceView::draw_view` derives it from the two aspects;
+  - the finish: the first player to finish ends the race (`0x4a43b9`/`0x4a2dcf`), ported;
+  - the standings: state 4 → 5 as in one player with both players in the rank table, drawn in
+    viewport 0 only (`0x499c7d`), as natively (not compared on screen);
+  - the audio listener: viewport 0's camera, player 1's (`0x427620`), as natively;
+  - two-player championships do not exist: `menu.WGM` has start codes 14 (race, `0x147`) and 15
+    (battle, `0x146`) only, and AUTRE COURSE's `0xe` + mode returns to them (`0x491d1e`, ported).
+  (Player 2's roulette and power-up panel are ported, 2026-11-02; the pause's strings 198/199 too.)
 - [ ] Input: joystick devices. Since 2026-11-08 (`analysis/joystick-20261108.md`) a Linux joystick drives
   a race: `[input] joystick1/2` or `WPC_JOYSTICK1/2`, with the axes rule of `0x4399b0` and 0x4966f0's
   joystick buttons. Open:
+  - (the x axis steers through the original's analog branch since 2026-11-12, proportional inside ±85,
+    then a degree an update past it, `0x46769a..0x467798`, `analysis/steer-creep-20261112.md`;
+    the y axis accelerates below 0 and brakes above 0 as the speed code reads it, `0x466f9e..0x466fe8`;
+    open: the device value's scaling into the byte, DirectInput's range and dead zone);
   - (the menu's device cycle with left/right is ported since 2026-11-08, `0x48cab0` → `0x48a845`);
   - rebinding a joystick's buttons on the controls page (natively refused); the controls page's
     button names (native B1.., the original asks DirectInput);
@@ -453,11 +558,34 @@ code before starting one. The follow camera (`0x478070`) has since been ported
     accelerate button accepts and its brake button backs out; in the pause the stick and accept
     only. The original's menu bindings for a joystick (list 3) and its joystick pause key are not
     traced;
-  - the `m_Controller1NotPresentText` check;
+  - the `m_Controller1NotPresentText` check (2026-11-12: a WMenu member, deactivated by WMenu's update
+    `0x48fac0`, the per-frame slot `+0x8`, every frame; nothing else reads the member, so it would need
+    another object's reference to show; none found, `analysis/joystick-20261108.md`);
   - force-feedback output (`0x417180`);
   - not tested with a real joystick (none on this machine), only with an event file.
 - [ ] The Indeo codec's own conversion routine (in ir50_32, not traced);
   native colours are fitted to a VfW reference decode.
-- [ ] Verify representative complete races and game modes against the original.
+- [ ] Verify representative complete races and game modes against the original. (2026-11-11: a 200 s
+  `cc_t1` run with the player idle, recorded in both builds: the robots' pace on the strip agrees
+  within the 5 s sampling; the player's head sat 11% into the lap before the first crossing, fixed
+  (`0x4a3d5c`, `analysis/native-hud-20261028.md`). 2026-11-12: the robots'
+  laps over a whole `cc_t1` race against Wine memory reads: the lap paces match within about 3 % per vehicle, the
+  first lap of vehicles 1 and 2 differs because the random grid order (`0x49d580`) put them in other slots,
+  `analysis/robocar-ai-20261028.md`. 2026-11-12, `analysis/driven-race-20261112.md`: one
+  closed-loop driver run in both builds on `cc_t1`.
+  - Native drives three laps: 1611, 1564 and 1523 updates.
+  - The original's lap 1 takes 1558 frames, counted at `0x214c3a8`. Its wall time is 57.8 s because
+    the frame limiter `0x4ad540` holds Wine's ~37 ms frames to 2/60 s of motion. The motion per frame
+    matches.
+  - On `sh_t1` (2026-11-12) lap 2 is counted in the original too: 2029 frames, against the port's clean laps
+    of 2184–2374 updates. With the port deciding at Wine's rate (every 1.35 updates) its lap 2 is 2046,
+    within 0.8 % of Wine's 2029: the earlier 3–7 % was the driver's timing, not the car. Lap 3 in the original
+    is 1559 frames (the finish), 22 % quicker than its own lap 2 and the port's lap 3 (2013): not explained, open. (A second attempt, 2026-11-12, with a route recorded
+    natively: native laps 1 in 1496–1531 updates, then both builds' driver ends in a pocket off the outside
+    of the left-hander near (−21000, 19800) and cannot get out; it needs a better line or speed control
+    there, `analysis/driven-race-20261112.md`.) Its car twice stayed for tens of seconds against
+    the outer wall of the left-hander near (−57500, 4570), where native recovers in 2 s; the wall
+    response or the driver, not separated. Then the standings of a driven race.
+  - The finish standings screen matches with a forced last lap (Wine `+0x19f` = 3, native `WPC_LAST_LAP=1`), `analysis/native-hud-20261028.md`.)
 - [ ] Keep the native asset, scene, menu, mesh and renderer checks passing;
   add regression coverage for each newly implemented race, menu or save path.

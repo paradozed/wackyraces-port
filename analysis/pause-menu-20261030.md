@@ -195,3 +195,109 @@ The MenuPrefs control table follows (`0x40c73e`, when the device `0x6f4580` is �
     `0x100` at `+0x36f` (force feedback), it calls `+0x60` = `0x48cd10`(2, 8).
 - This is the caller the earlier note left open. Natively, `MenuController::availability` gives 0
   for that row (keyboard only), as the original does with a keyboard.
+
+## The dim behind the pause (2026-11-11)
+
+**Seen under Wine** (`analysis/menu-profiles-20261101.md`, "Selection pages against Wine"): the race
+behind the pause list goes to about half (sky 0.55, sand 0.50 of the frame before; 255 → 132,
+231 → 117, 115 → 58); the list itself is not dimmed.
+
+**Original.**
+- The pause key (`0x432b15`) flags the world's first child, the WMenuBrick, active (`+0xc` | 2) and
+  stores the player in `+0x12b`. Its activation `0x4902b0` ends with, in one-player races only
+  (app `+0x1a64` = 0), the renderer's slot `+0xd0`(1); the pause's end (`0x4905dc`) calls slot
+  `+0xcc`(1). The renderer init (`0x4aebc3`) calls `+0xcc`(0).
+- Direct3D vtable `0x514c74`: `+0xcc` = `0x4ae6b0`, `+0xd0` = `0x4ae6f0`. Both keep the time
+  (`0x2ad475c`, in `0x2a1bb60`) and the argument (`0x2a1cc6c`); `+0xd0` sets `0x2a1cc64` = 1, `+0xcc`
+  sets it to 0.
+- The frame end (`0x4aef69`) keeps T = now − start in `0x2a1caf0`. The draw, slot `+0xc8` =
+  `0x4ae730`, runs at the frame end (`0x4af075`) or, while `0x6e4585` is set (the pause sets it,
+  `0x4903aa`), after the sprite list (`0x4b332f`):
+  - with an argument and the flag 0: nothing (so `+0xcc`(1) ends the dim at once); with an argument,
+    T doubles;
+  - flag 1: T = 1200 − T (`0x4b0`); T ≥ 4800 (`0x12c0`): nothing;
+  - cells of 20 pixels, (W / 20 + 1) × (H / 20 + 1) (`0x66666667`, `sar 3`), W and H the renderer's
+    `+0x2d8a5`/`+0x2d8a9`; each cell (i, j) is a black quad (alpha in the top byte, `shl 0x18`) with
+    alpha min(255, 25 × ftol(√((cols/2 − i)² + (rows/2 − j)²)) − T / 2 + 255) >> argument
+    (`0x4ae8e4..0x4ae956`; 20.0 is `0x51152c`).
+- So the pause's dim closes in from the edges over 600 ms and holds at 127, half black. With
+  argument 0 (the init), the black opens from the centre as T grows.
+
+**Native.** `pause_dim` (`linux_main.cpp`) draws the same cells after the race view and before the
+pause menu, in one-player races, from the pause's start (Escape on the root page restarts the list,
+not the dim). Measured on `dt_t1` (`:78`): after 2 s the sky, the road and the HUD are 0.50 of the
+frame before; 0.15 s in (the capture lags by about a second), the corners are 0.50 and the centre
+0.92. The opening wipe is ported as well (below). Wine's HUD is not all dimmed (below).
+
+## The opening wipe at each scene (2026-11-11)
+
+- The scene loader `0x431690` (menu, course, winner files) clears `0x6e4585` and calls the
+  renderer's slot `+0x1c` (`0x4316c2`), whose Direct3D routine `0x4aeb70` sets the display, the
+  brightness (`+0xc0`) and then `+0xcc`(0) (`0x4aebc3`): the wipe with no shift and no closing flag,
+  drawn at every frame end (`0x4af075`) until T ≥ 4800. The black opens from the centre: alpha
+  min(255, 25 × d − T / 2 + 255) is 0 at the centre after 510 ms and in the corners (d ≈ 32 cells at
+  1024×768) after about 2.1 s. The other slot `+0x1c` caller is `0x4ad104`.
+- Native: `screen_wipe(…, false, 0)` at the frame end in the menu and winner stages (a race is
+  drawn in the menu stage), from `wipe_start`, set when the main menu is entered, a course has
+  loaded, a winner scene opens, and the race ends (menu.wgm loads again). A pause clears it, as
+  `+0xd0` replaces the state.
+- **Compared with Wine:** a 10 fps x11grab of each build, from Enter on CHOISIR CIRCUIT (Le Grand
+  Canyon 1). Grey means of a centre box, a box at (200..240, 300..340) and the top-left corner:
+  - Wine: black 0.4 s after Enter (frame 5); the centre opens over frames 6..13, the box over
+    14..15, the corner over 20..25;
+  - native: black at frame 9 (its load is longer); the centre over 9..14, the box over 16..19, the
+    corner over 24..29.
+  From the first black frame, both open the box 0.7–1.0 s later and the corner 1.5–2.0 s later.
+  The original starts T before its load, so a little of the wipe passes during it (provisional:
+  the native start is the load's end).
+
+## What the pause's dim covers (2026-11-11)
+
+Wine, the frame before the pause against the paused frame (median pixel ratio by element, `cc_t1`
+on the grid): lap text 0.51, the progress strip 0.50, the gadget and weapon icons 0.64 and 0.64,
+the power-up gauge (with its needle) 1.0, the speedometer 1.0. So the gauge and the speedometer are
+drawn after the wipe, and something in the icon boxes too (a fully dimmed element measures 0.50);
+the order inside the original's sprite lists is not traced.
+
+Native (provisional order): `RaceView::hud` draws the strip, the texts and the messages, calls
+`set_late_dim`'s function, then `late_panel(0)` (the gauge and the gadget and weapon icons, which
+are translucent, alpha 0.6, while uncharged) and the speedometer. Measured: texts and strip 0.50,
+gauge and speedometer 1.0, icons 0.75 and 0.74 on `cc_t1`. The icons are not compared on the same
+picture: before the pause, the pixel at (900, 60) is 255/206/90 under Wine and 166/143/102 natively.
+
+A bug found here: the wipe's start of −1e9 after a pause overflowed `int(seconds × 1000)` and drew a
+black frame after resuming; `screen_wipe` now clamps the elapsed time at 10 s.
+
+## The two-player pause against Wine (2026-11-12)
+
+Wine (`cc_t1`, two players, Escape a few seconds after the start): the option list (page 247, CONTINUER ...
+QUITTER) at once, as in one player, over the undimmed split race (the dim is one-player only); no page 243
+(JEU EN PAUSE, PRESS ENTER FOR PAUSE MENU). The port had shown page 243 in two players (provisional);
+`MenuController::shown_page` now shows the option node's page at the pause root in both modes (the
+`text_override` of page 243's first text, strings 198/199, is no longer drawn). After: the same list, at
+the same x; Wine's list sits about 20 pixels higher in two players (in one player the two matched), not
+traced. The code path that skips page 243 is still not traced.
+
+**The two-player offset, narrowed (2026-11-12, later).** Wine recordings at 20 frames a second from the
+Escape on, one and two players (`cc_t1`):
+- The list does not slide. It is drawn at its place from the first frame of the dim or the race and
+  stays there over 4 s, in both modes. So the 20 px is not an animation caught mid-way.
+- The bands of rows 2..4 measured on full-size frames, as y ranges in px:
+
+  | | EFFETS | MUSIQUE | VOIX |
+  |---|---|---|---|
+  | Wine, two players | 288–308 | 338–357 | 389–408 |
+  | Port | 307–326 | 358–377 | 410–429 |
+
+  A constant 19–21 px. In one player, Wine's list sits about 20 px lower than in two players (from
+  quarter-size frames, ±4 px), where the port's.
+- Page 247 (`general.wgm`) has `m_nPosX` 160, `m_nPosY` 80. They are id members: the values are at
+  `+0x122`/`+0x12a`, the constructor `0x48b2e0` defaults 160/100, and they are read at `0x48b510`.
+- The layout `0x48bab0` places the items from (x, y) and adds each item's step, as
+  `MenuView` does. So the page data are the same in both modes, and the offset comes from a draw or a
+  write not found.
+- Not found: no writer of a page's `+0x12a` outside its read `0x48b510`. The other writers listed
+  (`0x48b6a8`, `0x490a1d`, `0x490e00`, ...) belong to other classes. The only two-player tests in the
+  pause nodes are `0x490435`/`0x4905c7` (the renderer's `+0xd0`/`+0xcc`, the one-player dim and
+  wipe) and `0x49096f` (strings 198/199/179).
+

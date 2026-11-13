@@ -141,7 +141,7 @@ that WackyAutoBomba type (e.g. `0x80`) at that race update.
   Championship V. Profiles and saves, demos, replays, credits and the
   keyboard controls page are ported, as is practice (ENTRAINEMENT: alone on
   the grid, lap splits, the course record and the finish state 0xf) and two players (page 61's
-  cursors, then a split-screen race without robots;
+  cursors, then a split-screen race without robots that ends when the first player finishes;
   [two players](analysis/two-player-20261101.md)), including the two-player
   battle on the `*_b.wgm` arenas (hits received, the end at five;
   [battle](analysis/battle-20261102.md)).
@@ -170,7 +170,7 @@ that WackyAutoBomba type (e.g. `0x80`) at that race update.
   and use items, and away from the player slide along the route (laps within
   about 5% of the original's on `cc_t1`); outside the player's previous, current and next
   sections they are hidden and run on along the route rows until they show again at a
-  section's entry portal (`0x4a1c8b`, dt_t1), and steer round the car ahead to the side with room (`0x4e69bd`, road
+  section's entry portal (`0x4a1c8b`, dt_t1), or at the start line model right after a lap counted in section 0 (`0x4a2108`), and steer round the car ahead to the side with room (`0x4e69bd`, road
   edges `0x468890`; [avoidance](analysis/robot-avoidance-20261030.md)). The turbo (gadget 8) and the shield (gadget 10) work. The missile, breath, tank gun and boomerang fire guided projectiles, the TNT
   bounces towards a target, the storm cloud strikes cars along the route, the
   detour sign turns a car round, and the landmine (icon 19) drops behind the
@@ -199,7 +199,7 @@ that WackyAutoBomba type (e.g. `0x80`) at that race update.
   ([bridge](analysis/misty-bridge-20261106.md)). `WGeyser`, `WFountain` (`dt_t2`), `WLogRollingB` (`sh_t2`, player cars only) and
   `WDynamiteHole` (`dr_t1`) are ported too, as are `WRolling` and `WChiselCrossover` with `WBlowUp` (`cc_t4`, `ct_t2`, `dr_t4`; [note](analysis/rolling-chisel-blowup-20261106.md), `cc_t4` compared with Wine), `WLogJam` (`sh_t3`, [note](analysis/log-jam-20261106.md), compared with Wine in memory and on screen), and `WRotoHill`, `WBumSteer`, `WMagnet`, `WVolcano` and course `WRot` (`dr_t2`, `dr_t3`, [note](analysis/roto-magnet-volcano-20261106.md)), and `WSaw`, `WJunkyard`, `WConstructionSite`, `WShiftedRoad` and `WGoldenGate` (`sh_t2`, `dr_t3`, `sh_t4`, [note](analysis/saw-crane-gate-road-20261107.md)), and `WDicksTrick2` (`cc_t3`) and `UVScroll` ([note](analysis/dickstrick-uvscroll-rooms-20261107.md)); the fountain and the log were compared with Wine
   ([notes](analysis/lap-line-geyser-20261106.md)). Escape opens the original in-race pause menu
-  (general.wgm's `WMenuBrick`) over the race: resume, volumes, restart and
+  (general.wgm's `WMenuBrick`) over the race, dimmed by the renderer's closing wipe in one-player races: resume, volumes, restart and
   quit with its confirmation ([pause](analysis/pause-menu-20261030.md)). Race audio covers every car's engine and skid loop,
   placed in 3D around the follow camera (DirectSound's distance law with the
   original's rolloff 5 and the GDSound ranges; provisional), the narrator
@@ -274,7 +274,7 @@ water and splashes when it drowns; cc_t1's cacti burst into pieces, rocks stop
 the car and push it back, and the shadow follows the ground
 ([car effects](analysis/car-effects-20261028.md)). The menu's POUSSIERE and
 METEO options reach the race (`[game] dust` sets POUSSIERE's starting value);
-braking and sliding leave skid marks on roads; a slide start kicks the yaw by `m_farolbendmod` and throws the player's car outward; sand, grass, snow, dirt and ice scale top speed, acceleration and steering by the recovered per-vehicle rows; METEO draws rain on cc and dr_t1 and snow on ct, dr_t4 and dr_b (`0x4b6190`, `0x4b6510`); rain also halves the textures and darkens the sky and fog, as the original does (compared with Wine on cc_t1). Walls use the original contact response: four probe rays push the car out along the wall normal, turn it along the wall and cost 5% speed; three hits on stopping
+a steering key held at rest creeps the car round at 0.05 (`0x4677da`, compared with Wine); braking and sliding leave skid marks on roads (drawn where their car's section is placed across the loop seam, `0x4a8e60`); a slide start kicks the yaw by `m_farolbendmod` and throws the player's car outward; sand, grass, snow, dirt and ice scale top speed, acceleration and steering by the recovered per-vehicle rows; METEO draws rain on cc and dr_t1 and snow on ct, dr_t4 and dr_b (`0x4b6190`, `0x4b6510`); rain also halves the textures and darkens the sky and fog, as the original does (compared with Wine on cc_t1). Walls use the original contact response: four probe rays push the car out along the wall normal, turn it along the wall and cost 5% speed; three hits on stopping
 surfaces halt it and a wall ends a running turbo; the rays meet every surface, ramp faces included, and robots rest on the ground through the original's single ray along their up axis, levelling out in the air; a car that falls off or drowns returns at its section's entry (the start line in the first), and steering in the air is cut to 30% ([wall contacts](analysis/wall-contacts-20261029.md)). There is no edge guard: as in the original, a car may leave the course area, hang off a ledge on one probe or fall; the out-of-bounds trigger and gravity scale are provisional.
 
 The loader and its observed limits are documented in

@@ -584,7 +584,12 @@ std::vector<RaceSession::StripRacer> RaceSession::strip() const {
         else {
             d=float(race_distance(int(opponent)));r.finished=opponent_bodies_.at(opponent).finished;++opponent;
         }
-        r.lap_fraction=r.finished?1.f:lap>0?std::clamp(std::fmod(std::max(0.f,d),lap)/lap,0.f,1.f):0.f;
+        // 0x4a3d5c: while the crossing count +0x19f is 0 (on the grid, before
+        // the line), the lap distance +0x1a3 is 0, so the head sits at the
+        // strip's start (Wine cc_t1: x 63 for the player at the start, where
+        // the port drew 113).
+        const Body& body=r.player?body_:opponent_bodies_.at(opponent-1);
+        r.lap_fraction=r.finished?1.f:!body.started?0.f:lap>0?std::clamp(std::fmod(std::max(0.f,d),lap)/lap,0.f,1.f):0.f;
         out.push_back(r);
     }
     return out;
@@ -862,7 +867,7 @@ void RaceSession::drive_opponent(Opponent& o,Body& b,bool controlled) {
         update_robot_speed(car.speed,row,o.control.throttle,b.grip,b.follow_lock!=0);
         car.steer=robot_steering(o.control.steer);
         update_brake_skid(b.skid,o.control.throttle==1,o.control.throttle==2,before.speed,before.brake_state,car.grounded);
-        update_slide(b.skid,car.speed.speed,car.steer,farol_speed_limit(o.vehicle),b.grip.friction,car.grounded,true);
+        update_slide(b.skid,car.speed.speed,b.effect==7?0.f:car.steer,farol_speed_limit(o.vehicle),b.grip.friction,car.grounded,true);
     }
     move(car,b,o.tuning,false);
     bomb_step(car,b);
@@ -880,8 +885,9 @@ void RaceSession::drive_human(size_t i,const DriveInput& input) {
     VehicleTuning row=o.tuning;
     if(b.turbo>0) {row.top_speed*=turbo_top;row.convergence*=turbo_convergence;}
     if(car.airtime<=6) update_speed(car.speed,row,input,b.grip,b.skid.kick,b.follow_lock!=0);
+    steer_creep(car.speed,input);
     update_brake_skid(b.skid,input.accelerate,input.brake,before.speed,before.brake_state,car.grounded);
-    update_slide(b.skid,car.speed.speed,car.steer,farol_speed_limit(car.vehicle),b.grip.friction,car.grounded);
+    update_slide(b.skid,car.speed.speed,b.effect==7?0.f:car.steer,farol_speed_limit(car.vehicle),b.grip.friction,car.grounded);
     move(car,b,o.tuning,true);
     bomb_step(car,b);
     o.previous=start;
@@ -969,8 +975,10 @@ void RaceSession::drive(const DriveInput& input) {
     // 0x466f91: more than 6 updates in the air skips the throttle and brake
     // (the Wine sh_t1 jump holds its speed from airtime 7).
     if(player_.airtime<=6) update_speed(player_.speed,row,input,body_.grip,body_.skid.kick,body_.follow_lock!=0);
+    steer_creep(player_.speed,input);
     update_brake_skid(body_.skid,input.accelerate,input.brake,before.speed,before.brake_state,player_.grounded);
-    update_slide(body_.skid,player_.speed.speed,player_.steer,farol_speed_limit(player_.vehicle),body_.grip.friction,player_.grounded);
+    // 0x46ae73: during MonsterTires (the original's +0x385 = 0) x is 0 (0x510124).
+    update_slide(body_.skid,player_.speed.speed,body_.effect==7?0.f:player_.steer,farol_speed_limit(player_.vehicle),body_.grip.friction,player_.grounded);
     move(player_,body_,tuning_,true);
     bomb_step(player_,body_);
     // MAUVAISE DIRECTION (string 2): heading against the section guide.
@@ -1030,9 +1038,10 @@ void RaceSession::use_gadget(int icon,int car) {
         case 7:
             // MonsterTires (init 0x4d6380): the tyre scale +0x6c = 1, stage +0x68
             // and counter +0x64 = 0. The original sets +0x385 = 0 (natively 7).
-            // Its physics (+0x15b = 0x52b800[vehicle], the contact spread, and
-            // the wheel records +0x44b = 24) are not ported.
+            // The four wheel records +0x44b = 24 (0x4d6380): the tracks' half
+            // width. The contact spread +0x15b = 0x52b800[vehicle] is not ported.
             b.monster=1;b.monster_count=0;b.monster_scale=1;b.effect=7;
+            b.fx.set_track_width(24);
             item_events_.push_back("used gadget 7 (MonsterTires)"+who);
             break;
         case 9:
@@ -1085,12 +1094,14 @@ void RaceSession::update_gadgets() {
     // (-0.1) until m_tonormframenum (3), 2 waits m_innormframenum - 30 (270,
     // 0x4d661e), 3 adds m_tominscalediff (-0.4) until m_tominframenum (5); each
     // limit resets the counter. Stage 4 ends it (0x4d6659): 289 updates.
-    const auto tyres=[&](Body& b){
+    // Stage 4 also sets the records back to ftol(0x52b804[vehicle]) (0x4d6659).
+    const auto tyres=[&](Body& b,int vehicle){
         if(b.monster<=0) return;
         static const int limit[4]={10,3,300-30,5};
         static const float step[4]={0.2f,-0.1f,0,-0.4f};
         const int stage=b.monster-1;
-        if(stage==4) {b.monster=0;b.monster_scale=1;if(b.effect==7) b.effect=-1;return;}
+        if(stage==4) {b.monster=0;b.monster_scale=1;if(b.effect==7) b.effect=-1;
+            b.fx.set_track_width(float(int(CarEffects::track_width(vehicle))));return;}
         ++b.monster_count;
         b.monster_scale+=step[stage];
         if(b.monster_count>=limit[stage]) {b.monster_count=0;++b.monster;}
@@ -1122,7 +1133,7 @@ void RaceSession::update_gadgets() {
     for(size_t i=0;i<opponents_.size();++i) turret(opponents_[i].car,opponent_bodies_[i]);
     fly(player_,body_,tuning_);
     for(size_t i=0;i<opponents_.size();++i) fly(opponents_[i].car,opponent_bodies_[i],opponents_[i].tuning);
-    tyres(body_);for(Body& b:opponent_bodies_) tyres(b);
+    tyres(body_,player_.vehicle);for(size_t i=0;i<opponent_bodies_.size();++i) tyres(opponent_bodies_[i],opponents_[i].car.vehicle);
     siren(player_,body_);
     for(size_t i=0;i<opponents_.size();++i) siren(opponents_[i].car,opponent_bodies_[i]);
 }
@@ -2453,12 +2464,19 @@ void RaceSession::crossings(RaceCar& car,Body& b,const Vec3& before,bool player)
     // lap +0x19f and returns to 0. Both start at 0 (0x49f4c9), so the first
     // crossing makes the shown lap 1 and four finish a three-lap race. Native
     // laps are the completed ones: line starts at -1, so that crossing adds none.
+    // The original's first crossing takes +0x19f to 1, and it never goes
+    // back to 0: started.
+    if(r>0 && b.line==-1) b.started=true;
+    // 0x4a4346/0x4a435a: a forward crossing sets +0x1bb to 0, a backward one
+    // to the last row.
+    if(r>0) b.previous_section=0;
+    else if(r<0) b.previous_section=int(track_.sections())-1;
     b.line=std::max(b.line+r,-1);
     if(b.line>0) {b.line=0;count_lap(b,&b==&body_);}
 }
 void RaceSession::count_lap(Body& b,bool player) {
     if(phase_!=Phase::Racing || mode_==1) return; // a battle has no laps
-    ++b.laps;b.visited=1;
+    ++b.laps;b.visited=1;b.started=true;b.lap_mark=true;
     if(player && b.laps>=1 && b.laps<=3) {
         // 0x4a33ac..0x4a33f6: each lap's time, the race timer less the laps before.
         const int now=int(std::lround(race_seconds()*300));
@@ -2467,9 +2485,12 @@ void RaceSession::count_lap(Body& b,bool player) {
     }
     if(b.laps>=track_.laps() && !b.finished) {
         b.finished=true;b.finish_update=updates_;
-        // Two players: the race ends once both have finished (provisional).
-        const bool both=!two_players() || (body_.finished && opponent_bodies_[0].finished);
-        if((player || two_players()) && both) {phase_=Phase::Finished;finish_update_=updates_;finish();}
+        // 0x4a43b9/0x4a42a9: the lap pass returns 1 when player 1 passes the
+        // lap count and, in two players, 2 for player 2; 0x4a2dcf then ends the
+        // race at once (state 4) and stops and times both players (0x403bd4,
+        // +0x19b = 2, 0x4a2dee..0x4a2e60). So the first player to finish ends it.
+        const bool human=player || (two_players() && &b==&opponent_bodies_[0]);
+        if(human) {phase_=Phase::Finished;finish_update_=updates_;finish();}
     }
 }
 void RaceSession::count_glide(Body& b,int walls) {
@@ -2531,7 +2552,25 @@ bool RaceSession::virtual_robot(size_t i,std::vector<int>& placed) {
     // The player's slots +0x830/+0x8c4/+0x958: the previous, current and
     // next rows (one row per section here).
     const auto in_window=[&](int s) {return ps<0 || n<=0 || s==ps || (s+1)%n==ps || (ps+1)%n==s;};
+    // 0x4a234d (the robots' tracker; 0x4a13ae the player's): a section change
+    // keeps the old section in +0x1bb.
+    if(b.seen_section>=0 && car.section>=0 && car.section!=b.seen_section) b.previous_section=b.seen_section;
+    // +0x93f is 0 again once the car is in section 1 (Wine reads, cc_t1; the
+    // clearing path is not identified).
+    if(car.section!=0) b.lap_mark=false;
+    b.seen_section=car.section;
     if(!b.hidden) {
+        // The original shows a robot in its tracker row (+0x1b7 = the new
+        // row, 0x4a202f) and keeps that row until its cursor moves on; the
+        // native section is the ground's, whose seam can lie past the row's
+        // entry portal (dr_t2: the robot shown at row 1's portal stands on
+        // section 0's ground and was hidden again every 7 updates, never
+        // advancing). So for up to 60 updates a robot shown into a row is
+        // not hidden while it is still on the row before (provisional).
+        if(b.shown_section>=0) {
+            if(car.section==b.shown_section || ++b.shown_updates>60) b.shown_section=-1;
+            else if(car.section==(b.shown_section+n-1)%n) return false;
+        }
         if(robots_near_ || car.section<0 || in_window(car.section)) return false;
         // 0x4a2776: +0x2b1 = 0x10000, +0x1c7 = 0, flag 0x100 on the car and
         // its children; +0x2b5 keeps the far step's distance into the row
@@ -2544,17 +2583,22 @@ bool RaceSession::virtual_robot(size_t i,std::vector<int>& placed) {
     // +0x34 it starts the next row.
     const int before=b.virtual_distance;
     b.virtual_distance+=204;   // the probe span, as in the far step
-    // Provisional: the lap counts where the run passes the start line's
-    // distance into section 0 (the original's lap trigger for hidden
-    // robots is not traced).
-    if(car.section==0) {
+    // 0x4a43f4..0x4a444c (the lap pass, per hidden robot): in section 0,
+    // coming from a later one (+0x1bb > 0) and past the manager's +0x34, the
+    // start line's distance into row 0 (0x49e552: the row length less its
+    // ray polygon's remaining fraction, byte +0x11, x the length >> 8; native
+    // the line's section fraction), the lap counts (+0x187, +0x19f) and
+    // +0x1bb returns to 0. (before is no longer needed.)
+    (void)before;
+    if(car.section==0 && b.previous_section>0 && !b.finished) {
         const Matrix4& line=track_.start_line();
         const int at=int(track_.section_fraction(0,{{line[12],line[13],line[14]}})*float(track_.row_length(0)));
-        if(before<at && b.virtual_distance>=at && b.visited==(1u<<n)-1) count_lap(b,false);
+        if(b.virtual_distance>at) {b.previous_section=0;b.started=true;count_lap(b,false);}
     }
     if(b.virtual_distance>track_.row_length(car.section)) {
         b.virtual_distance=0;
-        car.section=(car.section+1)%n;
+        b.previous_section=car.section; // 0x4a201d: +0x1bb = +0x1b7
+        car.section=(car.section+1)%n;b.seen_section=car.section;
         b.visited|=1u<<car.section;
         if(car.section==0) ++car.loops;
     }
@@ -2563,7 +2607,9 @@ bool RaceSession::virtual_robot(size_t i,std::vector<int>& placed) {
     // 200 ahead along its z axis, 50 up and (k - robots / 2) x 200 along
     // its x axis for the k-th robot placed there in this pass; +0x2b1 = 1,
     // +0x8a7 = 1 (airborne), the slow counter +0xa8 = 0.
-    const Matrix4& f=track_.entry_frame(car.section);
+    // 0x4a2108: shown in group 0 with +0x93f set (a lap counted there), the
+    // frame is m_idStartLineModel's instead of the entry portal's.
+    const Matrix4& f=car.section==0 && b.lap_mark?track_.start_model():track_.entry_frame(car.section);
     int& k=placed.at(size_t(car.section));
     const float side=float((k++)-int(opponents_.size())/2)*200;
     const Vec3 x=unit({{f[0],f[1],f[2]}}),z=unit({{f[8],f[9],f[10]}});
@@ -2571,7 +2617,7 @@ bool RaceSession::virtual_robot(size_t i,std::vector<int>& placed) {
     car.position[1]+=50;
     car.yaw=std::atan2(-z[0],z[2]);
     car.grounded=false;car.airtime=1;
-    b.hidden=false;b.virtual_distance=0;
+    b.hidden=false;b.virtual_distance=0;b.shown_section=car.section;b.shown_updates=0;
     o.previous=car.position;
     settle(car,b,false);
     return false;

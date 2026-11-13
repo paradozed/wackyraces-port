@@ -11,7 +11,7 @@ constexpr float reverse_target=-0.4f;    // 0x5129d0
 constexpr float minimum_target=0.8f;     // 0x5127ec
 constexpr float steer_limit=0.6981317f;  // 0x5129d8/0x5129e0, 40 degrees
 constexpr float steer_decay=0.8f;        // 0x5127ec
-constexpr float steer_deadband=0.017f;   // 0x5129dc/0x511518
+constexpr float steer_deadband=0.017453292f; // 0x5129dc/0x511518, one degree
 }
 namespace {
 // general.wgm's WackyAuto m_gravity (0xef) by vehicle.
@@ -127,9 +127,26 @@ void update_speed(SpeedState& s,const VehicleTuning& t,const DriveInput& input,c
     else if(s.speed<0) s.speed=std::min(0.f,s.speed+coast_step);
     if(std::abs(s.speed)<stop_threshold) s.speed=0;
 }
+void steer_creep(SpeedState& s,const DriveInput& input) {
+    if(input.axis==0 && (input.left || input.right) && s.speed>=0 && s.speed<0.1f) {s.speed=0.05f;s.brake_state=1;}
+}
 float update_steering(float steer,const VehicleTuning& t,const DriveInput& input) {
-    if(input.left!=input.right) steer+=input.left?t.steer_step:-t.steer_step;
-    steer=std::clamp(steer,-steer_limit,steer_limit)*steer_decay;
+    // 0x467640 (a human car): a joystick axis off centre takes the analog
+    // branch (0x46769a..0x467798): past +/-85 the steer jumps to at least
+    // 8 degrees (0x5129f8) and grows a degree an update up to 20 (0x5129f4);
+    // inside, it is axis x -1/88 (0x5129e4) x 8 degrees. The stick's left
+    // (a negative byte) steers positive, as the left key does.
+    // Centred, the keys (0x46779a): right (0x52aac4, tested first) takes
+    // +0x937 off while above -40 degrees, else left adds it while below +40.
+    if(input.axis!=0) {
+        const float a=float(input.axis);
+        if(a< -85) {if(steer<0.13962634f) steer=0.13962634f;else if(steer<0.34906584f) steer+=0.017453292f;}
+        else if(a>85) {if(steer>-0.13962634f) steer=-0.13962634f;else if(steer>-0.34906584f) steer-=0.017453292f;}
+        else steer=a*-0.011363637f*0.13962634f;
+    } else if(input.right) {if(steer>-steer_limit) steer-=t.steer_step;}
+    else if(input.left) {if(steer<steer_limit) steer+=t.steer_step;}
+    // 0x467810: x 0.8 (0x5127ec), then 0 within a degree.
+    steer*=steer_decay;
     if(steer>-steer_deadband && steer<steer_deadband) steer=0;
     return steer;
 }

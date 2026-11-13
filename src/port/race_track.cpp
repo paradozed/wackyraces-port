@@ -112,6 +112,11 @@ RaceTrack::RaceTrack(const Archive& course,const Scene& scene,bool battle) {
         if(!start) bad("route zero links no WStartLine");
         start_line_=unwrapped_scene_transform(scene.root(),*start);
         start_radius_=scene.find(*start).real(0x1df,5000);
+        start_model_=start_line_;
+        for(const Node& act:scene.root().actions) if(act.class_name=="WModManager") {
+            const uint32_t model=uint32_t(act.integer(0x1e9));
+            if(model) try {start_model_=unwrapped_scene_transform(scene.root(),model);} catch(const std::exception&) {}
+        }
         if(!(start_radius_>0)) bad("invalid WStartLine radius");
     } else {
         // Route 0's first row (the manager's +0x8d0 for route +0x8c4 = 0,

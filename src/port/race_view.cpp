@@ -1205,14 +1205,16 @@ void RaceView::submit_tank_hit(int car,const BombHit& hit,const CarEffects& fx,c
     for(size_t ax=0;ax<3;++ax) for(size_t r=0;r<3;++r) m[ax*4+r]*=hit.tank.scale[ax];
     submit(a.model.batches,vp,view,multiply_matrix(placed,m));
 }
-bool RaceView::shadow_frame(size_t slot,const RaceCar& car,Matrix4& out) {
+bool RaceView::shadow_frame(size_t slot,const RaceCar& car,Matrix4& out,bool frozen) {
+    // 0x47c1ad: while the drowning counter +0x8e7 runs, the update is skipped
+    // and the shadow keeps its last frame (frozen: the native drowning, provisional).
     // From 403.7 above the car to 1000 below; f is the hit's fraction of that
     // ray. The shadow lies 5 units up the ground normal, right = n x forward,
     // forward = right x n, scaled by the vehicle's sizes (0x47c070) x (1 - f).
     static const float sizes[7][2]={{1.5f,0.7f},{1,1},{3.5f,1.5f},{3.5f,1.5f},{2,2},{2,1},{5,2}};
     const float top=car.position[1]+403.7f,bottom=car.position[1]-1000;
-    const TrackSurface g=session_.track().ground(car.position[0],car.position[2],top,bottom);
-    if(g.hit && g.y<car.position[1]+50 && car.vehicle>=0 && car.vehicle<7) {
+    const TrackSurface g=frozen?TrackSurface{}:session_.track().ground(car.position[0],car.position[2],top,bottom);
+    if(!frozen && g.hit && g.y<car.position[1]+50 && car.vehicle>=0 && car.vehicle<7) {
         const float f=(top-g.y)/(top-bottom);
         const Matrix4 frame=car.frame();
         const Vec3& n=g.normal;
@@ -1239,7 +1241,9 @@ void RaceView::effects(const Matrix4& vp,const Matrix4& view,const Matrix4& came
     // section (0x4a6b30, kept by the manager 0x4a1c40); a dropped one goes
     // into the power-up table of the row whose box holds it (0x4a6d20 ->
     // 0x49c890) and is enabled with that row (0x4a8680). The skid marks
-    // (0x47a7c0) stay in place (their matrix is not traced).
+    // (0x47a7c0) take their matrix from 0x4a8e60 for their parent node (+0x10,
+    // 0x41b3c0), the car: its group's seam place at draw time, so a car's
+    // whole trail moves with the car's current section.
     const auto on=[&](int section) {return section<0 || section>31 || (enabled>>unsigned(section)&1u);};
     const auto at_frame=[&](int section,const Matrix4& m) {return multiply_matrix(place(section),m);};
     // 0x47a7c0 (Direct3D path, 0x6f5958 = 2): for each wheel, two triangles
@@ -1248,17 +1252,21 @@ void RaceView::effects(const Matrix4& vp,const Matrix4& view,const Matrix4& came
     // no depth write. The software path lifts the points by 5 (0x47aad6);
     // natively too, against z-fighting with the ground (provisional).
     std::vector<WpcTexturedVertex3D> strip;
-    for(const CarEffects* fx:cars) for(const auto& t:fx->tracks()) for(size_t i=0;i+1<t.size();++i) {
+    for(size_t c=0;c<cars.size();++c) {
+    const Matrix4 m=place(car_sections[c]);
+    for(const auto& t:cars[c]->tracks()) for(size_t i=0;i+1<t.size();++i) {
         const auto &s0=t[i],&s1=t[i+1];
         if(!s0.active || !s1.active) continue;
-        const auto vertex=[](const Vec3& p,const CarEffects::TrackSegment& s) {
+        const auto vertex=[&m](const Vec3& p,const CarEffects::TrackSegment& s) {
             WpcTexturedVertex3D v{};
-            v.x=p[0];v.y=p[1]+5;v.z=p[2];
+            const float y=p[1]+5;
+            v.x=m[0]*p[0]+m[4]*y+m[8]*p[2]+m[12];v.y=m[1]*p[0]+m[5]*y+m[9]*p[2]+m[13];v.z=m[2]*p[0]+m[6]*y+m[10]*p[2]+m[14];
             v.r=v.g=v.b=float(s.shade)/255.f;v.a=float(std::max(s.fade,0))/255.f;
             return v;
         };
         for(const auto& v:{vertex(s0.a,s0),vertex(s0.b,s0),vertex(s1.a,s1),vertex(s1.a,s1),vertex(s0.b,s0),vertex(s1.b,s1)})
             strip.push_back(v);
+    }
     }
     if(!strip.empty()) {
         wpc_vk_set_mvp(window_,vp.data());
@@ -1537,13 +1545,17 @@ void RaceView::draw_view(int human,int width,int height) {
         const float dx=2*float(sh[0])*scale_/float(width),dy=-2*float(sh[1])*scale_/float(height);
         for(size_t c=0;c<4;++c) {vp[c*4]+=vp[c*4+3]*dx;vp[c*4+1]+=vp[c*4+3]*dy;}
     }
-    // A half viewport (Wine, cc_t1 two players, 2026-11-08): the view at
-    // 1/sqrt 2 of its full-screen pixel size in both axes (the tower car 205 x
-    // 70 pixels at 1024x768 against 290 x 100), centred in the half and cut by
-    // it, as if the camera ratio (+0x15e, 0x435410) were halved (x x 0.707,
-    // y x 1.414 onto half the height). Where the original halves it is not traced.
+    // A half viewport. The Direct3D projection (0x4aec30) takes the device
+    // viewport (GetViewport, vtable +0x3c): s = sqrt(height / width x ratio
+    // x 0.01 (0x512fcc)), m00 = f s, m11 = f / s; camera_projection builds
+    // the full screen's (height / width 0.75, the 0.0075 factor). A half
+    // (1024 x 384) has height / width 0.375, so its s is the full screen's
+    // x sqrt(0.5): x x 0.707 and y x 1.414 onto half the height, as fitted
+    // to Wine before (the tower car 205 x 70 pixels at 1024x768 against 290
+    // x 100, cc_t1, 2026-11-08). The camera ratio stays 100 in two players
+    // (Wine memory read, 2026-11-12).
     if(two) {
-        const float k=0.70710678f;
+        const float k=std::sqrt((float(h)*0.5f/float(w))/(float(h)/float(w))); // sqrt(0.5)
         for(size_t c=0;c<4;++c) {vp[c*4]*=k;vp[c*4+1]=vp[c*4+1]*k+vp[c*4+3]*(human?0.5f:-0.5f)*float(h)/height;}
     }
     // Backdrop around the eye, unfogged, just inside the far plane.
@@ -1721,7 +1733,7 @@ void RaceView::draw_view(int human,int width,int height) {
         const Matrix4 frame=multiply_matrix(placed,o.car.frame());
         Matrix4 shadow;
         // 0x47c180 hides the shadow (flag 0x100) in the far mode.
-        if(!o.far && shadow_frame(i+1,o.car,shadow)) submit(shadows_.at(o.vehicle).batches,vp,view,multiply_matrix(placed,shadow));
+        if(!o.far && shadow_frame(i+1,o.car,shadow,session_.opponent_drowning(i))) submit(shadows_.at(o.vehicle).batches,vp,view,multiply_matrix(placed,shadow));
         // Type 2 hides the car, its wheels and +0x32 (flag 0x100) for stages 0..3.
         if(!session_.bomb(int(i)).tank.car_hidden || session_.bomb(int(i)).type!=2) submit_car(int(i),o.vehicle,session_.bomb(int(i)),vp,view,frame);
         submit_spin_hit(session_.bomb(int(i)),o.car,vp,view,placed);
@@ -2057,18 +2069,64 @@ void RaceView::powerup_panel(int human) {
     // 0x4d2c80, per viewport (+0x13a): player 1's car (+0x11e) or player 2's
     // (+0x122). Gauge at (230,68), needle turned about (10,29) at (273,93),
     // or (276,95) in player 2's viewport.
-    const int nx=human?276:273,ny=human?95:93;
-    quad(gauge_.texture,460,136,float(gauge_.width),float(gauge_.height),false,1);
-    quad(gauge_needle_.texture,float(2*nx-10),float(2*ny-29),float(gauge_needle_.width),float(gauge_needle_.height),false,1,
-         gauge_angle_[size_t(human&1)]*0.0174532925f,10,29);
+    // One player: the gauge and the icons wait until after the pause's dim
+    // (late_panel, called from hud()).
+    if(human!=0 || session_.two_players()) late_panel(human);
+}
+void RaceView::late_panel(int human) {
+    gauge(human);
     // The gadget (+0x371) at (250,10) and weapon (+0x375) at (290,10); their
-    // materials get transparency 0.4 while the charge is 0.
-    const float alpha=session_.charge_level(human)>=1?1.f:0.6f;
+    // materials get transparency 0.4 while the charge is 0 (material +0x60 =
+    // 0x3ecccccd, else 0; 0x4d2ea8..0x4d2eba). Wine's frames fit an opacity
+    // of 0.36 = 0.6^2, not 0.6 (cc_t1 grid, 2026-11-12: before and after the
+    // pause's dim); as if the renderer applied the material's alpha twice
+    // (provisional: that path is not traced).
+    const float alpha=session_.charge_level(human)>=1?1.f:0.36f;
     for(const auto& [index,x]:{std::pair<int,int>{session_.gadget_icon(human),250},std::pair<int,int>{session_.weapon_icon(human),290}}) {
         if(index<0 || size_t(index)>=icons_.size()) continue;
         const Sprite& icon=icons_.at(size_t(index));
         quad(icon.texture,float(2*x-icon_origin_[0]),float(20-icon_origin_[1]),float(icon.width),float(icon.height),false,alpha);
     }
+}
+void RaceView::gauge(int human) {
+    const int nx=human?276:273,ny=human?95:93;
+    quad(gauge_.texture,460,136,float(gauge_.width),float(gauge_.height),false,1);
+    quad(gauge_needle_.texture,float(2*nx-10),float(2*ny-29),float(gauge_needle_.width),float(gauge_needle_.height),false,1,
+         gauge_angle_[size_t(human&1)]*0.0174532925f,10,29);
+}
+void RaceView::radar(int human) {
+    // The battle's radar (WModMngrFilm 0x499b96, mode 1): frame 0 (the disc)
+    // at (40, 40) in viewport 0, (32, 32) in viewport 1 (0x499bd9/0x499c0f),
+    // and frame 1 (the opponent's dot) at the manager's +0xf94/+0xf9c (or
+    // +0xf98/+0xfa0) from 0x4aa120: the opponent in the player's frame
+    // (x right, z ahead) x +0xf90 = m_nRadarRadius / m_nRadarRange (20 /
+    // 10000 at run time under Wine, 0x49e5af), clamped to the radius 20
+    // (0x452e20 normalising), at (centre + x, centre - z), each ftol'd.
+    // Positions in 320 units at the window's uniform scale within the half
+    // (Wine cc_b: the discs' centres at (130, 128) and (102, 100) pixels,
+    // 1024x768), at scale 1 (the strip's heads are 0.65; with 0.65 the disc
+    // came out 0.65 of Wine's).
+    if(heads_.size()<2) return;
+    const RaceCar* self=nullptr;const RaceCar* other=nullptr;
+    if(session_.two_players()) {self=human?&session_.opponents()[0].car:&session_.player();other=human?&session_.player():&session_.opponents()[0].car;}
+    else if(!session_.opponents().empty()) {self=&session_.player();other=&session_.opponents()[0].car;}
+    if(!self || !other) return;
+    const float centre=human?32.f:40.f,radius=20,scale=radius/10000.f;
+    const Matrix4 f=self->frame();
+    const float dx=other->position[0]-f[12],dy=other->position[1]-f[13],dz=other->position[2]-f[14];
+    float x=(dx*f[0]+dy*f[1]+dz*f[2])*scale,z=(dx*f[8]+dy*f[9]+dz*f[10])*scale;
+    const int ix=int(x),iz=int(z);
+    if(ix*ix+iz*iz>int(radius*radius)) {const float l=std::sqrt(x*x+z*z);if(l>0) {x=x/l*radius;z=z/l*radius;}}
+    const int px=int(x+centre),py=int(centre-z);
+    const float k=1;
+    const Glyph& disc=heads_.at(0);const Glyph& dot=heads_.at(1);
+    quad(disc.texture,2*centre+disc.x*k,2*centre+disc.y*k,disc.width*k,disc.height*k,false,1);
+    quad(dot.texture,2.f*px+dot.x*k,2.f*py+dot.y*k,dot.width*k,dot.height*k,false,1);
+}
+Colour RaceView::battle_pulse() const {
+    const float v=(192+63*std::sin(float(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count()%6283185)*0.01f))/255;
+    return Colour{1,v,v};
 }
 void RaceView::hud2(int human) {
     step_hud();
@@ -2076,8 +2134,9 @@ void RaceView::hud2(int human) {
     if(session_.finish_state()==10) {
         // 0x4aa440 per viewport (+0x13a): this player's hits received
         // decide TU AS PERDU! (6) or TU AS GAGNE! (5).
-        const std::string& line=strings_.get(own>=RaceSession::frag_limit?6:5);
-        text(line,324,124,4,Colour{0,0,0});text(line,320,120,4);
+        const bool lost=own>=RaceSession::frag_limit;
+        const std::string& line=strings_.get(lost?6:5);
+        text(line,324,124,4,Colour{0,0,0});text(line,320,120,4,lost?Colour{1,1,1}:battle_pulse());
         text(strings_.get(145),320,200,4);text("CONTINUE - X",320,400,4);
         return;
     }
@@ -2096,8 +2155,13 @@ void RaceView::hud2(int human) {
         // Battle, rows 1/2: children 13/14 at (14,105) and (306,105); each
         // HUD block holds its own player's hits first (0x6f3168/0x6f316c,
         // 0x6f31bc/0x6f31c0 at 0x4aa6c1).
-        std::snprintf(buffer,sizeof buffer,"%d",own);text(buffer,14*2,105*2,0);
+        // 0x486105: child 13 (this player's own count, +0x20) shows only in
+        // one player (0x6f3140 = 1); child 14 (the opponent's hits received,
+        // +0x24, 0x4aa68c) always, at (306, 105). Wine shows the right one
+        // alone in each half (cc_b, 2026-11-12).
+        (void)own;
         std::snprintf(buffer,sizeof buffer,"%d",other);text(buffer,306*2,105*2,0x20000);
+        radar(human);
     } else {
     std::snprintf(buffer,sizeof buffer,"%d/%d",human?session_.lap2():session_.lap(),session_.laps());
     text(buffer,13*2,30*2,0);
@@ -2141,10 +2205,13 @@ void RaceView::hud() {
         // 0x4aa440, the battle's end (state 10): TU AS PERDU! (string 6)
         // when the player received the limit, else TU AS GAGNE! (5), at
         // (160,60) over a shadow at (162,62); string 145 at (160,100) and
-        // the literal "CONTINUE - X" (0x52d210) at (160,200). The winner's
-        // pulsing colour (sin of the time) is not ported.
-        const std::string& line=strings_.get(session_.battle_lost()?6:5);
-        text(line,324,124,4,Colour{0,0,0});text(line,320,120,4);
+        // the literal "CONTINUE - X" (0x52d210) at (160,200). TU AS GAGNE!
+        // pulses (0x4aa497): (255, v, v) with v = sin(timeGetTime x 0.01
+        // (0x512fcc)) x 63 (0x514be0) + 192 (0x514bd0); TU AS PERDU! keeps
+        // the default colour.
+        const bool lost=session_.battle_lost();
+        const std::string& line=strings_.get(lost?6:5);
+        text(line,324,124,4,Colour{0,0,0});text(line,320,120,4,lost?Colour{1,1,1}:battle_pulse());
         text(strings_.get(145),320,200,4);text("CONTINUE - X",320,400,4);
         return;
     }
@@ -2177,6 +2244,7 @@ void RaceView::hud() {
     // (0x6f3168 = +0x3a3) at (14,216), child 14 (right-aligned, 0x4b
     // 0xa0000) the opponent's (0x6f316c) at (306,216).
     if(session_.mode()==1) {
+        radar(0);
         std::snprintf(buffer,sizeof buffer,"%d",session_.frags(-1));text(buffer,14*2,216*2,0);
         if(!session_.opponents().empty()) {std::snprintf(buffer,sizeof buffer,"%d",session_.frags(0));text(buffer,306*2,216*2,0x20000);}
     } else {
@@ -2224,6 +2292,13 @@ void RaceView::hud() {
         default: if(session_.wrong_way()) message=strings_.get(2); break;
     }
     if(!message.empty()) text(message,layout_message[0]*2,layout_message[1]*2,4);
+    // Provisional (Wine, 2026-11-11): behind the pause the strip and the
+    // texts dim to 0.5; the power-up gauge and the speedometer keep 1.0 and
+    // the translucent item icons 0.64 (only what shows through them dims),
+    // so those are drawn after the pause's wipe (the order inside the
+    // original's sprite lists is not traced).
+    if(late_dim_) late_dim_();
+    late_panel(0);
     // Speedometer: 0x485b00 angle = speed*PI/max - PI/2, capped at 0.27.
     if(dial_.texture) wpc_vk_draw_texture_tinted(window_,offset_x_+int(std::lround((layout_dial[0]*2-dial_xy_[0])*scale_)),
         offset_y_+int(std::lround((layout_dial[1]*2-dial_xy_[1])*scale_)),int(std::lround(dial_.width*scale_)),

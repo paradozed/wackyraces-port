@@ -328,6 +328,19 @@ WpcWindow *wpc_window_create(const char *title, int width, int height) {
         XSetWMProtocols(w->display, w->xwindow, &w->wm_delete, 1);
         Bool supported{};
         XkbSetDetectableAutoRepeat(w->display, True, &supported);
+        // The original hides the pointer: SetCursor(NULL) at the renderer's
+        // setup (0x4ae619, 0x4abece) and ShowCursor(FALSE) until hidden
+        // (0x4ac0b0). Natively a blank 1x1 cursor over the window.
+        {
+            static const char blank[1] = {0};
+            const Pixmap bits = XCreateBitmapFromData(w->display, w->xwindow, blank, 1, 1);
+            if (bits) {
+                XColor black{};
+                const Cursor none = XCreatePixmapCursor(w->display, bits, bits, &black, &black, 0, 0);
+                if (none) {XDefineCursor(w->display, w->xwindow, none); XFreeCursor(w->display, none);}
+                XFreePixmap(w->display, bits);
+            }
+        }
         XMapWindow(w->display, w->xwindow); XFlush(w->display);
         VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO};
         application.pApplicationName = "Wacky Races"; application.apiVersion = VK_API_VERSION_1_0;

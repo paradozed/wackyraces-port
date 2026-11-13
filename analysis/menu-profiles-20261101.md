@@ -227,7 +227,7 @@ the new key. The pairs are (DIK code, action bit) from +0x24 (player 1) or
 - "CLAVIER" now has Wine's glyph positions;
 - ALEATOIRE/INACTIVE were already equal;
 - the main menu's centred labels match to the pixel.
-- Right-aligned labels are 5–9 px (in a 1024-wide frame) left of Wine's. That is a constant shift and is not explained.
+- Right-aligned labels were 5–9 px (in a 1024-wide frame) left of Wine's; explained and fixed 2026-11-11 (below, "Text in screen pixels").
 
 ## Controls page against Wine (2026-11-02)
 
@@ -259,3 +259,105 @@ the new key. The pairs are (DIK code, action bit) from +0x24 (player 1) or
 - Direct3D slot `+0xc0` = `0x4b5a80` → `0x4abf50(gamma control +0x2d5f9, x)`: for i = 0..255, `ramp[i] = clamp(i × (65535 − |x|) × 1/256 + (x > 0 ? x : 0), 0, 65535)` (`0x513100`, `0x51121c`), the same table for red, green and blue, then `IDirectDrawGammaControl::SetGammaRamp(0, ramp)`. Glide's slot is `0x4bca00` (not traced).
 - The ramp is linear: the output is the picture blended toward white (x > 0) or black (x < 0) by |x| / 65535 (0.61 at 0 and 100).
 - Native: `wpc_vk_set_brightness` (every frame from MenuPrefs `+0x20`); `wpc_vk_end_frame` draws that blend over the whole frame. Not compared with Wine (its windowed DirectDraw may not apply gamma ramps).
+
+## The controls page's device image (2026-11-11)
+
+- The page slots `0x48e810` (and `0x48e850`, `0x48e890`) call `0x48eff0` through `0x405ed9` with the
+  selection mask `0x800000`.
+- `0x48eff0` reads the player's device `0x6f4580[[this+0x18]+0xc0]` and calls `0x48cec0` twice
+  (`0x405f79`). `0x48cec0`(mask, on, first, count, text, item) walks the children of
+  `[this+0x122]` (the node's `m_MenuPageBrickId`, page `0x230`) from `first` for `count`; with the
+  last two arguments 0 it ORs `mask` into each child's `+0x90` (on) or clears it (off).
+  - Keyboard (−1, `0x48f084`): (mask, 1, 0, 1) then (mask, 0, 1, 1): child 0 shown, child 1 hidden.
+  - Joystick (`0x48f025`): (mask, 0, 0, 1) then (mask, 1, 1, 1): the reverse.
+- Page `0x230`'s children 0 and 1 are WMenuSprite `0x4e` (the keyboard, at (100, 10), `0xa3` = 1)
+  and `0x4f` (the joystick with the W, at (110, 0), `0xa3` = 0).
+- Native: `MenuView` tags the layers of a page's first two children and, on a
+  `WMenuNodeControllerConfig`, skips child 1 when `MenuPrefs::device(m_nPlayerNum)` is −1, child 0
+  otherwise.
+- Checked on screen (native, `:78`, French, player 1 on the keyboard): before, the W image (with its
+  opaque square) covered the keyboard's left half; after, the keyboard alone, as under Wine
+  (the earlier comparison, the TODO's menu remainders). The joystick case was not captured.
+
+## Text in screen pixels (2026-11-11)
+
+**Original.**
+- The width `0x42dc50` and the WMenuText draw `0x42de80` work in screen pixels. The factor is the
+  screen width (renderer vtable `+0xa4`) × `0x510efc` (1/640): 1.6 at 1024 wide.
+- A byte ≤ 0x20 adds 10 pixels, unscaled (`0x42dcf5`, `0x42e09c`). A glyph adds (texture width
+  `+0x1c` − `+0x150` − 1) × `+0x152` × factor, and the running total is truncated (`0x4ee040`) after
+  each glyph (`0x42ddc5..0x42ddd8`, `0x42e1ee..0x42e200`).
+- The label's X goes through the screen conversion (vtable `+0x38`); `0x42dfd6` then subtracts
+  width / 2 (truncated, `cdq; sub; sar`) for align 4, or the width for 0x20000.
+- The port had measured in 640-wide units (a space 10 there, 16 pixels at 1024), so labels with
+  spaces moved 6 px per space, and every glyph lost no fraction.
+
+**Native.** `MenuView::text` uses the same rule with factor `scale_`, and draws each glyph at the
+screen-pixel cursor.
+
+**Compared with Wine** (scratch prefix, `D:` the repo's `iso_extract` as a CD-ROM, `ddraw=b` so that
+wined3d's GL draws on Xvfb `:77`; the native build on `:78`; both 1024×768, French). Text left edges,
+Wine against native:
+
+| Row | before | after |
+|---|---|---|
+| JOUEUR 1, JOUEUR 2 | 326 / 312, 313 / 299 | equal |
+| EFFETS, MUSIQUE | 356 / 350, 323 / 315 | equal |
+| VOIX, LUMINOSITE | 409 / 400, 263 / 254 | 409 / 407, 263 / 262 |
+| METEO, POUSSIERE | 361 / 353, 281 / 273 | equal |
+| key help line | 97..924 / 41..976 | 97..924 / 96..924 |
+
+The main menu's eight centred items stay within 1–2 px of Wine.
+
+**The key help line (GDPsText #279), provisional.** The steps between Wine's 42 glyph starts fit
+1.62 × (w − 1) − 1.59 (least squares over 39 glyph steps, w from the native steps): about
+(w − 2) × 1.6, one texel less than WMenuText's rule. The port gives that label a narrow of 1, after
+which all 42 glyphs are within 0–2 px of Wine's. Not explained statically: the GDPsText draw
+`0x42e330` advances by (`+0x1c` − 1) × factor with glyphs from a shared font (`0x546cf4`, the first
+world GDPsText whose `[+0x18]+0x140` is 0, `0x42e3bc`), and a winedbg read shows `0x546cf4` = 0 on
+the options page, so this line may come from another path. Menu node `0x3fa` is the only GDPsText
+with `m_Narrow` = 1.
+
+## Selection pages against Wine (2026-11-11)
+
+Same setup as above; the native build with the screen-pixel text. Pages walked in both builds with
+the same keys: 1 JOUEUR, COURSE SIMPLE, the car page (Dingo-Limousine), CHOISIR UN ENVIRONNEMENT,
+CHOISIR CIRCUIT (Le Grand Canyon), the race (`dt_t1`) and its pause.
+
+- **Car page:** the texts' right edges are within 1–2 px (VITESSE MAXIMALE, TRACTION, the two item
+  rows, the key help line). The car's turn differs only by timing.
+- **Closed banners.** `0x490d60` (scenario row 4, dr), `0x4910a0` (the five championships, rows
+  0..4) and `0x4913f0` (the four variants) call `0x48cec0`(`0x800000`, open, first 2r, count 2,
+  text 1, 0) for row r, besides the row's state (slot `+0x44`). With the text flag, the page's
+  children 2r and 2r + 1 (WMenuSprites: the row's two banner halves, e.g. page 6's `0x3fe`/`0x3ff` at
+  y 160) get `+0x18a` = 0 (open) or 2 (closed). Wine draws the closed dr banner at 0.22 of the
+  native colours (mean 31.0 against 143); the port's rows grey at 0x40, so `MenuView` now greys
+  those layers by `MenuController::grey_level(child / 2)` (`row_banners`: 10 children, 8 for
+  the variants). After: 35.4 against Wine's 31.0. The variant page's closed rows already matched.
+- **Mask-0 background icons (provisional).** The track pages' background brick `0x23d` has three
+  GDSprites at (0, 0) with `m_VisGroup` 0 (`0x205`, `0x219`, `0x21a`; materials `0x3d4..0x3d6`).
+  `m_VisGroup` is the selection mask `+0x90` that `0x488ba0`/`0x48cec0` set and clear; item
+  GDSprites have it 0 and show only when selected. The port drew the top one (crossed flags) in the
+  corner; Wine shows none with a fresh profile. `MenuView` now skips GDSprites outside items with
+  mask 0 (the main group's two such sprites were already replaced by films). No writer of these
+  three icons' masks was found; they probably mark a result on the selected track.
+- **Brightness:** the open banners are about 7% brighter natively on every row (131.9 against 141.3
+  on the first); not investigated.
+- **Pause:** the list's layout matches; Wine dims the race behind it to about half (sky 0.55, sand
+  0.50, HUD 0.63 of the frame before; 255 → 132, 231 → 117, 115 → 58). The renderer's gamma slot
+  `+0xc0` has only the slider and init callers (`0x489bce`, `0x489d34`, `0x4aebb7`, `0x4ba21d`), so
+  the dimming comes from elsewhere (not traced; the WMenuBrick's `m_bUseInhibitSiblings` = 1 is a
+  candidate). The port does not dim.
+
+## Colour depth (2026-11-11)
+
+- The "7% brighter" banners: per pixel the port's colours are Wine's / 0.964 (the main menu's text:
+  Wine 239, 230, 222 where the port has 248, 240, 232; the banners' median ratio 0.95–0.97).
+- Every Wine capture (main menu, environment page, race) holds exactly 32 red and 64 green values,
+  all on the R5G6B5 levels (k × 255 / 31, k × 255 / 63); the native captures have 256. A `+ddraw`
+  trace shows `ddraw7_SetDisplayMode … bpp 16` (the startup's 320×240 mode; the menu's mode was not
+  reached in that 30 s trace). So the original renders into a 16-bit surface.
+- Not explained: plain truncation would keep 248 as 5-bit 31 (255); Wine shows 29 (239). Either the
+  game's texture conversion or wined3d's path scales by about 0.964. No 0.955..0.975 float and no
+  0xf6f6f6/0xf0f0f0 word is in WPC.EXE's data sections.
+- The port keeps 8 bits per channel (no banding); not changed.

@@ -19,7 +19,11 @@ VehicleTuning vehicle_tuning(int vehicle);
 // gadget and weapon are the 0x52aac8/0x52aacc input bits (0x0001, 0x0002).
 // view: input bit 0x8 pressed (control 4), look_back: 0x4 held (control 5),
 // read by the follow camera 0x478070 (masks 0x52aad0/0x52aad4).
-struct DriveInput { bool accelerate=false, brake=false, left=false, right=false, gadget=false, weapon=false, view=false, look_back=false; };
+struct DriveInput { bool accelerate=false, brake=false, left=false, right=false, gadget=false, weapon=false, view=false, look_back=false;
+    // A joystick's x axis byte (-128..127, 0 centred). Non-zero, the
+    // original's steering takes its analog branch (0x46768e), which skips
+    // the keyboard keys and the creep (0x4677da).
+    int axis=0; };
 
 // Normalized forward speed (+0x3ef) and brake/reverse state (+0x257).
 struct SpeedState { float speed=0; int brake_state=0; };
@@ -58,6 +62,12 @@ void update_robot_speed(SpeedState& state,const VehicleTuning& tuning,int thrott
 float robot_steering(float steer);
 // 0x467640, keyboard branch: step, clamp +/-40 degrees, decay 0.8, deadband.
 float update_steering(float steer,const VehicleTuning& tuning,const DriveInput& input);
+// 0x4677da..0x467806 (the steering update 0x467640, after the speed's
+// 0x466db0 in the car update 0x46a719/0x46a720): a steering key held at a
+// speed in [0, 0.1) sets the speed to 0.05 and +0x257 to 1, so a stopped
+// car turns and creeps (Wine, cc_t1 grid: Left alone gives 0.0500 at once).
+// Keyboard steering of a human car only: skipped while a joystick axis is off centre.
+void steer_creep(SpeedState& state,const DriveInput& input);
 
 // The skid flag +0x25b (0x47060f) = +0x25f || +0x263, which WCarFx's tyre
 // tracks use on surface 2.

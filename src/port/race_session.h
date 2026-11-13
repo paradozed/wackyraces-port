@@ -227,6 +227,9 @@ public:
     void give_weapon(int icon) {if(icon>=0x0b && icon<=0x19) {items_.weapon=icon;items_.weapon_state=3;items_.charge=3;}}
     // Debug (WPC_GADGET): player 1 holds gadget icon 0..10 with a full charge.
     void give_gadget(int icon) {if(icon>=0 && icon<=10) {items_.gadget=icon;items_.gadget_state=3;items_.charge=3;}}
+    // Debug (WPC_LAST_LAP): player 1 on its last lap, so the next forward
+    // crossing finishes the race (the original's +0x19f at the lap count).
+    void debug_last_lap() {body_.laps=track_.laps()-1;body_.line=0;body_.started=true;}
     int hit_sounds() const {return body_.hit_sounds;} // WackyAutoBomba activations heard (+0x3e3)
     int oil_sounds() const {return body_.oil_sounds;}
     // +0x25b: braking or sliding (skid marks on surface 2).
@@ -398,6 +401,11 @@ private:
         int frags=0; // +0x3a3: hits received (0x47d756), the battle count
         bool sliding=false;     // settled from the far step (state 0x1000)
         int line=-1;            // +0x183 less one before the first crossing (see crossings)
+        bool started=false;     // +0x19f > 0: the line crossed once (0x4a3d5c)
+        int previous_section=0; // +0x1bb: a hidden car's section before its last row wrap (0x4a201d)
+        int shown_section=-1,shown_updates=0; // the row a hidden robot was shown into (see virtual_robot)
+        int seen_section=-1;    // the section at the last robot update, for previous_section
+        bool lap_mark=false;    // +0x93f: set by a counted lap (0x4a444c); cleared off section 0 (provisional)
         int log_ride=-1,log=-1; // +0x89f: the WLogBase the car last stood on
         int bridge=-1;          // +0x89f: the WMisty whose half it last stood on
         uint64_t last_respawn=0,finish_update=0;

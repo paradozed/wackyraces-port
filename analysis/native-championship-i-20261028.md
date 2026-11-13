@@ -159,7 +159,16 @@ The championship's first race also uses its environment's page: the car page's `
 - `0x40c430`, the application's world load, calls `0x431690` for every file.
 - `0x431690` builds `music\` plus the last path component as `.snd`. Names containing "dr" take the `_t1`..`_t4`/`_b` fallbacks (strings `0x5299d8..0x529a04`).
 - The path goes to the sound manager's `+0x4c` (`0x006f5bcc`, flag 1).
-- For `Win\WinMean.WGM` that is `music\WinMean.snd`. No such file is on the disc (Music holds the 20 course tracks only), so the scene is silent, as natively. The manager's handling of the missing file is not traced.
+- For `Win\WinMean.WGM` that is `music\WinMean.snd`. No such file is on the disc (Music holds the 20 course tracks only), so the scene is silent, as natively.
+- The manager's handling (traced 2026-11-12):
+  - the sound manager `app+0x183c` is the global `0x6aad04`: base vtable `0x511edc` (`0x44c1c0`), its
+    class's `0x510b80` (`0x426b3e`);
+  - its slot `+0x4c` (`0x4273a0`) first calls `+0x44` (`0x427430`), which destroys the running music
+    stream `+0xbc` and clears it;
+  - only then does it create the new `0x5b`-byte stream for the path (`0x405849` → `0x428790`).
+  So the course music always stops at the winner scene's load, and the missing file leaves silence.
+  Natively `linux_main` stops the music there too. The new stream's failure path (the "cannot open
+  file" string `0x529a0c`) was not followed further.
 
 **End of the winner scene, `0x494b20`.** It is called from the scene object's update `0x494be0`, either on a skip or when the sequence ends.
 - After ct_t4 it loads `win\DickOff.wgm`.

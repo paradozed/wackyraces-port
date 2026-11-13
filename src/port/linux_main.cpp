@@ -13,6 +13,7 @@
 #include "menu_view.h"
 #include "winner_scene.h"
 #include "wpc_platform.h"
+#include <cmath>
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -28,6 +29,37 @@
 #include <string>
 
 namespace {
+// The renderer's screen wipe (Direct3D slot +0xc8, 0x4ae730). Slot +0xcc
+// (0x4ae6b0) starts it opening, slot +0xd0 (0x4ae6f0) closing; both keep
+// the start time (0x2a1bb60) and the shift (0x2a1cc6c). The scene loader
+// 0x431690 re-inits the renderer (slot +0x1c, 0x4aeb70), which calls
+// +0xcc(0): every menu, race or winner scene opens from black. The pause
+// (0x4902b0) calls +0xd0(1) in one-player races; its end (0x4905dc)
+// +0xcc(1), which with a shift and no closing flag draws nothing. Each
+// frame, with T the ms since the start (0x2a1caf0), doubled by a shift and,
+// closing, T = 1200 - T; nothing once T >= 4800: the screen in 20-pixel
+// cells ((W / 20 + 1) x (H / 20 + 1)), each black with alpha
+// min(255, 25 x ftol(distance from the centre cell) - T / 2 + 255) >> shift.
+// Opening, the centre clears after 510 ms; the pause's dim closes in from
+// the edges and holds at 127 after 600 ms. It is drawn at the frame end
+// (0x4af075), or during the pause (0x6e4585) after the sprite list
+// (0x4b332f), under the menu.
+void screen_wipe(WpcWindow* window,double seconds,bool closing,int shift) {
+    if(shift && !closing) return;
+    if(!(seconds>=0) || seconds>10) seconds=10; // long finished (T >= 4800 either way)
+    int t=int(seconds*1000);
+    if(shift) t*=2;
+    if(closing) t=1200-t;
+    if(t>=4800) return;
+    int width=0,height=0;wpc_window_get_size(window,&width,&height);
+    const int columns=width/20+1,rows=height/20+1;
+    for(int j=0;j<rows;++j) for(int i=0;i<columns;++i) {
+        const int dx=columns/2-i,dy=rows/2-j;
+        int alpha=int(std::sqrt(float(dx*dx+dy*dy)))*25-t/2+255;
+        alpha=std::min(alpha,255)>>shift;
+        if(alpha>0) wpc_vk_draw_rect(window,i*20,j*20,20,20,0,0,0,alpha/255.f);
+    }
+}
 namespace fs=std::filesystem;
 fs::path file(const fs::path &directory,const std::string& name) {return wpc::game_file({directory},name);}
 unsigned number(const std::string &value, const char *option) {
@@ -124,12 +156,18 @@ struct Race {
     double accumulator=0;
     bool championship=false;
     bool gadget_key=false,weapon_key=false,view_key=false,view2_key=false; // keys as of the last update
+    // A battle started from the menu: the accept press that started it is
+    // still in player 1's pressed bits on the first update (no countdown),
+    // where Return is also the CAMERA key, so player 1's camera starts
+    // toggled to view 0 (Wine memory read 2026-11-12: player 1's camera 800
+    // back and 100 up, player 2's 900 and 350; one Return later, 900 and 350).
+    bool start_press=false;
     int hit_type=0;unsigned long long hit_at=0; // WPC_HIT (debug)
     std::string name;int vehicle=0;           // for RECOMMENCER (WMenuNodeLoadTrack)
     // The in-race pause: general.wgm's WMenuBrick graph (WMenuNodePause).
     std::unique_ptr<wpc::MenuController> pause;
     std::unique_ptr<wpc::MenuView> pause_view;
-    bool paused=false;double pause_start=0;
+    bool paused=false;double pause_start=0,dim_start=0;
     bool backslash=false; // the '\\' key (DIK 0x2b) last update, for the pause's bit 0x100
     // DEMO: the demo's buffer and its controller cursor (0x45ba30); the race
     // takes its inputs and returns to the menu when they run out.
@@ -211,6 +249,11 @@ int main(int argc,char **argv) {
         wpc::GameAudio audio({config.data},{config.disc},config.language);
         // After the audio: a race's RaceAudio stops its voices in this mixer.
         std::unique_ptr<Race> race;
+        // The opening wipe's start (screen_wipe, +0xcc(0) from the scene
+        // loader 0x431690): set when a menu, race or winner scene is loaded.
+        // The original starts it before loading the scene file; natively at
+        // the load's end (provisional).
+        double wipe_start=-1e9;
         wpc_log("Audio output: %s",audio.backend().c_str());
         try { audio.load_menu_bank(); }
         catch(const std::exception& error) { wpc_log_error("Menu sound bank unavailable: %s",error.what()); }
@@ -263,6 +306,7 @@ int main(int argc,char **argv) {
                 if (const char* w=std::getenv("WPC_WEAPON"); w && *w) next->session->give_weapon(std::atoi(w));
                 // Debug: WPC_GADGET=0..10 gives player 1 that gadget, charged.
                 if (const char* g=std::getenv("WPC_GADGET"); g && *g) next->session->give_gadget(std::atoi(g));
+                if (const char* l=std::getenv("WPC_LAST_LAP"); l && *l && std::atoi(l)) next->session->debug_last_lap();
                 // Debug: WPC_HIT=TYPE,UPDATE hits player 1 with that WackyAutoBomba
                 // type (e.g. 0x80) at that race update (captures).
                 if (const char* h=std::getenv("WPC_HIT"); h && *h && std::sscanf(h,"%i,%llu",&next->hit_type,&next->hit_at)!=2)
@@ -315,7 +359,7 @@ int main(int argc,char **argv) {
                     for(uint32_t va:row) if(auto line=exe.string_at(va);!line.empty()) text.push_back(line);
                     if(text.size()==3) next->view->set_championship_message(std::move(text));
                 }
-                race=std::move(next);
+                race=std::move(next);wipe_start=wpc_time_now();
                 const auto& car=race->session->player();
                 wpc_log("Loaded course: %s; %d laps, player at (%.1f, %.1f, %.1f) section %d",path.string().c_str(),
                         race->track->laps(),car.position[0],car.position[1],car.position[2],car.section);
@@ -367,7 +411,7 @@ int main(int argc,char **argv) {
                 movie.reset();
                 if (stage==Stage::CardL2) wpc_log("Presenting L2.bmp");
                 else if (stage==Stage::CardL3) wpc_log("Presenting L3.bmp");
-                else { menu_start=now; wpc_log("Presenting main menu"); menu_music(); }
+                else { menu_start=now;wipe_start=wpc_time_now(); wpc_log("Presenting main menu"); menu_music(); }
                 return;
             }
         };
@@ -382,7 +426,7 @@ int main(int argc,char **argv) {
             try {
                 const auto path=wpc::game_file({config.disc,config.data},name);
                 winner=std::make_unique<wpc::WinnerScene>(window.get(),audio,path.string(),canonical,winner_vehicle,winner_environment,winner_course);
-                stage=Stage::Winner;winner_start=now;winner_updates=0;
+                stage=Stage::Winner;winner_start=now;winner_updates=0;wipe_start=wpc_time_now();
                 audio.stop_music(); // 0x431690 asks for music\Win*.snd, which the disc lacks
                 wpc_log("Winner scene %s",name.c_str());
                 return true;
@@ -506,7 +550,7 @@ int main(int argc,char **argv) {
                         race->pause_view=std::make_unique<wpc::MenuView>(window.get(),race->general,race->general_scene,strings,*race->pause);
                         race->pause_view->set_overlay(true);
                         race->pause_view->prepare();
-                        race->paused=true;race->pause_start=now;
+                        race->paused=true;race->pause_start=now;race->dim_start=now;wipe_start=-1e9;
                         wpc_log("Race paused at update %llu",(unsigned long long)race->session->updates());
                     } catch (const std::exception& error) {
                         wpc_log_error("Pause menu unavailable: %s",error.what());
@@ -572,7 +616,7 @@ int main(int argc,char **argv) {
                         }
                         after=controller.race_over(race->session->rank(),race->session->race_points());
                     }
-                    race.reset();
+                    race.reset();wipe_start=wpc_time_now(); // menu.wgm loads again (0x431690)
                     if (after.kind==wpc::MenuEvent::PlayWinner) {
                         wpc_log("%s: winner scene",after.detail.c_str());
                         const auto& s=controller.session();
@@ -635,8 +679,15 @@ int main(int argc,char **argv) {
                         std::array<int,8> b{};
                         for (size_t a=0;a<8;++a) b[a]=int(controller.prefs().controls(int(p))[a].first);
                         const int x=j.axis_byte(0),y=j.axis_byte(1);
-                        in.left=in.left || x< -64 || j.button(b[2]);in.right=in.right || x>64 || j.button(b[3]);
-                        in.accelerate=in.accelerate || y< -64 || j.button(b[0]);in.brake=in.brake || y>64 || j.button(b[1]);
+                        // 0x467640: the x axis steers through the analog branch
+                        // (proportional), the buttons as keys.
+                        in.left=in.left || j.button(b[2]);in.right=in.right || j.button(b[3]);
+                        if(x!=0) in.axis=x;
+                        // 0x466f9e..0x466fe8: the speed code reads the y byte itself, any
+                        // value below 0 accelerating and above 0 braking (the +-64 bits of
+                        // 0x4399b0 are the menus'). The byte's scaling from the device is
+                        // not traced: value / 256, whose truncation gives a small dead zone.
+                        in.accelerate=in.accelerate || y<0 || j.button(b[0]);in.brake=in.brake || y>0 || j.button(b[1]);
                         in.look_back=in.look_back || j.button(b[5]);
                         if (p) {in.gadget=in.gadget || j.button(b[6]);in.weapon=in.weapon || j.button(b[7]);}
                         joystick_view[p]=j.button(b[4]);
@@ -649,6 +700,7 @@ int main(int argc,char **argv) {
                         input.gadget=gadget_down && !race->gadget_key; input.weapon=weapon_down && !race->weapon_key;
                         race->gadget_key=gadget_down; race->weapon_key=weapon_down;
                         input.view=view_down && !race->view_key; race->view_key=view_down;
+                        if (race->start_press) {race->start_press=false;input.view=true;}
                         if (race->session->two_players()) {
                             const bool down=wpc_input_code_down(window.get(),wpc::dik_to_linux(keys_of(1)[4].first))!=0 || joystick_view[1];
                             input2.view=down && !race->view2_key;race->view2_key=down;
@@ -708,6 +760,7 @@ int main(int argc,char **argv) {
                         requested_course=wpc::course_file(session.game_mode,session.environment,session.course);
                         start_race(requested_course,session.vehicles[0],
                                    session.game_mode==3 && session.championship>=0);
+                        if (race) race->start_press=race->session->mode()==1 && race->session->two_players();
                         if (race) {
                             // 0x45b310: the session words, course and rain flag head the buffer.
                             wpc::Replay& r=race->recording;
@@ -749,8 +802,16 @@ int main(int argc,char **argv) {
                         const bool l=pressed(2),r=pressed(3),go=pressed(0),stop=pressed(1);
                         if (l) dispatch(controller.two_move(p,-1));
                         if (r) dispatch(controller.two_move(p,1));
-                        if (go) dispatch(controller.two_ready(p));
-                        if (stop || (p==0 && new_escape && !escape)) dispatch(controller.two_back(p));
+                        // Binding list 3 (0x40d0e6..) maps Return to the accept bit
+                        // 0x40 and Escape to the back bit 0x10 of the keyboard; both
+                        // keyboard players (device -1) read it, so one Return makes
+                        // both ready and the page goes on (Wine, 2026-11-12), and
+                        // Escape backs out player 1 or un-readies both (0x48e364).
+                        const bool keyboard=controller.prefs().device(p)<0;
+                        const bool accept=keyboard && new_enter && !enter,back=keyboard && new_escape && !escape;
+                        if (go || accept) dispatch(controller.two_ready(p));
+                        if (!controller.two_player_page()) break;
+                        if (stop || back) dispatch(controller.two_back(p));
                         if (!controller.two_player_page()) break;
                     }
                 } else if (binding) {
@@ -813,6 +874,11 @@ int main(int argc,char **argv) {
             if (frame_status>0) {
                 if (stage==Stage::Legal || stage==Stage::Intro || stage==Stage::Outro) movie->draw();
                 else if (stage==Stage::Menu && race) {
+                    // The pause's dim goes inside the HUD, before the gauge and
+                    // the speedometer (RaceView::set_late_dim).
+                    if (race->paused && !race->session->two_players())
+                        race->view->set_late_dim([&]{screen_wipe(window.get(),now-race->dim_start,true,1);});
+                    else race->view->set_late_dim(nullptr);
                     race->view->draw();
                     if (race->paused) race->pause_view->draw(now-race->pause_start);
                 }
@@ -826,6 +892,8 @@ int main(int argc,char **argv) {
                     wpc_vk_draw_texture(window.get(),(width-draw_width)/2,(height-draw_height)/2,
                                         draw_width,draw_height,card_textures[stage==Stage::CardL2?0:1]);
                 }
+                // 0x4af075: the opening wipe at the frame end, over everything.
+                if (stage==Stage::Menu || stage==Stage::Winner) screen_wipe(window.get(),now-wipe_start,false,0);
                 if (!wpc_vk_end_frame(window.get())) return 1;
                 ++rendered;
                 if (config.frames && rendered>=config.frames) break;

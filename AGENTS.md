@@ -43,6 +43,7 @@ The project's goal is a native Linux x64 port of the 2000 PC game Wacky Races
   - `WPC_RACE_PLACE=x,z,yaw`: the same for any race;
   - `WPC_WEAPON=11..25`: player 1 holds that weapon, charged;
   - `WPC_GADGET=0..10`: player 1 holds that gadget, charged (0..6 FlyPower, 8 TurboSpeed);
+  - `WPC_LAST_LAP=1`: player 1 starts on its last lap, so its first crossing ends the race;
   - `WPC_WEATHER=0/1/2`: overrides METEO (off, on, random);
   - `WPC_WINNER=vehicle,environment,course`: opens that winner scene;
   - `WPC_HIT=TYPE,UPDATE`: hits player 1 with that WackyAutoBomba type (e.g.

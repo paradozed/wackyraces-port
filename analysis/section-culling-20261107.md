@@ -220,3 +220,42 @@ copy (`0x425bf0`, which copies the group of a cloned template), they fall into t
 
 **Not compared:** `cc_t1`, `dt_t1` and `ct_t1` across the seam (they changed by 0.6–1.4% of pixels
 behind the banner); two players.
+
+## Skid marks across the seam (2026-11-12)
+
+- `0x47a7c0` draws the trail through thunk `0x40250e`, which jumps to `0x4a8e60`. It is called on the
+  manager `0x6f2d00` with the skid object's `+0x10` and returns the matrix to draw the trail with.
+- `+0x10` is the parent node: the root node's constructor `0x41b230` clears `+0x10`/`+0x14`/`+0x1c`,
+  and the insertion `0x41b3c0` gives the new node the other node's `+0x10` and splices it into the
+  `+0x14` sibling chain. The skid object is created by the factory `0x479d90` (vtable `0x512e04`; its
+  draw `0x47a4b0` is slot `0x512e10`) under its car.
+- `0x4a8e60` returns identity unless `0x5472bc` is set and the node has `0x8000` in `+0xc`. With `n`
+  the section count less one (from `[[app+0x18]+0x1c]`) and `0x5472c0` the camera's section:
+  - camera in section 0: the node's group `+0x104` = `n` takes the wrap;
+  - camera in section `n`: a group of `n − 1` or `n` takes it.
+  The matrix comes from `[this+0x2c]`. This is the same marking as the groups' `0x432690`.
+- Native: `RaceView::effects` now draws each car's trail through `place(car section)`, so a car's
+  whole trail moves with the car's current section.
+  - The player's own trail is never moved: its group is always the camera's.
+  - A robot in the last section while the player is in section 0 draws its trail through `wrap()`.
+- Not compared with Wine. Taken to be the same, not checked: that the car's `+0x104` is the section
+  the port tracks, and that its `+0xc` has `0x8000`.
+
+## Two players: the second tracker (2026-11-12)
+
+- At the race's start (`0x49e339..0x49e356`), with `app+0x1a64` = 1, player 1's three slots (`+0x830`,
+  `0x6f` dwords = 3 × `0x94`) are copied to player 2's at `+0x9ec`. So player 2 starts with the same
+  rows.
+- A tracker move `0x4a09b0(player, ...)` works on that player's slots at `+0x830 + player × 0x1bc` (it
+  copies the new rows from `+0xba8..`). It then enables the rows with `0x4a8680`, which sets bit 2 in
+  the nodes' `+0xc`. That flag is global, not per view.
+- So each view draws the union of both players' enabled sets, as the port's `enable()` for both
+  sections does.
+- The camera group `0x5472c0` used by the seam placement (`0x4a8e60`, `0x432690`) is set per camera in
+  the draw loop (`0x43274f..0x4327ab`):
+  - by default, player 1's car (`[0x6f2d00+0x38]`) group `+0x104`;
+  - in two players, player 2's car (`+0x3c`) for a camera whose `+0x186` is not `[0x6f2d04+0x58]`.
+  The tracker moves also write it (`0x4a0b99`, `0x4a0cfb`, `0x4a141e`, `0x4a15a4`), but the draw resets
+  it.
+- The port's per-view `p` (each view's own car's section) matches.
+

@@ -258,3 +258,13 @@ So only controller 0 runs on the car-selection page:
 - **Captures** (native, `cc_t1`, `WPC_GADGET`): vehicle 4's turbo swings both clubs; vehicle 1's
   FlyPower opens the umbrella over the car. Not compared with Wine.
 
+
+## TurboSpeed's `+0x70` (2026-11-11, static reading)
+
+The init `0x4d6cb0` writes the float 1.0 to the action's `+0x70` for vehicle 1 (`0x4d7015`, after the
+body's segment 1 scale lock `0x40360c`). No routine of TurboSpeed's method table `0x5162c8` (11 slots:
+`0x4d6c40`, `0x41b3f0`, the update `0x4d71e0`, `0x4115b0`, the init `0x4d6cb0`, `0x4115f0`, `0x41b5e0`,
+`0x4160c0`, `0x41b470`, `0x4160e0`, `0x416100`) reads `[this+0x70]`; the base slots' hits are stack
+slots (`[esp+0x70]`). The `+0x70` readers at `0x4d79b6..0x4d79fa` (+ `0x512a60`, wrapped at
+`0x51636c`, × `0x511518` into `0x403279`) belong to the next class (vtable `0x5163cc`, constructor
+`0x4d7bf5`), not to TurboSpeed. So the write has no effect; nothing to port.

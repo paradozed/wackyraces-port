@@ -143,7 +143,26 @@ So something is still missing, for example:
 | Second ramp, pitch | 0.437 | 0.491 |
 | Second ramp, peak | y ≈ 3849 | y ≈ 4009 |
 
-The higher second jump is attributed to the vertical rays.
+The higher second jump was attributed to the vertical rays. **Tested 2026-11-12, and that is not it:**
+- The same run, rebuilt as a harness (place, heading 3.05, Up held), reproduces this table: approach
+  pitch 0.332, first peak 3475, second ramp 0.491, second peak 3947.
+- With the four probe rays cast along the car's own axis instead (from the probe + up × 1.3 × 80 to
+  the probe − up × 1.3 × 30, through the general ray query, taking its hit point), the second ramp's
+  pitch is still 0.491. Every take-off, peak and landing is within one unit. Withdrawn.
+- **The surface:** the second ramp has two slopes, 0.350 lower down and 0.492 at its top (the polygon
+  normal under the car). The port's pitch follows it exactly: 0.305 and 0.365 on the lower part,
+  0.441 straddling the joint (updates 107–109), then 0.491 (110), the update before take-off.
+- Wine's 0.437 lies between the two slopes. Either the original took off from the joint, one update
+  earlier (its lip speed was 0.49 against the port's 0.58 here), or the Wine samples missed its last
+  update on the steep part.
+- **Settled the same day, per frame under Wine.** Both builds drove the race with the closed-loop driver on
+  a robot route, and Wine's pitch `+0x267` was logged on every frame. On the second ramp Wine's car
+  reaches 0.493 (52.703 s and 52.754 s, at x ≈ 22570), then takes off at 0.458:
+  - the earlier 0.437 was a sampling gap, and the port's 0.491 from the fixed pose matches;
+  - the other phases match too: the first ramp at 0.327 against the port's 0.321 on its line, the
+    pitch held through the airtime, ×0.85 from airtime 11 (0.458 → 0.389), and the landing to 0;
+  - on the route run the port's line runs about 100 further west (x ≈ 22450), where the ramp only
+    reaches 0.447, so those two runs are not on the same line.
 
 **Results** (`native_drive_test`): `sh_t1` 1 lap in 110.1 s with 0 respawns (178.8 s with 5 before); `cc_t1` 110.6 s; `dt_t1` 101.0 s; `ct_t1` 101.8 s. All robots lap all four courses.
 
@@ -186,3 +205,19 @@ The higher second jump is attributed to the vertical rays.
 - `native_drive_test` passes on cc_t1, sh_t1, dt_t1 and ct_t1. The test driver's sh_t1 lap went from 248.4 s to 99.3 s.
 - The hit-hold check now allows 100 units of slope creep: at update 400, robot 0 is on cc_t1's bank at (−14516, 1123, 15418).
 - Not compared with Wine.
+
+## The contact spreads (2026-11-11, static reading)
+
+- Set at the car init (`0x469ca1..0x469cc5`): `+0x15b` = `0x52b7f8[v × 16]`, `+0x15f` =
+  `0x52b7fc[v × 16]` (vehicle 0: 1.2 and 0.8; the table is in `analysis/weapons-bomba-20261029.md`,
+  MonsterTires). MonsterTires puts `0x52b800[v]` in `+0x15b` (1.6 for vehicle 0) and restores it.
+- Readers: 32 of `+0x15b` and 10 of `+0x15f`, all in the contact code `0x46ca33..0x46f308`.
+- The robots' centre ray (`0x46c974`, mask `0x18000ff`, `0x402199`), on a hit (`0x46c98b..0x46ca8a`):
+  M = (FR probe `+0x417` + FL probe `+0x40b`) × 0.5 (`0x51026c`); the contacts `+0x43b` (FL) and
+  `+0x44f` (FR) become M + (probe − M) × `+0x15b`. So `+0x15b` widens the front pair across the
+  car. The pairs of the other readers (for example `0x46cbb5`: FL with RL) were not mapped case by
+  case.
+- Effect: only on the contact points, which the tyre tracks (`0x47a590`, `+0x43b + 0x14w`) and the
+  solve read. Not ported: the native contacts are the template's wheel offsets on the ground
+  (`RaceSession::wheel_contacts`), not the probes, so the spreads have no native counterpart until
+  the probe solve is ported.

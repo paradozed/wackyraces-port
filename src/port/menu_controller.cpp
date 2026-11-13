@@ -48,7 +48,10 @@ const Node *MenuController::page() const {
     return result && result->class_name=="WMenuPage" ? result : nullptr;
 }
 const Node *MenuController::shown_page() const {
-    if (current_->class_name=="WMenuNodePause" && session_.player_mode==0) {
+    // The root WMenuNodePause shows its option node's page 247 (no cursor) in
+    // one player and, as Wine shows (cc_t1, 2026-11-12), in two players too;
+    // page 243 (JEU EN PAUSE, PRESS ENTER...) is not shown.
+    if (current_->class_name=="WMenuNodePause") {
         const auto next=children(*current_);
         if (!next.empty())
             if (const Node *p=lookup(uint32_t(next.front()->integer(0x1a0))); p && p->class_name=="WMenuPage") return p;

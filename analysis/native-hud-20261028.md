@@ -252,3 +252,50 @@ per viewport, chosen by `+0x13a`), and the HUD block of the second player
 - `native_drive_test` (cc_t1): practice with record `0xfffffff` ends in state 15, counter 60, with no standings and a new record for vehicle 3. Enter is accepted after 60 updates.
 - An Xvfb capture shows the record head (Dick Dastardly, vehicle 0) from film 66332.
 - Not compared with Wine.
+
+## The strip before the first crossing (2026-11-11)
+
+- **Wine against native** (`cc_t1`, Dingo-Limousine, the player idle; both builds started from the
+  menu with the same keys and recorded at 2 fps for 200 s; head positions every 5 s from the strip
+  band y 680..706): Wine's player head sits at x 63 (the strip's start) the whole time; the port's
+  sat at 113, about 25 strip units (11% of a lap) in.
+- **Original:** the lap distance pass `0x4a3d20` sets `+0x1a3` (the distance into the lap the
+  strip divides by `+0xf38`) to 0 while the crossing count `+0x19f` is ≤ 0 (`0x4a3d5c..0x4a3d66`),
+  and `+0x1a7` (the race order distance) to count − index − 10000. `+0x19f` is 0 on the grid
+  (`0x49f4ef`) and 1 after the first crossing; it never returns to 0.
+- **Native:** `Body::started` (set by the first forward crossing in `crossings`, by `count_lap`, and
+  by a hidden robot's virtual pass of the line); `RaceSession::strip` gives 0 until then.
+  `native_drive_test` (every course): the player's fraction at update 200 on the grid is 0 and some
+  robots are past 0 after 900 updates (`cc_t1`: 6, best 0.509). Control (the gate disabled): the
+  player at 0.082, the check fails.
+- **Robots' pace** from the same recordings: the leading robot wraps to lap 2 at about 55–60 s in
+  both builds and reaches the strip's end again around 175 s (native) and 185 s (Wine); the native
+  heads were offset by the same 11% before this fix, so the pace is within the 5 s sampling. Not a
+  lap-by-lap comparison (the heads are not told apart).
+
+## The finish standings against Wine (2026-11-12)
+
+- **Setup.** Wine: a `cc_t1` single race; during the countdown the memory writer set the player's
+  `+0x19f` to 3, so its first crossing (Up held 4 s) passed the lap count (`0x4a42a1`) and ended the race.
+  Native: `WPC_LAST_LAP=1` (`RaceSession::debug_last_lap`: player 1's completed laps to the course's
+  laps − 1, its line counter ready), the same keys. Captures 2, 4, 6, 9 and 13 s after Up.
+- **Matches:** the standings replace the HUD over the race view, seven rows with the heads, sliding in
+  row by row; "POUR CONTINUER PRESSER ENTREE" (string 7) appears in both by the 6 s frame.
+- **Differs, by the setup:** Wine ranked the player 7th, the port 1st. The original orders the rank
+  table by the race distance `+0x1a7`, built from `+0x187` (the internal lap count, which the write left
+  at 0), not by `+0x19f`; the port's debug lap sets the counted laps. The robots' order differs with the
+  random grid (`analysis/robocar-ai-20261028.md`).
+- Not compared: a real finish, with every lap driven.
+
+## The uncharged icons' opacity (2026-11-12)
+
+- The panel `0x4d2c80` sets each icon material's `+0x60` to 0.4 (`0x3ecccccd`) while the charge
+  (`+0x399`) is below 1, else 0 (`0x4d2ea8..0x4d2eba`, `0x4d2f2f`). The port drew the icons at opacity 0.6.
+- Compared on the same picture (`cc_t1`, the grid during the countdown, both builds; then the pause's
+  dim, which the icons are drawn after): with the port's frames giving the icon I and the background B
+  per pixel (B = (before − after) / 0.2 at 0.6), the opacity that best fits Wine's frames is about
+  0.35–0.4 (mean error before / after: 19.1 / 18.6 at 0.35, 19.3 / 19.5 at 0.4, 30.7 / 29.7 at 0.6).
+- 0.36 = 0.6² fits: the port at 0.36 dims the icons to 0.638 and 0.630 under the pause, Wine 0.642 and
+  0.639, and before the pause the icon area's mean is 163.0 against Wine's 160.9 (per-pixel difference
+  18.6, at 0.6 30.7). So the material alpha seems applied twice (diffuse and texture stage);
+  provisional, the renderer path is not traced, and other translucent materials were not checked.

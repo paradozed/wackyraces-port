@@ -119,3 +119,98 @@ The greedy test driver gets stuck, and so does an experimental follower of a rob
 **Test changes.** Avoidance aims are counted during the race only: finished robots park at the line and aim beside each other (`dt_t2`, 562 of 2944 off the route). The log and rolling checks gained a robot and a wrong-section case.
 
 **Not ported, seen on the way.** `0x4c1cda` is another flags-1 query, in a class not identified here.
+
+## The fountain and far robots (2026-11-12)
+
+- **Seen under Wine** (`dt_t2`, player idle on the grid, two runs): vehicle 6 reaches the fountain at
+  (55095, 460, −4616) in the far mode (`+0x2b1` = `0x1000`, gliding at 0.775) and is caught at 27.08 s.
+  The hold zeroes its speed `+0x3ef`, its steer `+0x403` and its airtime. From then on it stays,
+  moving to and fro about ±150 around (55400, −4400), for the rest of each watch: 13 s and 33 s.
+  The five other robots, also far, cross in about 0.5 s.
+- **Native:** every robot is caught too (speed 0, airtime 0), but the far step keeps moving it about 100
+  an update, so it leaves the column in about 10 updates.
+- **The far step** (`0x4e54fa..0x4e5524`) uses the vehicle row's top speed × `+0x163` × the probe span
+  × 0.56/0.48, not the car's speed, as natively. The two skips before it (a running bomba
+  `0x4e53e5`, `+0x1c7` = 5 `0x4e53f0`) were not seen set.
+- **The hold** (`0x4ca5b6..0x4ca647`):
+  - it takes the car's x and z from its node's cached world matrix (`0x4200e0` → `0x43bf60`), writes
+    them with the new height into the position copy `+0x288`, and rebuilds the frame `+0x2c` from it
+    and the angles (`0x468620`);
+  - it also clears the slots (`0x472650` on `+0x48b`).
+- **Tried and withdrawn:** pinning a far robot's x and z to where the fountain first caught it (standing
+  for a cache not refreshed while undrawn). Every native robot then stuck at the fountain for hundreds of
+  updates, where Wine held only one of six. So what holds vehicle 6 is not that rule alone.
+- **The cache, checked under Wine (third run):** for vehicle 6 and vehicle 2 the frame translation
+  `+0x54`/`+0x5c` and its copy `+0xc0`/`+0xc8` are equal on every sample, before and during the hold. A
+  stale cache is not seen in that copy, which argues against the reading above (the copy that
+  `0x4200e0` returns was not identified for certain).
+- **The approach differs:**
+  - vehicle 2 comes down at x ≈ 54810, heading south, and crosses the column in about 1 s;
+  - vehicle 6 first swings west to (54072, −2873), comes back diagonally south-east, and enters the
+    column at about (55260, −4550), some 450 east of the others' line;
+  - held there, its position goes to and fro about one far step (±150), as if its far turn (half
+    the angle to the goal) flipped every update toward a goal it has overshot;
+  - the port's vehicle 6 comes in on the others' line, (54690, −4048) → (54751, −4131), and passes.
+- **The far turn, compared statically** (`0x4e5556..0x4e56b8`), matches `RoboDriver::far_turn`:
+  - the angles to the two goals (`+0x58`/`+0x60` and `+0x64`/`+0x6c`) are wrapped into ±π
+    (`0x512660`/`0x512618`/`0x510b54`);
+  - on the same side the smaller one is taken, otherwise the first;
+  - × 0.5 (`0x51026c`), and no turn without a route polygon (`+0x2c5` = 0).
+  So the difference is in the goals, which follow the random link choice (`0x4e9610`).
+- **Native over 8 random seeds:** no robot stays at the fountain longer than 60 updates. The
+  original's vehicle 6 was the one held in all three Wine runs, which fits a random stream that starts
+  the same way each launch.
+- **Where it splits:**
+  - all robots in both builds come down the same line: at z ≈ −2700, Wine x 54078–54102 and native
+    54050–54100;
+  - the 48 native entries into the column, over 8 seeds, are at x 54787–54879;
+  - under the fountain the route polygon 132 (section 2) forks to polygon 327 (weight 32767) and
+    polygon 165 (65535), so each is taken about half the time;
+  - natively 29 of 61 passes take the eastern side and leave heading south-east, to about
+    (55450, −5280);
+  - Wine's vehicle 6 instead turns to (55261, −4552), north-east of the fountain's centre
+    (55095, −4616), and is held there going to and fro.
+- **So** the original's robot aims at another point for that link, one it then circles. The goal
+  points come from `0x4026fd` (called at `0x4e556e` with `+0x2c5`/`+0x2c1`), the native
+  `RoboDriver::update_goals`.
+- **That routine** (`0x4026fd` → `0x4e9750`) runs only when the car's route polygon changes
+  (`[esi+0x28]`, `0x4e9763`).
+  - It picks the next links (`0x40552e`, into `+0x50`/`+0x54`); with `+0x1c7` at 9 or 10 it takes another
+    path (`0x401ad2`).
+  - The first goal (`0x4e9a1c..0x4e9a7b`) is the link's stored point (shorts at `+4`/`+6`/`+8`), carried
+    by a matrix built from the route brick (`+0x2bd`, ×`0x5129bc`). It is then put in the world through
+    the route node's **cached** world matrix (`[car+0x2b9]` → `0x404def` → `0x4200e0`), the per-group
+    cache that the loop seam's placement uses (`0x5472d0`).
+- **A lead, not checked:** `dt_t2` has three sections, and the fountain stands in the last one. With
+  the player idle in section 0 that group is marked for the seam (`analysis/section-culling-20261107.md`),
+  so a goal taken through the cache may be wrapped. Against it: all six far robots pass that polygon,
+  and only one was held.
+- **The goals, read under Wine (fourth run).** Vehicle 6's controller was found by scanning for its car
+  pointer (the controller holds it at `+0x24`); its goals are at `+0x58`/`+0x60` and `+0x64`/`+0x6c`.
+  For 40 s, held, its first goal cycles between three points:
+  - (55308, −4186), the goal of polygon 270, which lies just east of 132 (flags `0x7900`), back into 132;
+  - (55296, −5033), polygon 132's link to 327;
+  - (54690, −5016), polygon 132's link to 165.
+  The second goal follows the same links further on: (55763, −5802), (54299, −5859).
+- **The port's link points are the same, to the unit** (`route_point` of each link: 354 → 132 at
+  (54809, −4194); 132 → 327 at (55296, −5033) and → 165 at (54690, −5016); 270 → 132 at (55308, −4186)).
+  So the goal computation matches, and the lead about a wrapped cache is ruled out.
+- **The trap is a far-mode loop between polygons 132 and 270:**
+  - in 270 the goal leads back west into 132;
+  - each re-entry into 132 recomputes the goals and draws a new link (`0x4e9763`);
+  - the half-turn step, about 100–200 a sample, overshoots back into 270;
+  - the car crosses the boundary near x ≈ 55400 every few samples.
+- **Why only vehicle 6:** it alone entered polygon 270. As the fountain caught it, it moved about 440
+  east-south-east in 0.15 s, (54917, −4274) → (55261, −4552); vehicle 2 nearby moved about 240. No native
+  robot entered 270 in 48 passes.
+- **No jump at the catch:** per frame, vehicle 6 moves about 108 before and after it (26.77 → 26.93 →
+  27.08 s, 434 and 441 units in about 4 frames each), the normal far step at factor 2.
+  - Its approach curve, (54072, −2873) → (54406, −3569) → (54917, −4274), swung wider and passed east of
+    polygon 354's goal (54809, −4194).
+  - In 132 it drew the link to 327 (goal to the south-east) and drifted on into 270.
+  - Vehicle 2 came in further west, (54802, −4309), drew the link to 165 and turned.
+- **Conclusion:** the goals, the link draw and the far step agree with the port. The trap needs that
+  wide approach plus the eastern link, which no native pass produced. Not identified: what makes the
+  original's approach to 354's goal wider for that robot (its far turn's starting heading). No port
+  change.
+

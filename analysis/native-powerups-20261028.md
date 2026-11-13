@@ -1,7 +1,8 @@
 # Native power-ups: pickups, charge, roulette and use
 
 Recovered from the executable. The effects of using a gadget or weapon
-(the `WPU_*` classes) are not ported yet; see the end of this note.
+(the `WPU_*` classes) are ported since, in `weapons-bomba-20261029.md` (this
+note's first line said "not ported yet" until 2026-11-12).
 
 ## Track pickups (`WPowerUp`, update `0x4d3ec0`)
 
@@ -119,3 +120,24 @@ therefore in that template's actions (`WPU_Missile`, `WPU_OilSpill`,
     icons fade again.
 - Not compared with Wine: roulette outcomes and sounds. The pickup range is
   now the recovered sphere test.
+
+## Robots and a taken pickup (2026-11-12, static reading)
+
+In the car update, the object query's power-up branch (`0x46aab3..`) reads the pickup's state `+0x142`
+first and skips the take unless it is 0 (`0x46aad5..0x46aae0`). It is the same path for the player and
+the robots: the robot flag (the brick's `+0xc0` = 1) only skips the pickup sound (`0x46ab05..0x46ab0d`).
+So a hidden, waiting or growing pickup is untouchable for every car, as natively. Before that there is
+another test: the hit object's `+0x132` must not exceed its `+0x13a` (`0x46aab8..0x46aac6`).
+
+**That test, identified (2026-11-12).**
+- WPowerUp is a WHotSpot (class record `0x2ab1118`, name `0x52dfc8`). Its registered members (record
+  offset, value at +4): `m_idOnHit` `0x11e`, `m_iMaxCount` `0x126`, `m_iCounter` `0x12e`,
+  `m_iUnlockCount` `0x136`. So the test is `m_iCounter` ≤ `m_iUnlockCount`.
+- The hotspot's hit method (`0x4d3720`, reached by vtable only): with the counter at 0, it sends the
+  `m_idOnHit` event (`0x401640`), reloads the counter from `m_iMaxCount`, and activates `+0x94`.
+  Another vtable method (`0x4d3b10`) counts the counter down, and at 0 sets flag 1 on the object.
+- Every pickup on the 25 course and arena files has `m_iCounter` 0, `m_iMaxCount` 0,
+  `m_iUnlockCount` 1 and no `m_idOnHit`. So the counter never rises above 1 and the test always
+  passes. The port's take without it is equivalent for the shipped game.
+Not seen under Wine.
+

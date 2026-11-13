@@ -85,3 +85,26 @@ to 86.9 %; that check's limit is 85 % there (90 % elsewhere). No comparison of t
 frame had z along the chord. Compared under Wine on `sh_t3`: at a read of about offset 4900, Wine X (0.696, 0.009, 0.718), Y
 (0.718, 0.009, -0.696), Z (-0.013, 1, 0), world about (175472, 5086, -1265); native at 4800 X (0.757, -0.003, 0.653), Y (0.653,
 -0.003, -0.757), Z (0.004, 1, 0), and at 28.6 a step about (175473, 5086, -1264) at 4900. The two offsets differ by read lag.
+
+## WBumSteer's cycle against Wine (2026-11-12)
+
+- **Reaching `dr_t2`.** A fresh profile keeps dr closed. With the memory reader (`analysis/runtime-capture.md`)
+  writing `0x01` to the profile's 20 track bytes and 5 championship bytes (`0x6f4568 + 0xec`, `0x6f4654`)
+  at the main menu, every environment and variant opened, and LA VENGEANCE DE SATANAS 2 was selectable.
+- **Sampled** (the object by vtable `0x515bd0`): state `+0x11e`, timer `+0x122` and distance `+0x256` with
+  the clock `0x6ab2d0` (1/300 s; reset by `0x4510d0` from the scene loader `0x431fa4`, so it runs from
+  the course's load, the countdown included), every ~0.45 s for 54 s. State 0 starts at clock 10422,
+  15557, 20695, … (every 5135 ≈ 17.1 s); state 1 3160 after (288 updates); the distance ends at 28800
+  (`0x46e10000`). Counting back, a cycle starts at clock ≈ 152, the scene start within the sampling.
+- **Native** (`dr_t2`, the player idle): state 0 at update 0 (the session start), state 1 at 287, 2 at
+  348, 3 at 409, 0 again at 470: 470 updates a cycle. Under Wine 5135 clock units are about 468
+  updates at the measured pace (288 updates in 3160 units, 27 a second). So the period and the phase
+  agree.
+- The update `0x4cede0` counts the timer down in every state and reloads `m_88` at 0, advancing
+  1 → 2 → 3 → 0 at each reload (state 0 ends on the distance); the port does the same.
+- **The runner's squash** (`0x4cef24..0x4cf02e`): in state 0, after each runner's step, a query
+  (`0x4a60c0`, mask `0x100`) finds the car touching it; if its WackyAutoBomba (`+0x36d`) has no type,
+  it takes `0x200` and is activated (`0x41ba60`). The port does this in `CourseObjects::update` (the
+  runner cylinders against the cars). `native_drive_test` (`dr_t2`, 2026-11-12): the player parked
+  where the runner passes at update 200, at (−28777, −9216), is squashed at update 204. Not seen
+  under Wine.

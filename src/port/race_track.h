@@ -89,6 +89,10 @@ public:
     Vec3 route_point(int section,const GroundPoint& local) const;
     Vec3 route_vertex(int section,uint32_t record,uint16_t index) const;
     const Matrix4& start_line() const {return start_line_;}
+    // WModManager's m_idStartLineModel (action property 0x1e9, manager record
+    // +0x28/+0x2c): its frame; the start line's when absent. The same as
+    // start_line() on every course but sh_t3.
+    const Matrix4& start_model() const {return start_model_;}
     float start_radius() const {return start_radius_;} // WStartLine m_rRadius (0x1df)
     // A battle arena (*_b.wgm; sh_b alone has a WStartLine). 0x49eb70 mode 1: the
     // player takes the frame of the start row's +0x48 object moved 300
@@ -178,7 +182,7 @@ private:
     std::vector<Section> sections_;
     std::unordered_map<uint32_t,std::vector<int>> links_;  // node id -> sections whose rows link it
     std::unordered_map<uint32_t,std::vector<int>> node_sections_;  // node id -> sections whose enabling draws it (0x4a8680)
-    Matrix4 start_line_{};
+    Matrix4 start_line_{},start_model_{};
     float start_radius_=5000;
     bool battle_=false;
     std::array<Matrix4,2> battle_frames_{};

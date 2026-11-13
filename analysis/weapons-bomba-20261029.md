@@ -824,6 +824,11 @@ Static reading of the init `0x4d6380` and the update `0x4d6560`; native captures
   records after: 0 (1.2, 0.8, 1.6, 24), 1 (0.9, 0.3, 1.6, 8), 2 (0.34, 0.35, 0.9, 6), 3 (0.6, 0.6,
   1.3, 6), 4 (0.65, 0.1, 1.4, 7), 5 (1.0, 0.4, 1.9, 16), 6 (0.7, 0.5, 1.3, 8).
 
+Native (2026-11-11): the four `+0x44b` records are the tyre tracks' half width (`CarEffects`,
+`analysis/car-effects-20261028.md`): 24 during the effect, ftol(`0x52b804[v]`) after.
+`native_drive_test` (vehicle 2, whose width is 6) checks 24 at update 100 and 6 at the end. The
+contact spread `+0x15b` is still not ported (the native vertical motion does not read it).
+
 Native: `RaceSession` runs the stages (`monster_scale`); `RaceView` hides the wheels' batches, draws
 the tyres at `vehicle_wheels` (the `m_monstertires` translations) scaled by s in the car's frame,
 and raises the model. Not ported: the spin (the port has no wheel spin), the physics fields, the

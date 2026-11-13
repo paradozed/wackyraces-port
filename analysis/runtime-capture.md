@@ -501,3 +501,88 @@ The earlier saved Wine captures remain the runtime evidence for changing car
 sets and positions. The GDSprite update path and finite 40-tick callback are
 documented in [`mainmenu-road-runtime-disassembly-20261023.md`](mainmenu-road-runtime-disassembly-20261023.md);
 the callback's attachment to page 4 is still unproven.
+
+## Memory reads under Wine 11 WoW64 (2026-11-12)
+
+- winedbg cannot attach to the 32-bit game here: its attach thread faults (`page fault on read access
+  to 0xffbc11b0 in wow64 32-bit code`), leaves a `winedbg --auto` child on WPC.EXE, and the game ends
+  when that child is stopped. `/proc/<pid>/mem` is refused from an unrelated shell (Yama
+  `ptrace_scope` 1), because Wine daemonizes WPC.EXE under the user's systemd.
+- What works: a reader script that calls `prctl(PR_SET_CHILD_SUBREAPER, 1)` and then starts
+  `wine WPC.EXE` itself. WPC.EXE is reparented to the script, so the script may read
+  `/proc/<pid>/mem`. Objects are found by scanning the read-write mappings below 4 GB for a class's
+  vtable dword (GDCamera `0x5108e0`, WackyAuto `0x51295c`); fields are then read at their offsets.
+- Setup otherwise as above (scratch prefix copy, `D:` as a CD-ROM, `WINEDLLOVERRIDES=ddraw=b` with
+  `LIBGL_ALWAYS_SOFTWARE=1` so wined3d's GL draws on Xvfb). The script stays in the scratchpad.
+- Used for the two-player camera ratio (`analysis/two-player-20261101.md`) and the robots' lap
+  fields (`analysis/robocar-ai-20261028.md`).
+- Writes work the same way (`/proc/<pid>/mem` opened read-write by the subreaper script). At the main
+  menu, writing `0x01` to the profile's 20 track bytes and 5 championship bytes (`0x6f4654`, the
+  profile `0x6f4568 + 0xec`) opens every environment and variant in the scratch run, so any course can
+  be reached from the menu (`analysis/roto-magnet-volcano-20261106.md`, 2026-11-12). This changes only the
+  running process, never a file.
+- **A closed-loop driver for the original** (2026-11-12). The reader can also drive: it reads the
+  player's translation (car object `+0x2c`, floats 10..12; the file opened unbuffered, or the reads
+  repeat a cached page) about 20 times a second, takes the heading from the motion, and presses Up
+  and Left/Right through XTest towards a waypoint 1200–1500 units ahead on a robot's line recorded from the
+  port (`cc_t1`, vehicle 6, every 5 updates). It drove the `cc_t1` race on its own: two laps in one
+  run (the crossing count `+0x19f` at 3 at 176 s, one return to the track), but it stalls for tens of
+  seconds at (−54150, 9220) and (−70000, 16600), where reversing does not free it. Not yet good
+  enough for a whole race; the waypoints, the stuck recovery or a slower target speed need work.
+  (Setting the player's `m_isrobotauto`, `[car+0x18]+0xc0`, to 1 does not make the original drive it.)
+  - Later the same day: the heading from the car's own matrix (the third row: forward = (v6, v8) of the
+    13 floats at `+0x2c`) instead of its motion, one robot lap of waypoints used cyclically, a 700
+    lookahead and alternating escape turns. The car then laps by itself at about 56–58 s a lap (lap 1:
+    the crossing count `+0x19f` 1 → 2 between clock 12.2 and 70.4 s), but after lap 1 no crossing
+    registers: `+0x183` stays 0 and `+0x19f` 2 although the car goes round five more times. Not traced
+    (perhaps the cyclic path's wrap carries the car past the line's test; the player's crossing
+    conditions in `0x4a4201..` are not read). One run froze with the clock stopped.
+  - The crossing test is `0x49a2f0`(the line, the position, the previous position `+0x173`, the line's
+    radius, `cc_t1`'s `m_rRadius` 9300 around (3246, −6313), z axis (−0.147, 0.989)); `+0x183` sums its
+    ±1 (clamped at −1) and a sum above 0 counts the lap unconditionally (`0x4a4209..0x4a428d`). With a
+    9300 radius other stretches near the line (the loop seam at about (3400, −14000)) may cross its
+    plane backwards; this was not confirmed (a run logging `+0x183` stalled before lap 2, at
+    (−57200, 5150) for 80 s). The driver still stalls at three places on `cc_t1`; not pursued further.
+  - Resolved later the same day, `analysis/driven-race-20261112.md`. The missing crossings came from
+    the waypoints: from lap 2 the robots take a western branch, and lap 1's points used cyclically
+    led into the wall by the line. With lap 2's loop added, the crossings count.
+    - The original's frame limiter (`0x4ad540`, at least 33 ms a frame, factor 2 below 50 ms) makes
+      Wine's ~37 ms frames run the game at about 0.9 of real time. Lap times are therefore compared in
+      frames: a thread counts the changes of the frame start time `0x214c3a8`.
+    - Lap 1: 1558 frames in the original, 1611 updates native.
+
+- **Moving the original's car** (2026-11-12, `sh_t3`, for the TODO's unidentified log-like object): the
+  car's world position has fifteen copies in the WackyAuto object (found by a byte-wise search for its
+  coordinates): the matrix translation `+0x54`, `+0xc0`, the previous position `+0x173`, `+0x288`,
+  `+0x294`, `+0x2d5`, the four wheel probes `+0x40b`/`+0x417`/`+0x423`/`+0x42f`, their contacts
+  `+0x43b`/`+0x44f`/`+0x463`/`+0x477`, and `+0x913`. Writing only the matrix is undone at the next
+  update; shifting all fifteen by the same delta while paused moves the car for good (it settled on the
+  ground 3 s later). The view then shows only the sky: section culling follows the manager's tracker
+  rows (`+0x830`/`+0x8c4`/`+0x958`), not the car's `+0x1b7`, so a long jump needs the earlier session's
+  small hops along a robot's line. The object was not looked for.
+- **Silent Wine with an audio capture (2026-11-12).** A copy of the user's prefix uses `winepulse`, so
+  the original's sound would reach the user's speakers. In the scratch prefix set
+  `HKCU\Software\Wine\Drivers\Audio` = `alsa`, and start Wine with `ALSA_CONFIG_PATH` naming a copy of
+  `/usr/share/alsa/alsa.conf` that includes a private file whose `pcm.!default` is
+  `{ type file; slave.pcm "nullsink"; file "<scratch>/wine_audio.raw"; format "raw" }` with
+  `pcm.nullsink { type null }`. Nothing reaches PulseAudio (no client, no libpulse mapped in WPC.EXE);
+  the mix lands in the raw file (about 0.74 MB a second at the menu).
+  - The format is not settled. With `format "wav"` the plugin's header says PCM tag 1, 2 channels,
+    48000 Hz, 32 bits, but read as 32-bit integers every second has an RMS of exactly 0.50 (float
+    samples read as integers); read as 32-bit float stereo the samples look like audio, but the menu
+    music's spectrum then matches the port's `WPC_AUDIO_CAPTURE` (44100 Hz) only scaled by 1.885 (an
+    octave low at 48000). The null sink is not paced, so the capture's length does not give the rate.
+    A first left/right look (the float reading): both builds lean 0.3–0.7 dB left over a `cc_t1` race start
+    (Wine, 40 blocks of the capture: −0.08 to +1.55 dB, mostly 0.3–0.8; native 1-second blocks: 0.14–0.57 dB),
+    but the music dominates both mixes and Wine's capture has no visible boundary between the menu and
+    the race, so no 3D source is isolated. A clean panning measurement needs a scene with one 3D sound
+    and the music off (the options' music volume at 0), and a paced capture.
+- **Hops** (2026-11-12, `sh_t3`): moving the car along a robot's line recorded natively (one point every
+  5 updates, 233 points to the log jam), each step shifting all fifteen position copies, then holding it at
+  the last point, keeps the section culling following. The view lagged: the camera showed the old place
+  until race time about 01:49 and the held pose from 02:04. The heading is not changed (the rotation copies
+  are not identified), so the car faces its old direction. Guard the hop: a scan made before the race has
+  loaded finds no car, and a hop on that empty result writes into the executable's image in memory (in
+  the scratch process only; it spoiled one run).
+- **Warning:** the ALSA file tap is unpaced and grows fast (5 GB in about three hours of Wine runs, which
+  filled `/tmp`). Point `file` at `/dev/null` except for a capture, and delete captures after use.
