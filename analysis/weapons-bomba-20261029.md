@@ -299,6 +299,12 @@ When a hit takes, `0x47d66f..` adds to the car's `+0x48b` slots (`0x4726c0`):
     `0x4e4f10` (other classes, `+0x54`) and the write above.
   - So they look unused in the shipped game (a static scan only; a read through another pointer
     would escape it; no Wine watchpoint was run).
+- **No reader (2026-11-14).** Every load of a template pointer `[r+0x18]` followed (before r changes or a
+  call) by `[r+0x54]`, `[r+0x5c]` or `[r+0x64]`: 14 in the executable. Reads: WExplosion's init `0x4803c0`
+  (vtable `0x513050`, `+0x4c`/`+0x54`), FlyPower `0x4d560c`, `0x4e619d` (`[esp+0x18]`, a stack slot) and
+  `0x4ea96e` (an object with `+0xd37`); writes: three menu inits (`0x40e702`, `0x4110d5`, `0x45a955`) and
+  Detour's `0x4e32a4` (`m_nTrapTime` = 5). So the three members are loaded and never used: nothing to port.
+  (Static only; a read through a copied pointer would escape the scan.)
 
 ## The remaining effects (survey, 20261029)
 

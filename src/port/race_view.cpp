@@ -82,6 +82,20 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
             crossing_trams_.resize(objects.crossings().size());movers_.resize(objects.movers().size());
             for(size_t i=0;i<objects.crossings().size();++i) take(objects.crossings()[i].tram,crossing_trams_[i]);
             for(size_t i=0;i<objects.movers().size();++i) take(objects.movers()[i].node,movers_[i]);
+            creatures_.resize(objects.creatures().size());creature_clips_.resize(objects.creatures().size());
+            for(size_t i=0;i<objects.creatures().size();++i) {
+                const Creature& c=objects.creatures()[i];
+                take(c.node,creatures_[i]);
+                // 0x457da5: a GDHModel plays clip 0 from int(frand x 300).
+                const Node& n=course.find(c.node);
+                if(c.clip && n.children.empty()) {
+                    AnimatedModel m=load_animated(archives,n);
+                    if(m.lib && !m.lib->clips.empty()) {
+                        creature_clips_[i]=std::make_unique<AnimatedInstance>(m,*m.lib);
+                        creature_clips_[i]->controller.play(0);creature_clips_[i]->controller.set_time(c.clip_time);
+                    }
+                }
+            }
             logs_.resize(objects.log_rides().size());
             for(size_t i=0;i<objects.log_rides().size();++i) {
                 const LogRide& r=objects.log_rides()[i];logs_[i].resize(r.logs.size());
@@ -492,6 +506,7 @@ RaceView::RaceView(WpcWindow* window,const ArchivePool& archives,const Archive& 
         for(const auto& p:pickups_) group(p);
         for(const auto& t:crossing_trams_) group(t);
         for(const auto& m:movers_) group(m);
+        for(const auto& c:creatures_) group(c);
         // The objects ported since WRolling: each group of batches drawn by submit
         // must be registered here, or submit's lookup throws.
         for(const auto& c:chisels_) for(const auto& p:c) group(p);
@@ -1058,7 +1073,7 @@ void RaceView::submit_fires(int car,const RaceCar& c,const Matrix4& placed) {
     }
     if(!count) return;
     const Matrix4 model=multiply_matrix(placed,initial_vehicle_model_frame(c.frame()));
-    const auto rand15=[&]{fire_random_=fire_random_*214013u+2531011u;return int((fire_random_>>16)&0x7fff);};
+    const auto rand15=[&]{return session_.view_random().next();};   // 0x404363 -> 0x430ef0 (0x5472c4)
     for(size_t k=0;k<count;++k) {
         const Fire& f=fires[k];
         Matrix4 local=identity_matrix();
@@ -1150,7 +1165,7 @@ void RaceView::submit_bees(const Matrix4& vp,const std::function<Matrix4(int)>& 
         if(!m.hive || m.state!=3 || m.done) continue;
         live[m.victim]=true;
         Swarm& w=swarms_[m.victim];
-        const auto rand15=[&]{fire_random_=fire_random_*214013u+2531011u;return int((fire_random_>>16)&0x7fff);};
+        const auto rand15=[&]{return session_.view_random().next();};   // 0x404363 -> 0x430ef0 (0x5472c4)
         if(w.bees.empty()) {
             // 0x474580: each bee's phases rand() & 0xfff, both steps m_Speed.
             for(int i=0;i<bee_num_;++i) {const int a=rand15()&0xfff,b=rand15()&0xfff;w.bees.push_back({a,b,bee_speed_,bee_speed_});}
@@ -1394,9 +1409,11 @@ void RaceView::effects(const Matrix4& vp,const Matrix4& view,const Matrix4& came
         fire_tris_.clear();
     }
     for(const Landmine& m:session_.mines()) {
-        if(!on(m.section)) continue;
+        // Unfiled (group 0xffff): always drawn, with the unwrapped matrix.
+        const int g=m.filed?m.section:-1;
+        if(!on(g)) continue;
         RaceCar at;at.position=m.position;at.yaw=m.yaw;at.up=m.normal;
-        submit(m.detour?detour_:m.oil?oil_:m.hive?hive_:landmine_,vp,view,at_frame(m.section,at.frame()));
+        submit(m.detour?detour_:m.oil?oil_:m.hive?hive_:landmine_,vp,view,at_frame(g,at.frame()));
     }
     // The storm cloud: the sprite at the cloud, faced to the camera
     // (0x419b90, type 0), turned by its +0x152 angle.
@@ -1424,9 +1441,10 @@ void RaceView::effects(const Matrix4& vp,const Matrix4& view,const Matrix4& came
         submit(shown,vp,view,identity_matrix());
     }
     for(const Barrier& w:session_.barriers()) {
-        if(!on(w.section)) continue;
+        const int g=w.filed?w.section:-1;   // unfiled: group 0xffff (0x4a6d20)
+        if(!on(g)) continue;
         RaceCar at;at.position=w.position;at.yaw=w.yaw;
-        submit(w.tree?tree_:wall_,vp,view,at_frame(w.section,at.frame()));
+        submit(w.tree?tree_:wall_,vp,view,at_frame(g,at.frame()));
     }
     for(size_t c=0;c<cars.size();++c) {
         const CarEffects* fx=cars[c];
@@ -1658,6 +1676,17 @@ void RaceView::draw_view(int human,int width,int height) {
         const CourseObjects& objects=session_.objects();
         for(size_t i=0;i<crossing_trams_.size();++i) if(objects.crossings()[i].active) submit_object(crossing_trams_[i],objects.crossings()[i].tram_frame());
         for(size_t i=0;i<movers_.size();++i) if(objects.movers()[i].active) submit_object(movers_[i],objects.movers()[i].placed);
+        // Kosza: a waiting creature carries node flag 0x100 (0x458e9a), not drawn.
+        for(size_t i=0;i<creatures_.size();++i) {
+            const Creature& c=objects.creatures()[i];
+            if(c.state==0) continue;
+            if(AnimatedInstance* a=creature_clips_[i].get()) {
+                a->controller.set_speed(c.clip_speed);
+                if(a->controller.frozen()!=c.clip_frozen) a->controller.toggle_freeze();   // command 3 (0x4569a0)
+                pose(*a);
+                submit_object(a->model.batches,c.placed);
+            } else submit_object(creatures_[i],c.placed);
+        }
         for(size_t i=0;i<logs_.size();++i) for(size_t k=0;k<logs_[i].size();++k) submit_object(logs_[i][k],objects.log_rides()[i].frames[k]);
         for(size_t i=0;i<bridges_.size();++i) for(size_t k=0;k<2;++k) submit_object(bridges_[i][k],objects.bridges()[i].frames[k]);
         for(size_t i=0;i<holes_.size();++i) {
@@ -1871,8 +1900,9 @@ void RaceView::weather(const Matrix4& vp,const Matrix4& view,const Matrix4& came
     if(session_.track().sheltered({{camera[12],camera[13],camera[14]}})) return;
     // The original redraws its weather every frame; here it steps once per
     // race update (at most five behind), as the rest of the race does.
-    // rand() is a native generator here (the original shares 0x430e40).
-    MsvcRandom& r=weather_random_;
+    // Its draws (0x430fc0 / 0x431010 -> 0x430f30 -> 0x430ef0) come from the
+    // second stream 0x5472c4, shared with the car effects, WFire and the bees.
+    MsvcRandom& r=session_.view_random();
     const auto unit=[&](float x){return r.unit(x);};                       // 0x430fc0
     const auto spread=[&](float x){return r.unit(2*x)-x;};                 // 0x431010
     const uint64_t now=session_.updates();

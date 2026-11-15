@@ -42,6 +42,26 @@ struct OtherCar {
     Vec3 position{},previous{},forward{};
     RaceTrack::Route module{},next{};
 };
+// The cars' avoidance caches, by vehicle slot: +0x2ed (the step, -1 unset)
+// and +0x35d/+0x361 with the edges (0x468890, +0x35d = -1 unset, -2 none).
+// The first request fills them (0x4e6c76, 0x4e6db0, 0x4e6fba) from the car
+// as it is then; 0x469550 (WackyAuto vtable slot 2) sets them to -1. Wine
+// (a hook in the avoidance loop, cc_t1 and sh_t1, 2026-11-14): a robot's own
+// step is always its last update's move (cc_t1 car 0 at update 21: 146, the
+// update-20 move, not 156; sh_t1 car 4, first in the order, at update 27:
+// 125, not 127), while a car that has had its turn this update is seen with
+// this update's move (cc_t1 robot 1 reads car 0's 156 right after car 0's
+// own controller used 146). So each car's caches are cleared at the end of
+// its own turn, after its controller, and refilled by the cars after it and
+// those before it on the next update (provisional: the call site of
+// 0x469550 is not traced, the rule is fitted to the logged values).
+struct AvoidCache {
+    std::array<int,8> step{};
+    std::array<int,8> edges{};             // -1 unset, -2 none, 1 known
+    std::array<RoadEdges,8> road{};std::array<int,8> left{},right{};
+    void clear(int slot) {step[size_t(slot&7)]=-1;edges[size_t(slot&7)]=-1;}
+    AvoidCache() {step.fill(-1);edges.fill(-1);}
+};
 // What the robot reads of its car each update.
 struct RoboCarState {
     Vec3 position{},forward{},previous{};  // +0x173: position before the car's update
@@ -53,6 +73,8 @@ struct RoboCarState {
     int slot=0,progress=0;                 // 0x6f2ce0 slot, +0x1a7
     int effect=0;                          // +0x1c7 (5: waiting at a WTram crossing)
     std::array<OtherCar,8> others{};int other_count=0;
+    AvoidCache* cache=nullptr;             // shared by the cars this update; none: computed each time
+    bool battle=false;                     // game mode 1 (app +0x1a60): no avoidance (0x4e699a)
 };
 // +0x2c9 for a car without WCtrlRoboCar (0x468890): the last forward link
 // of its module with a target and a weight.

@@ -682,7 +682,9 @@ void CourseObjects::load(const Scene& scene) {
             const float alpha=n.real(0x238),omega=n.real(0x239);
             g.delay=n.integer(0x23a);g.chance=n.integer(0x23b);g.frames=n.integer(0x23c);
             g.sugar=n.integer(0x23d);g.height=n.integer(0x23e);g.steps=n.integer(0x23f);g.width=n.integer(0x240);
-            g.distance=float(n.integer(0x241));g.max_fly=n.real(0x242);
+            // m_Distance (0x241) is a float: 1700 on cc_t3, 1000 on dr_t4 (read as an
+            // integer it gave its bits, 1.15e9, and the aim landed off the map).
+            g.distance=n.real(0x241);g.max_fly=n.real(0x242);
             if(!(alpha>0 && alpha<1) || !std::isfinite(omega) || g.frames<1 || g.steps<1 || g.sugar<=0 || g.height<=0 || g.width<=0 || !std::isfinite(g.max_fly))
                 throw std::runtime_error("implausible WGeyser members");
             const float c0=2*alpha*std::cos(omega),c1=-alpha*alpha,k=(1-c0-c1)*0.28985509f;
@@ -759,6 +761,30 @@ void CourseObjects::load(const Scene& scene) {
             for(const ScenePrim& p:node_prims(*tram)) if(!p.cylinder) c.spheres.push_back(p);
             crossings_.push_back(c);
         }
+        for(const auto& a:n.actions) if(a.class_name=="Kosza") {
+            Creature c;c.node=n.id;
+            c.type=a.integer(0xd7);c.mode=a.integer(0xd8);c.r=a.real(0xd9,1000);c.speed=a.real(0xda,100);c.wait=a.real(0xdb);
+            if(c.type<0 || c.type>3 || c.mode<0 || c.mode>7 || !(c.r>0) || !(c.speed>=0)) throw std::runtime_error("implausible Kosza members");
+            const Matrix4 w=unwrapped_scene_transform(root,n.id);
+            c.centre={{w[12],w[13],w[14]}};c.scale=std::sqrt(w[8]*w[8]+w[9]*w[9]+w[10]*w[10]);
+            c.base=c.placed=w;c.rotate=a.integer(0x27c,1)!=0;               // m_bRotate, 1 by default (0x4d18b6)
+            c.collision=a.integer(0x27e)!=0;c.prims=node_prims(n);          // m_bCollision
+            c.clip=n.class_name=="GDHModel";                               // 0x41b360: a model with a clip
+            if(c.mode==1 || c.mode==2) {
+                const uint32_t path_id=uint32_t(a.integer(0x27f));         // m_idPath
+                const Node& path=scene.find(path_id);
+                if(path.class_name!="GDPath") throw std::runtime_error("Kosza m_idPath is not a GDPath");
+                const std::vector<Vec3> q=path_points(path);
+                const Matrix4 pw=unwrapped_scene_transform(root,path_id);
+                for(const Vec3& p:q) c.path.push_back(point_of(pw,p));
+                c.closed=path.integer(0x7d)!=0;                            // m_bClosed
+                if(c.path.size()<2) throw std::runtime_error("Kosza GDPath has fewer than 2 points");
+                for(size_t i=1;i<q.size();++i) c.path_length+=std::sqrt((q[i][0]-q[i-1][0])*(q[i][0]-q[i-1][0])+(q[i][1]-q[i-1][1])*(q[i][1]-q[i-1][1])+(q[i][2]-q[i-1][2])*(q[i][2]-q[i-1][2])); // 0x4569d0
+                const float length=float(a.integer(0x279)),offset=float(a.integer(0x27a));
+                c.start=offset;c.end=(1-length)+offset;c.loop=a.integer(0x27b)!=0;
+            }
+            creatures_.push_back(c);
+        }
         for(const auto& a:n.actions) if(a.class_name=="WElTram" || a.class_name=="WGoPath") {
             PathMover m;m.node=n.id;m.el_tram=a.class_name=="WElTram";
             const uint32_t path_id=uint32_t(a.integer(0x27f));          // m_idPath
@@ -784,9 +810,192 @@ void CourseObjects::load(const Scene& scene) {
     };
     visit(visit,root);
 }
+namespace {
+bool enabled(const std::vector<int>& linked,int player,size_t sections);
+Vec3 sub3(const Vec3& a,const Vec3& b) {return {{a[0]-b[0],a[1]-b[1],a[2]-b[2]}};}
+Vec3 unit3(Vec3 v) {   // 0x452e20 (a zero vector is kept, the original divides by 0)
+    const float l=std::sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]);
+    if(l>0) for(float& x:v) x/=l;
+    return v;
+}
+Vec3 cross3(const Vec3& a,const Vec3& b) {return {{a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-b[0]*a[1]}};}  // 0x452ed0
+// The node's frame for a move to at heading d. With m_bRotate the rows are
+// cross(d, (0, -1, 0)), cross(d, row 0) (row 0 left unnormalized) and d
+// (0x458bb0, 0x458b50, 0x458b80), times the frame at init +0x74 (0x43c7b0);
+// the place is written either way (0x43bf90).
+void creature_place(Creature& c,const Vec3& d,const Vec3& at) {
+    if(c.rotate) {
+        const Vec3 z=unit3(d);
+        if(z[0]!=0 || z[1]!=0 || z[2]!=0) {
+            const Vec3 x=cross3(z,{{0,-1,0}}),y=cross3(z,x);
+            const Vec3 row[3]={x,y,z};
+            for(size_t r=0;r<3;++r) for(size_t k=0;k<3;++k)
+                c.placed[4*r+k]=c.base[4*r]*row[0][k]+c.base[4*r+1]*row[1][k]+c.base[4*r+2]*row[2][k];
+        }
+    }
+    c.placed[12]=at[0];c.placed[13]=at[1];c.placed[14]=at[2];
+}
+const float clip_rate[4]={0.1f,0.03f,0.1f,0.1f};                      // 0x52a990
+void creature_wait(Creature& c);
+// 0x459030, the moving state (+0x131 = 1).
+void creature_move(Creature& c,MsvcRandom& random) {
+    const float tick=2.f*(1.f/3.f);                                       // 0x5299b4 x 0x512620
+    if(c.clip) c.clip_speed=c.speed*clip_rate[size_t(c.type)]*tick;      // 0x459233
+    if(c.mode>=4) {
+        // 0x458230: the segment int(4 frac t); a new one draws the waypoint
+        // two ahead: x, y (modes 5 and 7, x 1/3), z.
+        const float f=(c.t-float(int(c.t)))*4;                          // x 0x510434
+        const int seg=int(f);
+        if(seg!=c.segment) {
+            Vec3& p=c.points[size_t((seg+2)&3)];
+            p[0]=random.unit()*c.r+c.centre[0];
+            if(c.mode==5 || c.mode==7) p[1]=random.unit()*c.r*(1.f/3.f)+c.centre[1];
+            p[2]=random.unit()*c.r+c.centre[2];
+            c.segment=seg;
+        }
+        // The segment runs from p1 = points[seg] to p2 = points[seg + 1];
+        // the tangents' directions are p2 - p0 and p3 - p1 (p0 the one
+        // before, p3 the one after).
+        const float u=f-float(seg);
+        const Vec3& p0=c.points[size_t((seg+3)&3)];const Vec3& p1=c.points[size_t(seg&3)];
+        const Vec3& p2=c.points[size_t((seg+1)&3)];const Vec3& p3=c.points[size_t((seg+2)&3)];
+        const Vec3 ta=unit3(sub3(p2,p0)),tb=unit3(sub3(p3,p1));
+        Vec3 at{},d{};
+        if(c.mode==6 || c.mode==7) {
+            // 0x458565: Hermite, both tangents |p2 - p1| long; d the derivative.
+            const Vec3 e=sub3(p2,p1);
+            const float l=std::sqrt(e[0]*e[0]+e[1]*e[1]+e[2]*e[2]);
+            for(size_t i=0;i<3;++i) {
+                const float t1=ta[i]*l,t2=tb[i]*l;
+                const float a=(t2-2*e[i])+t1,b=(e[i]-t1)-a;               // u^3, u^2
+                at[i]=((a*u+b)*u+t1)*u+p1[i];
+                d[i]=((a*3.f)*u+2*b)*u+t1;                                 // 0x511894
+            }
+        } else {
+            // 0x45846e: on the chord, heading between the two tangents.
+            for(size_t i=0;i<3;++i) {at[i]=p1[i]*(1-u)+p2[i]*u;d[i]=ta[i]*(1-u)+tb[i]*u;}
+            d=unit3(d);
+        }
+        creature_place(c,d,at);
+        c.t+=tick*c.rate;
+    } else if(c.mode==1 || c.mode==2) {
+        // 0x457f80: along the GDPath; past the end it wraps with m_bLoop,
+        // else it stops there; either way the update restarts t and, with
+        // a wait, waits (0x45929b..0x4592be). Mode 2's walk (0x456af0, a
+        // Hermite over the points) is not ported: no course uses mode 2.
+        if(c.mode==1) {Vec3 at,d;path_point(c.path,c.closed,c.t,at,d);creature_place(c,d,at);}  // 0x444be0
+        c.t+=tick*c.rate;
+        bool done=false;
+        if(c.t>c.end) {if(c.loop) c.t-=1;else c.t=c.end;done=true;}
+        else if(c.t<c.start) {if(c.loop) c.t+=1;else c.t=c.start;done=true;}
+        if(done) {c.t=0;if(c.wait!=0) creature_wait(c);}               // 0x404ff7
+    } else {
+        // 0x458be0: mode 0 a circle (angle t x 6.28, 0x512640), mode 3 x on
+        // t x 6.28 and z on t x 3.14 (0x512630), round the place at init.
+        const double t=double(c.t);
+        Vec3 off{},d{};
+        if(c.mode==0) {
+            const double a=t*6.28;
+            off={{float(std::cos(a))*c.r,0,float(std::sin(a))*c.r}};d={{-float(std::sin(a)),0,float(std::cos(a))}};
+        } else if(c.mode==3) {
+            const double a=t*6.28,b=t*3.14;
+            off={{float(std::sin(a))*c.r,0,float(std::sin(b))*c.r}};d={{float(std::cos(a)),0,float(std::cos(b))}};
+        }
+        if(c.mode==0 || c.mode==3) creature_place(c,d,{{c.base[12]+off[0],c.base[13]+off[1],c.base[14]+off[2]}});
+        c.t+=tick*c.rate;
+    }
+}
+// 0x458e90: waiting, the node hidden (flag 0x100) and the clip frozen.
+void creature_wait(Creature& c) {c.state=0;c.clip_frozen=true;}
+// 0x458f10: moving, shown, the clip running, and an update at once.
+void creature_go(Creature& c,MsvcRandom& random) {c.state=1;c.clip_frozen=false;creature_move(c,random);}
+}
+void CourseObjects::init_creatures(MsvcRandom& random) {
+    for(Creature& c:creatures_) {
+        // 0x457a00 (slot +0x10).
+        float d=1;
+        switch(c.mode) {
+            case 0: case 3: d=c.r*6.2831853f;break;                       // 0x512618
+            case 1: case 2: d=c.path_length;break;                        // 0x4569d0
+            default:
+                for(Vec3& p:c.points) {
+                    p[0]=random.unit()*c.r+c.centre[0];
+                    p[1]=c.mode==5 || c.mode==7 ? random.unit()*c.r*(1.f/3.f)+c.centre[1] : c.centre[1];
+                    p[2]=random.unit()*c.r+c.centre[2];
+                }
+                c.segment=0;d=c.r*4;                                       // 0x510434
+        }
+        static const float type_rate[4]={0.15f,0.2f,0.00002f,0.15f};       // 0x52a980
+        c.rate=d>0?c.scale*type_rate[size_t(c.type)]*c.speed/d:0;
+        if(c.clip) {
+            c.clip_speed=c.speed*clip_rate[size_t(c.type)];                // 0x457dc5
+            c.clip_time=int(random.unit()*300.f);                          // 0x457df3
+        }
+        if(c.wait!=0) creature_wait(c);
+        else creature_go(c,random);
+    }
+}
+namespace {
+// The first car (not hidden) whose sphere touches the creature's PRIM
+// (0x4a60c0 with mask 0x100; car order provisional), or -1.
+int creature_touch(const Creature& c,const std::vector<CarProbe>& cars,Vec3& normal) {
+    for(size_t i=0;i<cars.size();++i) {
+        if(cars[i].hidden) continue;
+        for(const ScenePrim& p:c.prims) {
+            const Vec3 at=point_of(c.placed,{{p.centre[0],p.centre[1],p.centre[2]}});
+            if(!spheres_touch(cars[i].position,at,car_radius+p.radius*axis_length(c.placed))) continue;
+            normal=unit3(sub3(at,cars[i].position));                       // 0x482273: creature - car
+            return int(i);
+        }
+    }
+    return -1;
+}
+// 0x45935f..0x4593df: the car's forward (frame row 2, 0x43bf30) x speed
+// +0x3ef, normalized, against the normal times the car's frame (0x43b980):
+// with orthonormal rows that is sign(speed) x the normal's world z (a zero
+// speed divides by 0 and fails the test).
+bool creature_struck(const CarProbe& car,const Vec3& normal) {return car.speed!=0 && (car.speed>0?normal[2]:-normal[2])>0;}
+// 0x43b190(1, 0.1, 1): the frame's y axis x 0.1.
+void creature_squash(Creature& c) {for(size_t k=4;k<7;++k) c.placed[k]*=0.1f;}
+}
+void CourseObjects::step_creatures(MsvcRandom& random,const std::vector<CarProbe>& cars,int player_section,size_t sections) {
+    for(Creature& c:creatures_) {
+        if(!enabled(c.sections,player_section,sections)) continue;
+        Vec3 n{};
+        switch(c.state) {
+            case 0:   // 0x459416: two tenths in a row start it (0x510228, a double)
+                if(double(random.unit())<0.1 && double(random.unit())<0.1) creature_go(c,random);
+                break;
+            case 1:
+                creature_move(c,random);
+                // 0x459311: a car touching it stops it (0x458fa0: state 2, the
+                // clip frozen, shown), squashed when the car comes at it.
+                if(c.collision) if(const int k=creature_touch(c,cars,n);k>=0) {
+                    if(creature_struck(cars[size_t(k)],n)) creature_squash(c);
+                    c.state=2;c.clip_frozen=true;
+                }
+                break;
+            case 2: {
+                // 0x45905b: while a car touches it, it stays, squashed again by
+                // a moving car coming at it unless flat already (|y|^2 <=
+                // 0.2 |x|^2, 0x51264c); else a hundredth (0x510b48, a double)
+                // starts it.
+                const int k=c.collision?creature_touch(c,cars,n):-1;
+                if(k>=0) {
+                    const float x2=c.placed[0]*c.placed[0]+c.placed[1]*c.placed[1]+c.placed[2]*c.placed[2];
+                    const float y2=c.placed[4]*c.placed[4]+c.placed[5]*c.placed[5]+c.placed[6]*c.placed[6];
+                    if(creature_struck(cars[size_t(k)],n) && x2*0.2f<y2) creature_squash(c);
+                } else if(double(random.unit())<0.01) creature_go(c,random);
+                break;
+            }
+            default: break;
+        }
+    }
+}
 void CourseObjects::link(const std::function<std::vector<int>(uint32_t)>& sections_of) {
     for(TramCrossing& c:crossings_) c.sections=sections_of(c.node);
     for(PathMover& m:movers_) m.sections=sections_of(m.node);
+    for(Creature& c:creatures_) c.sections=sections_of(c.node);
     for(LogRide& r:log_rides_) r.sections=sections_of(r.node);
     for(MistyBridge& b:bridges_) b.sections=sections_of(b.node);
     for(Geyser& g:geysers_) g.sections=sections_of(g.node);
@@ -919,20 +1128,22 @@ bool enabled(const std::vector<int>& linked,int player,size_t sections) {
     return std::any_of(linked.begin(),linked.end(),[&](int s){return s==player || (s+1)%n==player || (player+1)%n==s;});
 }
 }
-void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectHit>& hits,std::vector<int>& effect,int player_section,size_t sections) {
+void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectHit>& hits,std::vector<int>& effect,int player_section,size_t sections,MsvcRandom* random) {
+    stream_=random;
+    struct Reset {MsvcRandom*& s;~Reset() {s=nullptr;}} reset{stream_};
     hits.clear();
     lifts_.clear();rolled_.clear();pushes_.clear();held_.clear();
     hovering_.assign(cars.size(),false);
     const auto range=[&](int low,int high) {
-        geyser_random_=geyser_random_*214013u+2531011u;
-        return int(geyser_random_>>16&0x7fff)%(high-low+1)+low;   // 0x404a8e (provisional: not the original's rand())
+        const int g_=draw_random();
+        return int(g_)%(high-low+1)+low;   // 0x404a8e (rand() % n, 0x430f60)
     };
     const auto in_section=[](const std::vector<int>& sections,const CarProbe& c) {
         return sections.empty() || std::find(sections.begin(),sections.end(),c.section)!=sections.end();
     };
     for(DicksRoad& r:dicks_roads_) {
         const bool on=enabled(r.sections,player_section,sections);
-        const auto pick=[&]() {geyser_random_=geyser_random_*214013u+2531011u;r.chosen=int(geyser_random_>>16&0x7fff)%3;};
+        const auto pick=[&]() {const int g_=draw_random();r.chosen=int(g_)%3;};
         if(!on) {r.active=false;continue;}
         if(!r.active) {r.active=true;r.started=true;r.triggered=false;pick();}   // 0x4c7cd0
         if(nearest_car(cars,r.centre,r.triggered?r.far:r.near)>=0) r.triggered=true;
@@ -949,7 +1160,7 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
             for(GoldenDoor& d:g.doors) {d.s0=d.s1=0;d.target=float((d.state==2?d.shut:d.open)*5);}
         }
         // 0x4c69b0: what a door may do next: 0 nothing, 1 open, 2 shut.
-        const auto coin=[&]() {geyser_random_=geyser_random_*214013u+2531011u;return int(geyser_random_>>16&0x7fff)%2!=0?2:1;};
+        const auto coin=[&]() {const int g_=draw_random();return int(g_)%2!=0?2:1;};
         const auto choice=[&](size_t i) {
             const GoldenDoor& d=g.doors[i];
             const int prev=i>0?g.doors[i-1].state:0,next=i<8?g.doors[i+1].state:0;
@@ -984,8 +1195,8 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
             std::vector<size_t> can;
             for(size_t i=0;i<9;++i) if(choice(i)!=0) can.push_back(i);
             if(!can.empty()) {
-                geyser_random_=geyser_random_*214013u+2531011u;
-                size_t pick=size_t(geyser_random_>>16&0x7fff)%can.size();
+                const int g_=draw_random();
+                size_t pick=size_t(g_)%can.size();
                 // 0x4c6b6e: the walk asks again, so a coin can differ from the count's.
                 size_t i=0;int v=0;
                 for(;;i=(i+1)%9) {
@@ -1024,7 +1235,7 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
         if(!c.active) {c.active=true;c.phase=0;c.wait=0;c.move_left=0;c.target={};c.s0={};c.s1={};}  // 0x4ce32a
         if(c.phase==2) {
             if(c.move_left!=0) --c.move_left;
-            else {c.wait=c.rest;geyser_random_=geyser_random_*214013u+2531011u;c.target[0]=float(geyser_random_>>16&0x7fff)/32768.f*180-150;c.phase=0;}
+            else {c.wait=c.rest;const int g_=draw_random();c.target[0]=float(g_)/32768.f*180-150;c.phase=0;}
         } else if(c.phase==1) {
             if(c.move_left!=0) --c.move_left;
             else {c.target[1]=-55;c.move_left=c.move;c.phase=2;}
@@ -1073,8 +1284,8 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
         if(r.timer!=0) --r.timer;
         else {
             r.previous=r.chosen;
-            geyser_random_=geyser_random_*214013u+2531011u;
-            r.chosen=int(geyser_random_>>16&0x7fff)%3;
+            const int g_=draw_random();
+            r.chosen=int(g_)%3;
             r.timer=r.reload;r.swing=30;r.routed=r.chosen;
         }
         for(int k=0;k<3;++k) {
@@ -1298,8 +1509,8 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
         const bool on=enabled(j.sections,player_section,sections);
         if(!on) {j.active=false;continue;}
         const auto draw=[&]() {
-            geyser_random_=geyser_random_*214013u+2531011u;
-            return int((geyser_random_>>16&0x7fff)%j.paths.size());   // 0x4c48e7 (provisional: not the original's rand())
+            const int g_=draw_random();
+            return int((g_)%j.paths.size());   // 0x4c48e7 (rand() % n, 0x430f60)
         };
         if(!j.active) {
             // 0x41ba60 -> 0x4c4840: logs 1..5 wait on paths 0..4, log 0 rolls.
@@ -1423,7 +1634,7 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
     for(Geyser& g:geysers_) {
         g.active=enabled(g.sections,player_section,sections);
         if(!g.active) continue;
-        const auto next_random=[&]() {geyser_random_=geyser_random_*214013u+2531011u;return int(geyser_random_>>16&0x7fff);};
+        const auto next_random=[&]() {const int g_=draw_random();return int(g_);};
         const auto filter=[&](size_t i,float in) {
             const float w=g.filter[0]*g.s0[i]+g.filter[1]*g.s1[i]+in;
             const float out=g.filter[3]*g.s0[i]+g.filter[4]*g.s1[i]+w*g.filter[2];

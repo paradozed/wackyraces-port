@@ -356,8 +356,13 @@ Barrier drop_barrier(const Vec3& position,float yaw,int owner,bool tree) {
     return b;
 }
 Landmine drop_oil(const Vec3& position,float yaw,int owner) {
+    // 0x4ddb90 (WPU_OilSpill) and 0x4de850 (WPU_BeeHive): the car's place
+    // less its forward axis x 270 (0x512a8c) on x and z, then 10 up, as the
+    // detour (0x4e3290). Wine dt_t1 (2026-11-15): robot 6, on the same line in
+    // both builds, was caught 3 updates earlier than natively without it.
     Landmine m;
     m.position=position;m.position[1]+=10;
+    m.position[0]+=std::sin(yaw)*270;m.position[2]-=std::cos(yaw)*270;
     m.yaw=yaw;m.owner=owner;m.oil=true;
     return m;
 }

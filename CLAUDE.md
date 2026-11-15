@@ -112,7 +112,8 @@ After a feature lands, update together:
   (`analysis/log-jam-20261106.md`), WRotoHill, WMagnet, WVolcano, WBumSteer, course WRot
   (`analysis/roto-magnet-volcano-20261106.md`), WSaw, WJunkyard, WConstructionSite,
   WShiftedRoad, WGoldenGate (`analysis/saw-crane-gate-road-20261107.md`), WDicksTrick2,
-  UVScroll (`analysis/dickstrick-uvscroll-rooms-20261107.md`); other courses' classes are in
+  UVScroll (`analysis/dickstrick-uvscroll-rooms-20261107.md`), the Kosza creatures
+  (`analysis/kosza-motion-20261114.md`); other courses' classes are in
   `TODO.md`. Laps follow the original's start line rule `0x49a2f0`
   (`analysis/lap-line-geyser-20261106.md`).
 - Not ported: force feedback and joystick rebinding (a joystick is picked on the options page and drives races and menus), parts of the power-up effects and their visuals, part

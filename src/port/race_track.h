@@ -118,6 +118,17 @@ public:
     int laps() const {return laps_;}
     const std::vector<BendSign>& bend_signs(int section) const {return sections_.at(size_t(section)).signs;}
     const std::vector<PowerUpSpot>& power_ups() const {return power_ups_;}
+    // 0x4a1a20: p in the section row's exit WPortal (|x| <= half width,
+    // 0 <= z <= depth in its frame) gives 1, in its entry WPortal (|x| <=
+    // half width, -depth <= z <= 0) -1, else 0.
+    int portal_test(int section,const Vec3& p) const;
+    // 0x4e7386..0x4e73e7: a section's row object list (the robot's row
+    // [[+0x40]] of section +0x1b7; one row per section on the shipped
+    // courses) as power-up spot indices, in list order; empty for -1.
+    const std::vector<int>& section_power_ups(int section) const {
+        static const std::vector<int> none;
+        return section>=0 && size_t(section)<sections_.size()?sections_[size_t(section)].power_up_list:none;
+    }
     const std::vector<TrackCylinder>& cylinders() const {return cylinders_;}
     // The moving course objects at their initial state (dt_t1's trams).
     const CourseObjects& objects() const {return objects_;}
@@ -174,6 +185,12 @@ private:
         std::vector<uint32_t> first;
         std::vector<float> node_y,distance;
         float entry_distance=1;
+        std::vector<uint32_t> row_objects;   // the rows' object lists (+0x360 count, +0x4e4 references)
+        // The row's entry (+0x48) and exit (+0x50) WPortal: inverse frames and
+        // m_rWidth +0x122 (property 0x1e2) and m_rLength +0x12a (0x1e3);
+        // m_rHeight +0x132 (0x1e4) is not tested.
+        std::array<Matrix4,2> portal_inverse{};std::array<float,2> portal_width{},portal_depth{};
+        std::vector<int> power_up_list;      // those that are power-up spots, in list order
     };
     void build_field(Section& s,size_t index,const Vec3& low,const Vec3& high);
     // Nearest reached node to p (within a few columns and 250 units of

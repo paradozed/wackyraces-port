@@ -30,7 +30,7 @@ Members from `+0x88`, 8 bytes apart (`cc_t3`):
 | m_Height (`0x23e`) | 1270 |
 | m_Steps (`0x23f`) | 6 |
 | m_Width (`0x240`) | 200 |
-| m_Distance (`0x241`) | 11547 |
+| m_Distance (`0x241`) | 1700 (a float; 11547 was a misreading, corrected 2026-11-14) |
 | m_MaxFly (`0x242`) | 5 |
 
 States `+0x17b`, jump table `0x4c9528`:
@@ -214,3 +214,29 @@ The greedy test driver gets stuck, and so does an experimental follower of a rob
   original's approach to 354's goal wider for that robot (its far turn's starting heading). No port
   change.
 
+
+## The fountain trap explained: the frozen yaw (2026-11-14)
+
+- **With the original's seed** (0x1312d6e, see `far-step-laps-20261114.md`) native vehicle 6 follows Wine's path to
+  the fountain within 4 units (updates 666..669 after GO). At the catch (Wine update 672, native 671) Wine's step
+  turned from (58, −93) to (96, −56), native's did not.
+- **The hold rebuilds the frame from the angles:** `0x4ca647` calls `0x468620`, which builds the frame `+0x2c` from
+  `+0x267`/`+0x26b`/`+0x26f` and the position copy `+0x288`. The far step turns and moves the frame alone
+  (`0x4e583f`, `0x4e5885`, matrix copies) and never writes `+0x26b`. The angles are taken from the frame
+  (`0x4035e9`) by the near car update, the far-to-near switch (`0x4e5249`), the hidden robots' reshow
+  (`0x4a2237`, `0x4a167c`, `0x4a0dee`) and the seam placements (`0x4a2463`, `0x4a2658`).
+- **Read under Wine** (`+0x26b` per update): vehicle 6's is −1.5708 on the grid, follows its yaw through the
+  first bend, and freezes at −0.9103 when it goes far at update 89; it is still −0.9103 through the hold. At update
+  600 the six far robots' values are v0 −1.4735, v1 −1.5478, v2 2.8553, v4 −1.5221, v5 −1.5672, v6 −0.9103.
+- **So** every update in the column the robot is turned back to its frozen yaw, then the far step turns it half
+  way to its goal and moves it about 100: it circles the column (the to-and-fro seen before).
+- **Wine over 330 s** (laps logged with the update counter): vehicle 6 never ends lap 1; vehicle 4 stops counting
+  after lap 2 (update 2135). The trap lasts for good.
+- **Ported:** `Opponent::angle_yaw` (car `+0x26b`), set by each near update and by the reshow; a far robot lifted by
+  the fountain takes it as its yaw. Natively three robots are now trapped (v2, v4, v6: frozen yaws −0.50, −0.64,
+  −0.74; v0, v1, v5 near −1.6 pass), Wine one at first and a second later. Which robots are caught depends on the
+  yaw each had when it went far, i.e. on the start pack (Wine's v6 stopped in a contact at update 57; native's
+  did not).
+- `native_drive_test` on `dt_t2` now allows robots short of the finish only at the fountain.
+- Also fixed: the hidden robots' row step is `+0x4c` (203), not 204.
+- Not verified: whether the WRotoHill hold (`0x4cfa73..`, which also writes `+0x26b`) snaps far robots the same way.

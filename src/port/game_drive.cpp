@@ -160,7 +160,15 @@ float probe_span(float speed) {
     if(speed>0.4f) front*=(speed-0.4f)*0.09f+1;
     return front+102;
 }
-float forward_step(float speed,float time_factor) {return probe_span(speed)*speed*time_factor;}
+float forward_step(float speed,float time_factor) {
+    // 0x46abaa: (+0x40b - +0x423) x speed x +0x163. Fitted to Wine (sh_t1,
+    // 2026-11-14, robots at factor 1.0): the step is 204 x speed x
+    // (1 + 0.09 x (speed - 0.4)) above 0.4 (204.8 at 0.443, 206.3 at 0.528,
+    // 208.0 at 0.618), the whole span stretched; probe_span stretches the
+    // front half only (provisional reading of 0x468280).
+    const float span=speed>0.4f?204.f*((speed-0.4f)*0.09f+1):204.f;
+    return span*speed*time_factor;
+}
 float yaw_step(float steer,float speed,const VehicleTuning& t,float time_factor,bool robot,float surface_yaw) {
     if(speed==0) return 0;
     // 0x512a80 (-1.05) in reverse, 0x512a00 (0.7) forward, clamped to

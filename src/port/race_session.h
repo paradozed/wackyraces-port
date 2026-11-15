@@ -1,5 +1,6 @@
 #ifndef WPC_RACE_SESSION_H
 #define WPC_RACE_SESSION_H
+#include <cmath>
 #include "game_drive.h"
 #include "game_race.h"
 #include "game_random.h"
@@ -30,6 +31,7 @@ struct RaceCar {
     int section=0;
     int loops=0;           // times carried across the WMOD loop transform
     uint32_t surface=0;    // the centre contact's WGNR flags (WackyAuto +0x8bb)
+    float engine_jitter=0; // this update's (rand() % 20 - 10) x 0.03 for the engine pitch (0x47059a), 0 without a draw
     Matrix4 frame() const; // actor frame: X right, Y up, Z forward
 };
 
@@ -41,7 +43,9 @@ public:
     // vehicle2 >= 0: two players (app +0x1a64 = 1, 0x49d580): no robots,
     // player 1 at grid slot 0 and player 2 at slot 3 (Wine, cc_t1); player 2
     // is opponents()[0] with human set.
-    RaceSession(const RaceTrack& track,int vehicle,uint32_t random_seed=0,int mode=0,int vehicle2=-1);
+    // random_seed: the race stream's state before the grid shuffle; the
+    // original's race load always sets 0x1312d6e (0x431fc3).
+    RaceSession(const RaceTrack& track,int vehicle,uint32_t random_seed=0x1312d6e,int mode=0,int vehicle2=-1);
     bool two_players() const {return !opponents_.empty() && opponents_[0].human;}
     int mode() const {return mode_;}
     // Practice's lap splits 0x6f318c/0x6f3190/0x6f3194 (1/300 s, -1 until
@@ -157,6 +161,10 @@ public:
         int rank_scale=0;       // the last 0x4e4d30 result
         int effect=0;           // +0x1c7: 5 waits at a WTram crossing
         int side_timer=0;       // +0x1cb: a WSaw's 3 updates aside
+        int start_hold=0;       // WCtrlRoboCar +0xb8: 20 from the init at GO (0x4e48d2), no decision while above 0
+        int span=203;     // WCtrlRoboCar +0x4c: |front-left - rear-left mode-2 probe|, truncated, at the init (0x4e4804)
+        float angle_yaw=0;      // car +0x26b: the car update's yaw angle; the far step (0x4e583f) leaves it
+        bool far_framed=false;  // the last update was a far step: the frame +0x2c is newer than the angles
         VehicleTuning base;     // +0x21b, +0x21f, +0x223: the unscaled rows
         // The robot's items: 0x4679d0's slots for m_isrobotauto (no
         // roulette: a pickup draws the icon and the slot waits, 0xff, for
@@ -204,6 +212,8 @@ public:
     int opponent_laps(size_t i) const {return opponent_bodies_.at(i).laps;}
     // WCarFx for the player's car: dust, tracks, ripples and the splash.
     const CarEffects& effects() const {return body_.fx;}
+    // The 0x5472c4 stream for the draw-time users (WFire, the bees).
+    MsvcRandom& view_random() const {return fx_random_;}
     const CarEffects& opponent_effects(size_t i) const {return opponent_bodies_.at(i).fx;}
     const std::array<WheelContact,4>& wheels() const {return body_.wheels;}
     // The POUSSIERE option (0x6f4650) applies to every car's WCarFx.
@@ -310,7 +320,7 @@ public:
     const std::vector<uint32_t>& knocked_objects() const {return knocked_objects_;}
     // Race-order progress: route sections passed plus the current fraction.
     float player_progress() const {return progress(player_.position,player_.section,player_.loops);}
-    // The original's measure (route cursor, 0x4a3937), which the standings use.
+    // The route cursor's measure (+0x11 share, 0x4a3a10), which the standings use.
     float player_route_progress() const {return float(player_.loops*int(track_.sections())+player_.section)+fraction(-1);}
 private:
     float progress(const Vec3& position,int section,int loops) const;
@@ -351,6 +361,8 @@ private:
     int wrong_way_updates_=0,bend_arrow_=-1;
     void update_bend_arrow();
     void update_objects();
+    // The cars as the course objects' queries see them: the player, then the robots in grid order.
+    std::vector<CarProbe> car_probes() const;
     void finish();
     bool championship_=false;
     std::array<int,7> totals_{},race_points_{};
@@ -381,6 +393,23 @@ private:
     void init_cameras();
     void update_cameras();
     Vec3 player_previous_{};   // the player's +0x173
+    mutable AvoidCache avoid_cache_; // the cars' +0x2ed and +0x35d, cleared each update (0x469550)
+    // Once the race has ended (0x49eb20: [+0x18]+0xc0 = 2) the player's car is
+    // robot-driven: the robot speed and steering branches (0x466e0b, 0x467886)
+    // follow +0x2ac/+0x2ad. Provisional: its controller is this driver.
+    RoboDriver autopilot_;
+    RoboControl autopilot_control_{};
+    // The player's WCtrlRoboCar (+0x1c3) item waits: +0xac, +0xb0.
+    int autopilot_weapon_wait_=0,autopilot_field_wait_=0;
+    void autopilot_items();
+    void start_autopilot();
+    void start_boosts();
+    void count_start_boost(Body& b,VehicleTuning& t);
+    void end_turbo(Body& b); // 0x46a9c9/0x46c5ca: +0x385 = -1, +0x3b3 = 0, row[1] from +0x3b7
+    bool false_start_=false; // 0x6f5834: the rev passed the top speed during PRET
+    void autopilot_scale();
+    bool autopilot_boosted_=false;float autopilot_slide_push_=0;
+    bool autopilot() const {return phase_==Phase::Finished && mode_==0 && !two_players();}
     CourseObjects objects_;    // dt_t1's trams (race_objects)
     // The static ground with sh_t3's moving logs on top; the log the last
     // query hit is kept in last_log_ (ride, log).
@@ -402,6 +431,8 @@ private:
         bool sliding=false;     // settled from the far step (state 0x1000)
         int line=-1;            // +0x183 less one before the first crossing (see crossings)
         bool started=false;     // +0x19f > 0: the line crossed once (0x4a3d5c)
+        int start_boost=0;      // +0x3b3: updates left of the start's row[1] boost (0x4a2ce7, 0x4a2d62)
+        float base_convergence=0; // +0x3b7: row[1] saved at the car init (0x46a275), restored at 1 (0x469692)
         int previous_section=0; // +0x1bb: a hidden car's section before its last row wrap (0x4a201d)
         int shown_section=-1,shown_updates=0; // the row a hidden robot was shown into (see virtual_robot)
         int seen_section=-1;    // the section at the last robot update, for previous_section
@@ -411,6 +442,7 @@ private:
         uint64_t last_respawn=0,finish_update=0;
         unsigned visited=1;
         bool finished=false;
+        bool stopped=false;  // +0x2b1 = 0x10000000: the battle's end stops the car (0x4a317e)
         CarEffects fx;
         std::array<WheelContact,4> wheels{};
         SkidState skid;
@@ -451,17 +483,24 @@ private:
         float wheel_spin=0;   // +0x2a4
         float turret=0;       // +0x3ab: vehicle 5's turret yaw
         int fly=0;float fly_gravity=0,fly_top=0; // FlyPower's counter (+0x64) and the saved rows (+0x6c)
-        int cursor=-1,cursor_section=-1; // +0x2c5's +0x17 (remaining, 1/256) and its section
+        int cursor=-1,cursor_section=-1; // +0x2c5's +0x11 (remaining, 1/256, 0x4a3a10) and its section
+        bool cursor_link=false;Vec3 cursor_target{}; // +0x2c5's first forward link point (world), 0x4a3f76
+        bool cursor_lost=false;int held_distance=0;  // 0x47c331: a missed query clears +0x2c5; 0x4a3d91 then keeps +0x1a3/+0x1a7
         int follow_lock=0; // +0x89b: 10 (robot) or 2 (player) after a car contact (0x46b64c)
     };
     Body body_;
-    void update_opponents(const DriveInput& input);
+    // The robots whose template place (update_order) is in [first, last).
+    void update_opponents(const DriveInput& input,int first=0,int last=7);
+    std::vector<int> placed_;   // virtual_robot's per-section counts, one update's
+    static int template_place(int vehicle);
     void scale_by_rank(size_t robot);
     void robot_items(size_t robot);      // WCtrlRoboCar's item decisions (0x4e5a..)
     void robot_slots(size_t robot);      // 0x4679d0 for a robot
     void robot_boxes(size_t robot);      // the +0xd0 list, every 31 updates
     RankRow rank_row_;int environment_=0,course_=0;
     void drive_opponent(Opponent& o,Body& b,bool controlled);
+    // The robots by their WackyAuto template's place in general.wgm (4, 0, 6, 5, 1, 2, 3).
+    std::vector<size_t> update_order() const;
     // Player 2 through the player's speed, steering and move (0x466db0
     // keyboard branch); items use the robots' slots, spent on key presses.
     void drive_human(size_t i,const DriveInput& input);
@@ -475,7 +514,10 @@ private:
     std::array<int,3> splits_{{-1,-1,-1}};
     uint32_t record_=0;
     bool new_record_=false;
-    MsvcRandom fx_random_{0x1312d6e}; // 0x5472c4, shared by every WCarFx
+    // 0x5472c4, the second rand() (0x430ef0): seeded with the race stream by the
+    // load's srand(0x1312d6e) (0x430e20 sets both states, 0x431fbe); shared by
+    // every WCarFx and, during the draw, WFire (0x481390) and the bees (0x474580).
+    mutable MsvcRandom fx_random_{0x1312d6e};
     int bumms_=0;
     std::vector<bool> knocked_;
     std::vector<uint32_t> knocked_objects_;

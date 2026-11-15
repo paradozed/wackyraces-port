@@ -49,6 +49,8 @@ The project's goal is a native Linux x64 port of the 2000 PC game Wacky Races
   - `WPC_HIT=TYPE,UPDATE`: hits player 1 with that WackyAutoBomba type (e.g.
     `0x80`) at that race update.
   - `WPC_DEBUG_BREATH=1`: logs the breath weapon model's world box each draw.
+  - `WPC_GRID_SEED=N`: the race stream's seed before the grid shuffle; the default is the original's
+    0x1312d6e (20000110, reseeded at every race load), which gives Wine's grid and draws.
 - `import -window root` takes about a second per frame. For anything that
   moves fast (a projectile, a hit), record with
   `ffmpeg -f x11grab -video_size 1024x768 -framerate 30 -i :78 -t 2.5`

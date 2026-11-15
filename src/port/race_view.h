@@ -70,7 +70,6 @@ private:
     struct Flake {Vec3 at{},velocity{};int count=0;}; // 0x2690c40, 0x120 bytes each
     std::vector<Flake> flakes_;
     std::vector<WpcTexturedVertex3D> rain_;
-    MsvcRandom weather_random_;
     uint64_t weather_update_=~uint64_t(0);
     WpcTexture* flake_=nullptr;
     // WCarFx's shadow ray (0x47c180): the shadow's frame for a car, kept from
@@ -190,7 +189,6 @@ private:
     std::map<int,Swarm> swarms_;
     int bee_num_=32,bee_radius_=150,bee_speed_=60;
     void submit_bees(const Matrix4& vp,const std::function<Matrix4(int)>& place);
-    uint32_t fire_random_=1;   // the draw's rand() (0x404363 -> 0x430ef0), view-local
     AnimatedModel tank_hit_;
     std::map<int,std::unique_ptr<AnimatedInstance>> tank_hits_;
     std::vector<WorldBatch> chunk_model_;   // m_Particle (0x151; general.wgm GDModel 0x394)
@@ -244,7 +242,8 @@ private:
     std::vector<std::vector<WorldBatch>> pickups_;
     // dt_t1's trams (race_objects): the crossing trams, then the path movers, in
     // CourseObjects order, drawn at the session's frames.
-    std::vector<std::vector<WorldBatch>> crossing_trams_,movers_;
+    std::vector<std::vector<WorldBatch>> crossing_trams_,movers_,creatures_;
+    std::vector<std::unique_ptr<AnimatedInstance>> creature_clips_;   // Kosza GDHModels with a motion
     std::vector<std::vector<std::vector<WorldBatch>>> logs_; // per WLogRide, per log
     std::vector<std::array<std::vector<WorldBatch>,2>> bridges_; // per WMisty, its two halves
     std::vector<std::array<std::vector<WorldBatch>,2>> geysers_; // per WGeyser, column and ring

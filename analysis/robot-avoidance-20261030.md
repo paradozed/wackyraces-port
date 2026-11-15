@@ -45,7 +45,8 @@ non-zero weight. `+0x2f1` is the polygon after that, by the same rule.
 
 ## Avoidance (`0x4e69bd..0x4e72ea`)
 
-Only when `app+0x1a60` ≠ 1, the speed `+0x3ef` > 0.07 (`0x512a54`), outside
+Only when `app+0x1a60` ≠ 1 (not a battle; `0x4e699a` compares with `ebx` = 1 from `0x4e68ce`; ported
+2026-11-14 as `RoboCarState::battle`), the speed `+0x3ef` > 0.07 (`0x512a54`), outside
 the two-player modes (`0x6f2d00+0xf30` 2/3 with `+0xb8` > 0), and while the
 slow counter `+0xa8` < `0x65`. Best time starts at 120 (`0x42f00000`). For
 each car in `0x6f2ce0[0..7]` other than itself (bit `1 << slot`, cleared in

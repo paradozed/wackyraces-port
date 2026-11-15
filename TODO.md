@@ -36,10 +36,17 @@ code before starting one. The follow camera (`0x478070`) has since been ported
     - Dropped weapons are culled and placed by their section (`0x4a6d20`).
     - Splashes and ripples follow their car.
   - Left:
-    - The crossing test is the far robots' route rule, not the original's portal test `0x4a1a20`.
+    - (The crossing test is the original's portal test `0x4a1a20` since 2026-11-15, section-culling note.)
     - The skid marks (`0x47a7c0`) follow their car's group since 2026-11-12 (`0x4a8e60` on the parent
       node `+0x10`, the car); not compared with Wine.
-    - A dropped weapon outside every slot box keeps 0xffff in the original (always drawn).
+    - (A dropped weapon outside every slot box keeps group 0xffff: since 2026-11-15 the view draws such a mine
+      or barrier always, unwrapped (`filed`); a mine's section is then -1, which the target search treats as
+      the original's 0xffff: `0x4a7329..0x4a734a` wraps the cars only for the querier's section 0 or last.)
+    - A fired or thrown object (missile, TNT, storm, paint shot) that no slot box holds: `0x4a6b30` returns -1
+      before writing anything (`0x4a6bc8`), so the object is not in the manager's list (never stepped or
+      wrapped) and keeps the cloned template's group (not traced). Natively it takes the firer's section and is
+      tracked by the route queries. It needs a robot within 5000 of the player (near mode, items) but outside
+      the player's three rows; not ported (2026-11-15).
     - With two players, both enabled sets are drawn: traced 2026-11-12, as the original (the enabled flag
       is global, both trackers set it; the seam's camera group is reset per view), section-culling note.
     - Robots and weapons across the seam were not compared with Wine.
@@ -122,6 +129,10 @@ code before starting one. The follow camera (`0x478070`) has since been ported
       against the Direct3D device's `+0xf0`), and the port follows renderer 2;
     - so whether the marks show needs the original on a real Direct3D device, not Wine
       (`analysis/car-effects-20261028.md`).
+    - 2026-11-13: the renderer comes from the registry's `Prefs` record (first dword, then the device name
+      written by `wpcsetup.exe`): with it set to 2 in a scratch prefix, `0x6f5958` reads 2, but WPC.EXE dies
+      before the menu (page fault calling address 0) under Wine's builtin ddraw on Xvfb. Renderer 2 cannot be
+      compared here; the device record may need `wpcsetup.exe`'s own choice (not tried).
 - [ ] Hit visuals (2026-11-07, `analysis/hit-smoke-20261107.md`):
   - Done: the smoke clones of 8/0x40/0x80 (`0x47ed6e`, flamesmoke `0x418310`) and the tint of
     every batch of the car model. Compared with Wine on `cc_t1` (a hooked 0x80 hit on the player):
@@ -194,15 +205,18 @@ code before starting one. The follow camera (`0x478070`) has since been ported
 - [ ] WFire (2026-11-09, `analysis/wfire-20261109.md`): the jet flames drawn for TurboSpeed (vehicles 0,
   2, 5, 6) and FlyPower (0, 5), with the original's random shape and colours each draw. Open: not
   compared with Wine (the culling of mode 8 hides one triangle of each fin pair; the native capture
-  shows thin flames); the draw's rand() is view-local, not the shared one. (TurboSpeed's body clips
+  shows thin flames). The draw's rand() is the second stream `0x5472c4`, shared with the car effects and the
+  bees and seeded with the race seed (ported 2026-11-14, `analysis/wfire-20261109.md`). (TurboSpeed's body clips
   are ported, see the FlyPower item.)
 - [ ] Wheel spin (2026-11-09, `analysis/wheel-spin-20261109.md`): ported; the wheels roll and the front
   pair steers. Open: the sign test reads the speed copy `[esp+0x44]` (written at `0x46ae50` from
   `+0x3ef`, provisional), the step's length is the native forward step (the probes' pitch left out);
   not compared with Wine; far robots (no motion block) keep their angle.
-- [ ] `WPU_Detour`'s `m_aEffectAngle`/`m_aMaxSteerMod`/`m_nTrapTime`: no reader found (2026-11-08,
-  static scan; the init sets `m_nTrapTime` to 5, `0x4e32a4`; `analysis/weapons-bomba-20261029.md`).
-  A Wine read watchpoint on `[action+0x18]+0x54/+0x5c/+0x64` would confirm it.
+- [x] `WPU_Detour`'s `m_aEffectAngle`/`m_aMaxSteerMod`/`m_nTrapTime`: no reader (2026-11-14, a scan of
+  every `[r+0x18]` load followed by `[r+0x54/0x5c/0x64]`: 14 matches; the readers are WExplosion's init
+  `0x4803c0` (vtable `0x513050`), FlyPower `0x4d560c`, a stack slot at `0x4e619d` and the `+0xd37` object at
+  `0x4ea96e`; the writers the menu objects' inits and Detour's own `0x4e32a4`, `m_nTrapTime` = 5). Nothing
+  to port; a Wine read watchpoint is not available in this setup (no debugger attach).
 - [ ] Backward use (2026-11-08, `analysis/weapons-bomba-20261029.md`): look-back held at the use sets
   the action's `+0x5c` (`0x4d24f0`). Projectiles, the TNT and the breath head turn by π; the storm
   takes backward links. Open:
@@ -228,7 +242,8 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   robots use them.
 - [ ] Weather remainders: (the flake texture is none, 2026-11-09: renderer `+0x23969` is never
   written, so the flakes are plain white squares, `analysis/car-effects-20261028.md`), D3D line width (native ~1 px strips), the
-  shared rand() and per-frame stepping (native per race update).
+  per-frame stepping (native per race update; its rand() is the second stream `0x5472c4`, shared since
+  2026-11-15, so the original's draw count there follows the frame rate).
   - The Zartter shelter cut (`0x4565e0`/`0x456180`) is ported (`RaceTrack::sheltered`, 2026-11-02; its
     section rule is provisional).
   - The rain's lighting is ported (2026-11-08, `analysis/car-effects-20261028.md`) and compared with
@@ -275,16 +290,42 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   `ct_t1`'s snow slopes (`analysis/wine-comparison-championship-i-20261028.md`).
 - [ ] Vertex colours, remainders: the Direct3D colour of untextured parts
   (no DIFFUSE without VCOL, ALPHAOP disabled; native keeps COLS[1] and
-  1 - TRAN from Glide `0x433d40`); out-of-range VCOL (the cache truncates
-  with ftol, native clamps; `ct_t1` GMDL 289/361, `dt_t1` 786); the splash and
+  1 - TRAN from Glide `0x433d40`); (out-of-range VCOL: the cache's ftol and OR packing are ported,
+  2026-11-15, ct_t1's GMDL 361 not compared on screen); the splash and
   WalkOnWater (additive, TRAN x VCOL) and the 2D icons' "transparency 0.4"
 - [ ] Route cursor remainders: how the original updates `+0x2c5` (native:
   the player's route query each update, the robots' driver module), the `0x4a394e` fallback
   without a polygon, the start-line test `0x4a3f28` (forward-linked polygon
   and `+0x2b9`); the race distance uses the rows' `+0x34` (see the rank item).
+  - Read 2026-11-13 (static, not ported): the ranks' progress is not `0x4a3937`'s. The loop `0x4a3d4d..0x4a3f1a`
+    (over the rank table `+0x7f0`) writes `+0x1a3` (distance into the lap) and `+0x1a7` = (`+0x187` − 1) × the lap
+    `+0xf38` + `+0x1a3`; a car with lap `+0x19f` ≤ 0 gets `+0x1a3` = 0 and `+0x1a7` = count − rank − 10000.
+    `+0x1a3` sums `0x4a3c30` over the route rows `0..+0x1b7` and their polygons up to `+0x1bf` (the cursor's row
+    and polygon; row table at manager `+0x2c` → `+0x20`, count `+0x1c`; polygons at row `+0x3c`, stride 0xcf0, count
+    `+0x38`), with a start-line branch when `+0x1b7` = `+0x1bf` = 0 and `+0x1bb` > 0. Hidden robots add `+0x2b5`
+    (`0x4a3ec4`). At `0x4a3f28`, when the cursor polygon `+0x2c5` has flags `+0x16 & 0xf0` and the row polygon's
+    `0x40647e` equals `+0x2b9`, it adds the distance from that polygon's vertex (`+0x1c`/`+0x20` shorts) to the car.
+    Native ranks use `race_distance()` (row lengths × the `0x4a3937` fraction) instead.
+    Then `0x4a3c30`(car, route, brick) and `0x4a3a10`: each passed brick gives its route length `+0x34`; the car's
+    own brick gives `+0x34` less what is left in it (`0x4a3a10`: 0 when the brick's `0x40647e` is not the car's
+    `+0x2b9` and the cursor polygon `+0x2c5` has `+0x11` flags, else the remainder); brick 0 of route 0 also takes
+    off the manager's `+0x34` (the start line's place in it) and, with `+0x1bb` > 0 (behind the line), counts its
+    length twice. So the ranks' progress is the port's row lengths + fraction, up to an offset the same for every
+    car. The `0x4a3f28` term (`+0x16 & 0xf0` is the forward link count, so nearly every polygon) is ported
+    (2026-11-13, `analysis/rank-progress-20261113.md`): native − Wine on `sh_t1` is 3952 ± 4 at 75 of 79 samples.
+    The cursor: the shadow update `0x47c180` writes it, and a miss clears it (`0x47c331`); the rank loop then keeps
+    the car's last progress (`0x4a3d91`). Ported for the player (2026-11-13). The share is the route flags' byte
+    `+0x11` (`0x4a3a10`), not `+0x17`; `0x4a3937` and its fallback `0x4a394e` are in the unreferenced `0x4a38d0`
+    (switched and checked against Wine, `analysis/rank-progress-20261113.md`). Before the first crossing the
+    original ranks by the rank-table index (`0x4a3d66`), ported in `race_distance`. The HUD shows `+0x1af` (`0x485d8d`), so
+    `rank()` is now `race_rank(-1)` (2026-11-13). The robots' cursor is the same query
+    (`0x4e82be` only clears with it; far mode queries the route layer alone and still hits, Wine 2026-11-13). Its
+    miss rule is not applied to the robots: tried, it held native robots' progress off the route and broke
+    `ct_t3`'s avoidance check (81% on the route). Open: that, once the robots stay on the route layer as in the
+    original; routes past the first (`+0x1b7` > 0) not seen.
 - [ ] Rank scaling remainders (2026-11-08):
   - The race distance and the HUD strip now use the rows' route lengths `+0x34`, as the original's
-    lap length does (`0x4a3ba0`, manager `+0xf38`) and its distance in a row (`0x4a3937`). Before,
+    lap length does (`0x4a3ba0`, manager `+0xf38`) and its distance in a row (`0x4a3a10`; `0x4a3937` is in the unreferenced `0x4a38d0`). Before,
     the native distance field's lengths were used, 0.9× to 1.74× apart per lap. The fraction inside a
     row is still the cursor's or the native field's.
   - The switch first broke two checks:
@@ -318,12 +359,20 @@ code before starting one. The follow camera (`0x478070`) has since been ported
     (`analysis/weapons-bomba-20261029.md`).
 - [ ] Robot items, remainders (the weapons' and FireSiren's aims are each icon's WPowerUpSprite
   `m_range`/`m_visangle` since 2026-11-08, read under Wine, `analysis/robocar-ai-20261028.md`):
-  FlyPower use on `+0x1c7` 1/`0xb`, the section-cell object list. (The robots' battle mode, `+0x34`,
+  (the section-cell object list is the section row's, ported 2026-11-15, `analysis/robocar-ai-20261028.md`). (FlyPower: a robot's slot gets 7..10 from `(rand & 3) + 7`, its own gadget
+  0..6 only with `+0x1c7` = 2 (`0x4e59a4`), which no instruction writes; 1 (WGoldenGate) has no reader and
+  `0xb` (WRotoHill) is the MonsterTires use, ported; so the robots never fly, as natively, 2026-11-15.) (The robots' battle mode, `+0x34`,
   `0x4e9050`, is unreachable: battle is two players only and the menu never makes a robot opponent,
   `analysis/battle-20261102.md`; the native one-player battle exists for tests only.)
-- [ ] Avoidance remainders: not compared with Wine; the target-speed angle
-  while avoiding; stale `+0x315/+0x321` with fewer than two shared
-  vertices; edges across sections; the two-player gate (`0x6f2d00+0xf30`).
+- [ ] Avoidance remainders: (compared with Wine on `cc_t1` and `sh_t1` 2026-11-14 with hooks in the loop:
+  the step `+0x2ed` and edges `+0x35d` are per-car caches filled on the first request and cleared at the end
+  of the car's own turn, so a robot's own step is its last update's move; ported as `AvoidCache`, v0's
+  avoidance on `cc_t1` now starts at update 23 as Wine's, `analysis/race-stream-20261114.md`; the caller of the
+  clearing `0x469550` is not traced) the target-speed angle while avoiding; stale `+0x315/+0x321` with fewer
+  than two shared vertices; edges across sections. (The app gate `[0x5472b8]+0x1a60` == 1 (`0x4e699a`, `ebx` = 1
+  from `0x4e68ce`) is the battle: ported 2026-11-14, `native_drive_test` checks the arena robot never avoids;
+  without the gate cc_b's avoids 6 updates. The `0x6f2d00+0xf30` 2/3 test at `0x4e6962` skips the decision
+  while `+0xb8` > 0: that is the start hold, ported as `Opponent::start_hold`.)
 - [ ] Robots trapped on `dt_t3`'s steep ramp in section 2 (2026-11-08): around (-40200, -2200, 23800)
   the road climbs about 250 over 500 toward -x out of a sandy hollow. A robot hit at its foot climbs
   at about 0.19, reaches y -2024 and slides back, over and over (always-near test pack). 2 robots were
@@ -361,6 +410,17 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   the player parked at the `cc_t1` bend the native line matches Wine's
   (x -60930 against -60849 at z 13000, no fall in 108 passes): the falls
   only come in the always-near test pack (first lap), not compared.
+  Re-measured 2026-11-14 with the start hold (seeds 0..5, 3600 updates, always near; worst robot laps):
+  `sh_t1` all ≥ 2, `dt_t1` ≥ 1, `cc_t1` seeds 4 and 5 at 0, `ct_t1` seed 1 at 0. `cc_t1` seed 4's robot 1
+  spins in the pack on the first climb (yaw −0.86 → 1.93 → −2.40 over updates 210..220), comes to rest at
+  (-5634, 1171, 6530) on surface 1 and stays there to the end: throttle 0 in every state, the unsticks
+  included, since `0x4e82d0..0x4e82dc` clears `+0x2ac` after the whole decision (the port's order). Its
+  height sinks 0.14 an update with no xz motion: it lies on the wall face itself (pitch −1.12, roll 0.57, up (0.26, 0.42, 0.87)), and the robots' one ray along the car's up axis (`0x46c7f2..0x46c97e`) keeps meeting that face, so it stays grounded on it. `cc_t1` seed 5's robot 2 sits at (-60530, 1772, 10688), the
+  bend above; `ct_t1` seed 1's robot 5 shuttles at (-23900, -1700, 60900) unsticking. Not compared with Wine
+  (the always-near pack has no Wine equivalent). With the original's seed 0x1312d6e (2026-11-14) a `dr_t1` robot (vehicle 6) crosses the loop seam at
+  update ~1190 at speed 0.95, turns round (state 4), rolls onto flat ground flagged 1 at (-128422, -3870, 16060), off the
+  route layer, and stays there to the end (the throttle cut). `native_drive_test`'s edge check now counts only cars
+  on the route layer.
 - [ ] Trams, remainders (the crossing lights' UV animation `0x4caf95` is
   ported, 2026-11-01, for renderer mode 1): the tram frame copy and the pi/2 turn axis
   (provisional, not seen under Wine); the other WSaw/WRotoHill/WGoldenGate
@@ -397,14 +457,65 @@ code before starting one. The follow camera (`0x478070`) has since been ported
 - [ ] Robot lines (compared with Wine on `cc_t1`, 2026-11-12: on the same branch within ~20–30 units; the
   fork's branch is the random `0x4e9610` draw, and from the grid start too; `dt_t1` too, medians 22–44, one robot returned
   to the track under Wine at the tram crossing; the 18 other courses too: medians 4–17 from some native
-  robot's line, `analysis/robocar-ai-20261028.md`; open: `dt_t2`'s fountain holds one far robot under Wine for 13–33 s,
+  robot's line, `analysis/robocar-ai-20261028.md`; `dt_t2`'s fountain (explained and ported 2026-11-14: the hold rebuilds a far robot's frame from its frozen
+  yaw `+0x26b`, `0x4ca647` → `0x468620`; Wine's v6 stays trapped for good, natively three robots; which ones depends on
+  the start pack's yaws, not compared update by update; `analysis/lap-line-geyser-20261106.md`) held one far robot under Wine for 13–33 s,
   reproduced, where the native far step carries it through; traced in `analysis/lap-line-geyser-20261106.md`: the goals, the
   link draw and the far step agree with the port; it is a far-mode loop between route polygons 132 and 270 that
   only a wide approach plus the eastern link produces, never seen natively; no rule difference found); the original's
-  far-mode route lookup across sections (`+0x2c5`) and the 5% lap gap are
-  not traced.
+  far-mode route lookup across sections (`+0x2c5`) is not traced. The 5% lap gap is closed (2026-11-14,
+  `analysis/far-step-laps-20261114.md`): Wine's seconds were wall time at ~26.7 updates/s; counted in updates the
+  native far robots were 6.5% slower, because the far step `0x4e54ef` is top × `+0x163` × WCtrlRoboCar `+0x4c`
+  (203 under Wine, the probe-point distance at the init `0x4e4869`) × 0.56/0.48 with no frame factor. Ported; on
+  `sh_t1` each robot's lap ends are now within 10 updates of Wine's (vehicle 6: 34 behind, from the start). Vehicle 6's
+  34 updates were its `+0xb4` draw; the race load reseeds the stream with 0x1312d6e (`0x431fc3`), so the
+  grid is draws 1..6 and `+0xb4` draws 7..12, now ported (default seed 0x1312d6e, no clock): `sh_t1` and `cc_t1`
+  lap ends within 1% of Wine's. `ct_t1` too (within 0.6%, 2026-11-14), `dr_t1` within 1.7% (vehicle 6 79 updates early from lap 1,
+  the start). `ct_t2` and `dr_t2` within 2%, `cc_t2` within
+  1.5% but v5 359 updates late on lap 2 natively (native v5 is hidden 286 updates every lap, (16860, 10102) to the
+  portal at (34828, 20712); Wine's v5 lap 2 is 315 updates shorter than its own lap 3, not traced), `sh_t2`: Wine's v6 held ~3300 updates on lap 2, frozen far at (40570.8, 1167.5, 89821.4)
+  riding a WLogRide log (`+0x89f`), speed 0, no hit; lead: the far step starts from the stored route contact
+  `+0x2d5` (shadow query `0x47c180`), so a contact not refreshed plus the ride's heading reset gives the same point
+  every update; cause found: a storm cloud strike (type 0x400) on the far robot at update ~1470 set it
+  down 1420 west in the pocket (40570, 1167, 89821), and after the strike the far step never moved it again; the
+  move is the car update running the struck far robot along its frozen yaw `+0x26b` (frame rebuilt from the angles),
+  ported 2026-11-14; it stays because it drowned there and a far robot's drowning counter
+  `+0x8e7` stops at 1 (the return below 1 is not reached while far), ported 2026-11-14 too,
+  `dt_t2`: Wine's v0 held ~1270 updates at the fountain on lap 2 and then freed (how not traced). Cards 3 and 4 compared too (2026-11-14,
+  table in the note): `sh_t3`, `ct_t3` within 3%, `dr_t4` 5.7%, the others with single-lap events. `cc_t3`'s systematic gain was
+  the WGeyser holding each far robot about 60 updates a lap under Wine, which natively never hit anyone: m_Distance
+  (`0x241`) is a float read as an integer (fixed 2026-11-14); the native robots still slip past it (their line); the events on `sh_t4` (Wine's v5/v6 from lap 2),
+  `ct_t4` (native v0/v5 late), `dr_t3` (native v6 lap 3); championship mode.
+  Robots move at `+0x163` = 1.0 (`0x469550`: `[car+0x18]+0xc0` set on robots; the player 0.9333), and the step
+  stretches the whole 204 above speed 0.4 (fitted to Wine): the `sh_t1` start pack now matches Wine within 3 units
+  for 19 updates. Open: the first steer comes one update earlier natively and smaller (order of the decision and
+  the car update; a plain one-update steer lag fixes vehicle 0 but breaks vehicle 1, reverted); the one-update shift was
+  the car update's order (it moves along the last heading and turns after, `0x46ba57`), ported, and the hold is
+  back to the recovered 20; the far test's timing is fixed (the switch update also runs the far step). The race
+  stream's consumers are traced (`analysis/race-stream-20261114.md`, a rand hook under Wine): the GO-update draws,
+  the link draws during the hold and the engine jitter `0x47058a` are ported, and the native draw counts follow
+  Wine's. The cars update in their `general.wgm` template order (4, 0, 6, 5, 1, 2, 3; Wine's caller registers),
+  each robot's car update before its controller: ported, and with the stream offset by hand all six first
+  decisions on `sh_t1` equal Wine's (v0's first turn included). The `Kosza` creatures' draws are ported (the
+  stream equals Wine's on `sh_t1` and through update 20 on `cc_t1`). `cc_t1`'s v0 avoiding v2 at update 21
+  natively was the avoidance's step cache (a robot's own step is its last update's move), ported: the packs
+  follow Wine within 10 units to updates 157..242 on `cc_t1` (v0 185) and 162..210 on `sh_t1` (v0 163, was
+  33), except far robots, which switch from goal 2 to goal 1 a few updates apart (rounding of a settled angle,
+  not a rule). The player's engine draw and the car contact's dropped draw `0x46b822` are ported (2026-11-14,
+  rand hook with Up held). The player's place in the order for every vehicle is ported (Wine, vehicle 5).
+  See also `analysis/far-step-laps-20261114.md`.
+- [ ] The start (2026-11-13, `analysis/start-boost-20261113.md`): the countdown rev and false start (`0x4a2b57`), the
+  GO boosts (robot slots 0..2 row[1] × 9/6/3, the player × (rev × 4 + 1), `0x4a2c22`) and their 99-update restore
+  (`0x46967c`) are ported and match Wine's robot speeds. With Wine's grid (`WPC_GRID_SEED=140`) the native front row
+  runs on after GO; the crash seen before was another grid's (vehicle 0 beside vehicle 6). Under Wine the false start
+  is confirmed (Up held through the load: `0x6f5834` = 1, no rev, a plain start). Key scripts reach the grid at the
+  countdown's update 55–57 of 60 and their keys act about 1.1 s late, so start timings measured with them are a
+  second off. Robots do not knock the player aside at a normal start in either build (native 5 grids, `sh_t1`/`cc_t1`; Wine `sh_t1`). After GO the robots go straight because of the goal rule (not within 1000 of goal 1 with the goals on opposite sides), Wine 2026-11-13. Open: natively the slot 0 robot enters the avoidance branch for 8 updates, because slot 1 beside it counts as barely ahead (dot +0.35); Wine's does not (the original's ahead test `0x4e69bd..0x4e6c70` matches the port's and also counts it ahead; the cached steps `+0x2ed` are the port's `moved()` too; next: Wine's slot 0 and 1 `+0x173`, `+0x2ed` and `+0xc4` on the first frames after GO. Captured 2026-11-13 with longer menu delays and the reader's `track` command: the GO update drives nothing (ported), the goals match, Wine's avoid side stays 0 and its steer 0. Found 2026-11-13: WCtrlRoboCar `+0xb8` = 20 at its init (GO, `0x4e48d2`), counted down each update (`0x4e4f70`); `0x4e6962..0x4e697d` skips the whole decision while it is above 0 (states 2 and 3), so robots drive straight for 20 updates (Wine: first steer and list count about 22 frames after GO). Ported as `Opponent::start_hold` (2026-11-14, `analysis/start-boost-20261113.md`), which matches Wine's first steer (x −15259, −0.0795, against −15256, −0.0789); the hit check `0x4e53df` comes before it, and three checks were adapted to it (far robot hit: skip hit, shielded and holding robots, farthest point; dr_t3 autopilot: drives again after the stuck rule). With the hold the native slot 0 robot no longer enters avoidance after GO (sh_t1, grid 140: avoid 0 over the first 60 updates, first steer at update 19), so the 8 avoidance updates noted above are gone, as under Wine. Wine lap times with the hold: player idle, every robot within 1.4% of Wine over three laps on cc_t1, 0.4% on ct_t1, 2.2% on dt_t1 (single laps up to 90 updates apart: no robot waits at the tram in either build; v1's lap-1 loss is a fork taken the other way after the stream split; the split at update 24 was the item slots' place in a car's turn, ported 2026-11-15, then the power-up list's count during the start hold (`0x4e7321` after the hold skip) and the beehive's and oil's drop 270 behind (`0x4de850`, `0x4ddb90`), ported 2026-11-15: the stream follows Wine's to update 47 and the first laps of four robots within 8 updates; robot 6 under the bees too (the hive's `+0x68` holds 6257.7 until the first draw, read under Wine, ported provisionally), so the order of finish is Wine's and the stream stays within a few draws to about update 750; each robot's `+0x4c` is the float-truncated probe span at GO (203 or 204 by course, `analysis/far-step-laps-20261114.md`), ported; dt_t1 robot 1 follows Wine within 0.1 unit to update 52; from 53 its steer differs in the 4th decimal near a goal (float against x87 in the car update), which grows into the later splits (no rule difference found, `analysis/far-step-laps-20261114.md`); `analysis/race-stream-20261114.md`), 2026-11-15, `analysis/far-step-laps-20261114.md`); (PRET: the car update runs but its motion, pushes included, is zeroed, `0x46b97b`;
+  ported.) (The TurboSpeed cancels `0x46a9b6`/`0x46c5c1` end a running start boost too, ported,
+  and the solid contact now cancels TurboSpeed natively.)
 - [ ] Robots trapped against walls with the robots always near (seeds 0..5,
-  3600 updates; worst robot laps): `sh_t1` seeds 0 (1 lap) and 1 (0),
+  3600 updates; worst robot laps; 2026-11-14 with the start hold: `sh_t1` all ≥ 2 laps, the others under the
+  wall-flagged slopes item): `sh_t1` seeds 0 (1 lap) and 1 (0),
   `cc_t1` seeds 2 (1) and 5 (0); `dt_t1` and `ct_t1` none. On `sh_t1`'s first
   hairpin (-6880, 734, -650) the robot cuts to goal 2, which lies behind the
   cliff (the near-and-fast rule of `0x4e5d..`), settles square to the wall
@@ -447,14 +558,15 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   on all 20. Open:
   - the test driver now finishes all 20 (2026-11-07, see the test-driver item above);
   - `dt_t2`: a traced native robot took 15 s across the fountain, the original's
-    about 5 s;
+    about 5 s (2026-11-14: far robots now circle the column for good, as under Wine, see the robot lines item);
   - +0x8bf compounding on surface 1 (`0x466df6`): compare a bombed car under Wine. On `cc_t2` (2026-11-08)
     a robot struck by the storm, in the air (surface 0) and held, had its speed double every update
     (-5.9 ... -188); its front wall probe, which stretches with the speed, overflowed the ground
     query. Natively a speed past 1e4 now returns the car to the road, like the position safety (the
     original's __ftol would not throw).
 - [ ] Race audio, still open (the power-up voice events of the Flipper,
-  BootKicker and BeeHive are ported); the exact Windows
+  BootKicker and BeeHive are ported; the engine pitch's jitter is the car update's race-stream draw since
+  2026-11-14, `analysis/race-stream-20261114.md`); the exact Windows
   DirectSound3D pan/HRTF; no Wine capture of the 3D levels (2026-11-12: Wine runs silent with an ALSA file
   tap, `analysis/runtime-capture.md`, but the capture's sample format is not settled).
 - [x] Battle remainders (closed 2026-11-12; the end screen, which needs five hits, was not compared
@@ -518,6 +630,13 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   comparison. `cc_t2`'s WMisty bridge is ported
   (`analysis/misty-bridge-20261106.md`), as is WGeyser, with its model's own
   update `0x4c9850`, fade and sounds open (`analysis/lap-line-geyser-20261106.md`).
+- [ ] `Kosza` creatures (2026-11-14, `analysis/race-stream-20261114.md`, `analysis/kosza-motion-20261114.md`):
+  states, waypoints, rates, race-stream draws, the moves (Hermite `0x458230`, chord, circle and Lissajous
+  `0x458be0`, GDPath `0x457f80`), the frame along the motion (`m_bRotate`), the hidden waiting state (flag
+  0x100), the clip (speed `0x52a990`, start frame, freeze) and the car hit (`0x459311`/`0x45905b`) are ported;
+  sh_t1's birds and cc_t1's two creatures match Wine's node frames (birds until the stream splits at t 0.5).
+  Open: mode 2's walk `0x456af0` (unused); the hit not compared with Wine (mode 4 on dt_t3 is, 2026-11-14); the car order of
+  the object query (`creature_touch`, provisional); the clip's pace on screen (the view's 10 per update).
 - [ ] Course object classes not ported, by course (scene census, 2026-11-06;
   they probably explain several driving failures, as WMisty did on `cc_t2`):
   `cc_t4` none (WChiselCrossover, WRolling and their WBlowUp ported,
@@ -537,7 +656,7 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   - the viewport projection: the camera ratio is not halved (Wine memory read: both follow cameras
     keep 100); the Direct3D projection `0x4aec30` takes s = √(viewport height / width × ratio × 0.01),
     which gives the earlier 1/√2 fit exactly; `RaceView::draw_view` derives it from the two aspects;
-  - the finish: the first player to finish ends the race (`0x4a43b9`/`0x4a2dcf`), ported;
+  - the finish: the first player to finish ends the race (`0x4a43b9`/`0x4a2dcf`), ported; so does the last robot to finish in a single-player race (`0x4a8a10`, 2026-11-13);
   - the standings: state 4 → 5 as in one player with both players in the rank table, drawn in
     viewport 0 only (`0x499c7d`), as natively (not compared on screen);
   - the audio listener: viewport 0's camera, player 1's (`0x427620`), as natively;
@@ -580,12 +699,38 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   - On `sh_t1` (2026-11-12) lap 2 is counted in the original too: 2029 frames, against the port's clean laps
     of 2184–2374 updates. With the port deciding at Wine's rate (every 1.35 updates) its lap 2 is 2046,
     within 0.8 % of Wine's 2029: the earlier 3–7 % was the driver's timing, not the car. Lap 3 in the original
-    is 1559 frames (the finish), 22 % quicker than its own lap 2 and the port's lap 3 (2013): not explained, open. (A second attempt, 2026-11-12, with a route recorded
+    is 1559 frames (the finish), with stretches above top speed (124.6 a frame; a boost or push, not logged), while
+    its lap 2 has a hold-up; the port's laps lie between. The repeat (2026-11-13) shows a TurboSpeed (`+0x385` =
+    8) started for the player without the gadget key, at the lap-3 refill. Explained (2026-11-13): every robot had
+    finished, so the rank update `0x4a8a10` ended the race (`0x4a2dbd`) and put the player on robot control
+    (`[+0x18]+0xc0` = 2, `0x4a2df8`), whose item code used the TurboSpeed. The race end is ported; the
+    autopilot is provisional (item below). (A second attempt, 2026-11-12, with a route recorded
     natively: native laps 1 in 1496–1531 updates, then both builds' driver ends in a pocket off the outside
     of the left-hander near (−21000, 19800) and cannot get out; it needs a better line or speed control
     there, `analysis/driven-race-20261112.md`.) Its car twice stayed for tens of seconds against
     the outer wall of the left-hander near (−57500, 4570), where native recovers in 2 s; the wall
     response or the driver, not separated. Then the standings of a driven race.
+  - [ ] The player's autopilot once the race has ended (`0x49eb20` writes 2 into `[+0x18]+0xc0`): ported
+    provisionally (2026-11-13, `analysis/driven-race-20261112.md`: a `RoboDriver` with the robot speed and steering
+    branches `0x466e0b`/`0x467886`). The controller is the player car's own WCtrlRoboCar (`+0x1c3`, found under Wine
+    2026-11-13) and its item use (state 5, `0x467c9c`/`0x46803b`) is ported. Its init `0x4e45e0` (doubled
+    gravity, dir modifier 0.25, item wait) runs at the end, ported and confirmed under Wine (2026-11-13: `+0x24`
+    attached, gravity 0.05 → 0.1). Finished cars drive on in the original (no parking), now in the port too.
+    The rank scaling and item code run for finished cars and the autopilot (no finish test in `0x4e4f10`),
+    ported. Compared with Wine on `sh_t1` (2026-11-13): the same route and pace after a stall-counter fix,
+    and pickups after the end (ported). Open: the `sh_t2`
+    pocket near (42700, 92500) where it sticks (see below). Pocket diagnosis (2026-11-13, debug
+    print of the autopilot): heading straight (yaw 0.02) at 0.57 the player's car drifts about 16 units per update to
+    the right from z 87100 to 91200 (x 41650 → 42430), 400 units right of the robots' line (goal x 42005), and enters
+    route polygon 1293, whose goal (42416, 92280) is soon behind it; the module has flag 1, so the driver turns
+    round (state 4), brakes before the drop at z 93300, falls (surface 0x800000) and respawns at (41975, 82859).
+    The test driver stuck at the same spot. The drift's cause (found 2026-11-13 by splitting each update's motion):
+    the forward step moves the car along its yaw (−1.7, +90); the +22 x an update comes from `update_objects`, the
+    WLogRollingB placement (`0x4c2547`, `CourseObjects::rolled()`): the log at z 85148..93778 turns the offset of
+    the player cars only (`0x4a7e70` flags 1, `analysis/lap-line-geyser-20261106.md`) by 0.0349 an update. So it is the
+    course's hazard, not a port error; the robots are never turned. The robot driver (autopilot) does not steer
+    against it enough to stay on the robots' line. Whether the original's autopilot falls off there too is not
+    checked (it would be turned, being a player car).
   - The finish standings screen matches with a forced last lap (Wine `+0x19f` = 3, native `WPC_LAST_LAP=1`), `analysis/native-hud-20261028.md`.)
 - [ ] Keep the native asset, scene, menu, mesh and renderer checks passing;
   add regression coverage for each newly implemented race, menu or save path.

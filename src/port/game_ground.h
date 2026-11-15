@@ -23,8 +23,8 @@ struct GroundHit {
 struct RouteLink {uint16_t target=0xffff,weight=0;GroundPoint point;};
 struct RouteNode {
     uint32_t polygon=0,flags=0;
-    // The counts word's high byte (+0x17 on a quad): the remaining fraction of
-    // the section in 1/256 that ranks racers (0x4a3937).
+    // The route flags' byte 1 (+0x11): the remaining fraction of the section
+    // in 1/256 that ranks racers (0x4a3a10, the rank loop's remainder).
     uint8_t remaining=0;
     std::array<uint16_t,4> vertices{};
     size_t vertex_count=0;

@@ -153,7 +153,7 @@ So away from the player the robots go at about half their top speed.
 - Robots draw from the main `rand()` stream (`0x430f60` = `rand() % n`), as the power-ups do.
 - In the far mode the car slides along at half speed and is put on the route layer (on the ground without one), then settled. See the far-mode laps section.
 - `rank()`, the progress strip and the finish standings use the robots' progress and finishing order.
-- After the finish a robot brakes to a stop (states `0x10000000`/`0x20000000`).
+- After the finish a robot drives on (Wine 2026-11-13, `driven-race-20261112.md`); only the battle's end (`+0x2b1` = `0x10000000`, `0x4a317e`) brakes it to a stop (then `0x20000000`). Before 2026-11-13 the port parked finished robots.
 - **Provisional:** off the route layer the original only drives straight. The port keeps the last goals instead, because its provisional wall and edge responses push cars off the layer, at `dt_t1`'s first bend for example.
 
 ## Not ported
@@ -276,7 +276,12 @@ From the same decompiles and `0x4679d0`/`0x46a4a0` (Ghidra export and headless r
   TNT's 60° and 5000 were used for all.
 
 **Provisional:**
-- the list covers every course power-up, not the section cell's;
+- (ported 2026-11-15: the "section cell" is the robot's section row, `0x4e7386..0x4e73e7`: `[0x6f2d00]+0x2c`
+  indexed by the car's section `+0x1b7`, its row table `+0x3c` (`0xcf0` a row, row index `[[+0x40]]`, one row
+  per section on the shipped courses), the row's object count `+0x360` and references `+0x4e4` (read at load
+  by `0x49b6cf..`, the port's `ModeRow::object_ids4e8`). The lists hold the WPowerUps only; each spot is in one
+  section's list, except four on ct_t3 and two on dt_t1 that no row links, so no robot aims at them.
+  `RaceTrack::section_power_ups`, `RaceSession::robot_boxes`);
 - far robots take nothing.
 
 ## The `sh_t1` hairpin under Wine (20261030)
@@ -320,7 +325,7 @@ Placing a robot through `+0x288/+0x54/+0xc0` misplaced it by ~7000 units, and th
 | 5 | 79.0 / 80.6 | 75.3 |
 | 6 | 62.6 / 63.6 | 58.8 |
 
-The vehicle order matches (6 fastest, 5 slowest). The native laps are about 5% quicker; the route-layer rest shortened them by ~1.5 s from the ground rest, and the cause of the rest of the gap is not traced. The native far robots finish three laps in 300 s on all four Championship I courses (`native_drive_test`). Lines were not compared, only lap times.
+The vehicle order matches (6 fastest, 5 slowest). The native laps are about 5% quicker; the route-layer rest shortened them by ~1.5 s from the ground rest, and the cause of the rest of the gap is not traced. The native far robots finish three laps in 300 s on all four Championship I courses (`native_drive_test`). Lines were not compared, only lap times. (2026-11-14: the gap was Wine's wall-clock rate, about 26.7 updates/s; in updates the native far robots were 6.5% slower, fixed by the far step's recovered factor, see [far-step laps](far-step-laps-20261114.md).)
 
 ## Robots outside the player's rows (20261031)
 

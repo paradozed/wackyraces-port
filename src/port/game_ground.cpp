@@ -174,7 +174,10 @@ RouteNode GroundResource::route_node(uint32_t record_index,uint32_t polygon) con
     }
     n.flags=word(bytes_,at+header);
     const uint16_t counts=half(bytes_,at+header+6);
-    n.remaining=uint8_t(counts>>8);
+    // 0x4a3a10 reads the route flags' byte 1 (+0x11). The counts word's high
+    // byte (+0x17 on a quad, read by the unreferenced 0x4a38d0) mostly agrees
+    // but not everywhere (sh_t1's start polygon 189: 239 against 146).
+    n.remaining=uint8_t(n.flags>>8);
     const size_t forward=(counts>>4)&15,backward=counts&15;
     span(g.vertices,at+header+8,(forward+backward)*12);
     for(size_t i=0;i<forward+backward;++i) {

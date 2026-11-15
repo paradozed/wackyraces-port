@@ -132,14 +132,25 @@ copy (`0x425bf0`, which copies the group of a cloned template), they fall into t
     WPU_FallingTree `0x4e09e0`, WPU_BrickWall `0x4e2650` and WPU_Detour `0x4e33c0`, plus course
     objects (`0x4803c0`, `0x4c..`, `0x4d1a90`).
   - Being in the table, they are enabled and disabled with that row (`0x4a8680`, `0x4a8850`).
+  - Outside every slot box the group stays 0xffff (2026-11-15, ported): drawn always and unwrapped
+    (`0x5472d0[0xffff & 7]` is never marked), and a mine's target search (`0x4a71e0`) wraps no car, since it
+    wraps only for the querier's section 0 (`0x4a7329..0x4a734a`) or the last. Natively the mine's or
+    barrier's `filed` is false and a mine's section -1.
 
 ### Native
 
 - **`RaceSession::carry_across_seam`:** projectiles, TNT and storm clouds cross the seam through
   `wrap()` or `unwrap()`. Their direction is turned too, and a storm's waypoint is moved.
-  - The detection is **provisional**, the far robots' rule: no route under the object, but a route
-    through the transform, from the last section or from section 0.
-  - The original's portal test (`0x4a1a20`) is not ported.
+  - The detection is the original's portal test (`0x4a1a20`, ported 2026-11-15, `RaceTrack::portal_test`):
+    the position in the WPortal's frame (inverse `0x403c74`) with |x| <= `m_rWidth` (`+0x122`) and
+    0 <= z <= `m_rLength` (`+0x12a`) for the exit (`+0x50`, 1), -`m_rLength` <= z <= 0 for the entry
+    (`+0x48`, -1). The members are registered at `0x49aaf5`/`0x49ab55`/`0x49abb5` (`m_rWidth`,
+    `m_rLength`, `m_rHeight` at `+0x11e`, `+0x126`, `+0x12e`, values 4 bytes on), the archive properties
+    `0x1e2`, `0x1e3`, `0x1e4`; `m_rHeight` is not tested (cc_t1's last exit has 1 there). The rows' `+0x48`
+    and `+0x50` are the routes' entry and exit on all 20 courses. From the last section past its exit the
+    object wraps into section 0, from section 0 past its entry back into the last. (Before: the far
+    robots' rule, no route under the object but one through the transform.) A first try read the length
+    from `0x1e4` and lost the missile and paint shot on cc_t1 and sh_t4: 1 unit deep, stepped over.
 - **`RaceView::effects`:**
   - Weapons are drawn by their section's group: projectiles, TNT, the storm (its billboard anchor is
     moved, then faced), mines, oil, hives, detour signs, trees and walls.

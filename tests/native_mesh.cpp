@@ -1,3 +1,4 @@
+#include <cmath>
 #include "game_mesh.h"
 #include "game_material.h"
 
@@ -68,12 +69,27 @@ void test_mesh() {
     require(mesh.vertex_colors==false,"dropped VCOL flagged");
     // 0x4b21ae: TRAN t scales VCOL and becomes the alpha; white without VCOL.
     const float vc[3]={0.5f,1,0.25f};
+    // The channels are ftol(k x VCOL x 255): 127.5 -> 127, 63.75 -> 63.
+    const auto byte=[](float c){return int(c*255.f+0.5f);};
     auto tc=wpc::textured_vertex_color(0,vc);
-    require(tc[0]==0.5f && tc[1]==1 && tc[2]==0.25f && tc[3]==1,"opaque VCOL colour");
+    require(byte(tc[0])==127 && byte(tc[1])==255 && byte(tc[2])==63 && tc[3]==1,"opaque VCOL colour, truncated");
     tc=wpc::textured_vertex_color(0.2f,vc);
-    require(tc[0]==0.1f && tc[1]==0.2f && tc[3]==0.2f,"TRAN scales VCOL and sets alpha");
+    require(byte(tc[0])==25 && byte(tc[1])==51 && byte(tc[3])==51,"TRAN scales VCOL and sets alpha");
     tc=wpc::textured_vertex_color(0.2f,nullptr);
-    require(tc[0]==1 && tc[2]==1 && tc[3]==0.2f,"TRAN without VCOL: white, alpha TRAN");
+    require(tc[0]==1 && tc[2]==1 && std::abs(tc[3]-0.2f)<1e-6f,"TRAN without VCOL: white, alpha TRAN");
+    // 0x4b2297..0x4b22be: ORed, not clamped. Blue 2 (510 = 0x1fe) keeps 0xfe
+    // and spills 1 into green; a negative red sets every bit above it.
+    const float over[3]={0,0,2};
+    tc=wpc::textured_vertex_color(0,over);
+    require(byte(tc[0])==0 && byte(tc[1])==1 && byte(tc[2])==0xfe,"an out-of-range channel spills into the next");
+    // Red -1 at TRAN 0.5: ftol(-127.5) = -127 = 0xffffff81 (truncated toward
+    // zero), so red 0x81 and every alpha bit set.
+    const float negative[3]={-1,0,0};
+    tc=wpc::textured_vertex_color(0.5f,negative);
+    require(byte(tc[0])==0x81 && byte(tc[3])==255,"a negative channel sets the bits above it");
+    const float zero[3]={0,0,0};
+    tc=wpc::textured_vertex_color(0.5f,zero);
+    require(tc[3]==0,"an all-zero colour gets alpha 0 (0x4b22a7)");
     rejected([&]{wpc::load_mesh(archive(truncated),"GMDL",1);},"truncated VCOL accepted");
     // 0x437040 rewrites each segment's TSETs in the same descending pass that
     // fills its HMTS span, so segment 1 cannot see slot 0 (filled later).

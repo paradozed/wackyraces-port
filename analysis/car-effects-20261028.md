@@ -337,7 +337,7 @@ Not compared with Wine.
 - s = |speed|; above 0.2, s × |n · m̂|, where m is the last update's motion (`+0x40b` − `+0x423`). s is at most 0.5.
 - A force n × (25 + 270 s), its up part made positive, goes into a `+0x48b` slot (`0x4726c0`, 25 slots of 0x28 bytes, flags 1, decay 0.4).
 - `0x4727b0` adds the force to the update's motion; `0x472890` scales it by 0.4 and drops it once its squared length is below 2.
-- The speed becomes 0. A running item effect 8 is cancelled.
+- The speed becomes 0. A running item effect 8 is cancelled (natively only since 2026-11-13, `RaceSession::end_turbo`, which also ends a running start boost: `analysis/start-boost-20261113.md`).
 
 **In the air:** speed × 0.8, and the hit object gets flag 1.
 
@@ -452,7 +452,10 @@ Every WackyAuto runs WCarFx.
 - `RaceSession::snowing()` reflects the course choice.
 - `RaceView::weather` draws after the scene, before the HUD: rain as about-1-pixel strips, snow as plain white squares (since 2026-11-09; before, discs on a native 16 × 16 texture).
 - **The flake texture (2026-11-09).** `0x4b6840` reads renderer `+0x23969`; no instruction writes that field (renderer 1 is the zeroed global `0x26fae78`; the nearby queue at `+0x2396d` is a separate array), so it stays null and `0x4b6888` calls SetTexture(0, NULL), then FOGENABLE 0 (`0x1c`), ALPHABLENDENABLE 1 (`0x1b`), SRCBLEND 5, DESTBLEND 6. The FVF `0x102` (XYZ, TEX1) has no diffuse colour, so each flake is a white square. A native capture (`ct_t1`, `WPC_WEATHER=1`) shows small white squares falling. Not compared with Wine.
-- It steps once per race update, with its own MSVC generator.
+- It steps once per race update (the original redraws it every frame). Its draws (`0x430fc0`, `0x431010` ->
+  `0x430f30` -> `0x430ef0`) come from the second stream `0x5472c4`, not the race stream; since 2026-11-15 the
+  port draws them from the session's `view_random()`, shared with the car effects, WFire and the bees (it had
+  its own generator before).
 - `WPC_WEATHER=0/1/2` forces METEO.
 - Xvfb captures show the slanted grey streaks on cc_t1 and small flakes on ct_t1.
 - Not compared with Wine. The lighting changes while it rains (`0x4ae364`, `0x4b08b1`, `0x4b4327`) are not ported.
@@ -565,3 +568,13 @@ The differences match the original's quantisation to its 16-bit formats.
 - **Not settled:** what renderer 2 shows on a real Direct3D device. That needs the original on a
   machine where it picks Direct3D. The port's provisional lift of 5 stays.
 
+
+## Renderer 2 under Wine (2026-11-13)
+
+- The registry's `Prefs` record (`HKLM\Software\Wow6432Node\Infogrames\Wacky Races\1.00.000`) starts with
+  the renderer, dword 1 here, then the device name (`NVIDIA GeForce RTX 4070`), as `wpcsetup.exe` writes it.
+- In a scratch copy of the prefix, with that dword set to 2, the original reads `0x6f5958` = 2 at the legal
+  screen, then dies before the menu (`Unhandled page fault on read access to 00000000 at address 00000000`),
+  under `ddraw=b` on Xvfb with software GL. The registry copy was restored afterwards.
+- So the Direct3D skid marks still cannot be seen under Wine. Not tried: letting `wpcsetup.exe` pick the
+  device, or another ddraw.

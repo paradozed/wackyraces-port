@@ -72,6 +72,12 @@ RaceTrack::RaceTrack(const Archive& course,const Scene& scene,bool battle) {
         {const auto& lo=route.rows[0].vectors[2];const auto& hi=route.rows[0].vectors[3];
          section.box[0]=lo[0];section.box[1]=lo[2];section.box[2]=hi[0];section.box[3]=hi[2];}
         section.exit=position(unwrapped_scene_transform(scene.root(),route.object_ids[1]));
+        for(size_t k=0;k<2;++k) {
+            const Node& portal=scene.find(route.object_ids[k]);
+            section.portal_inverse[k]=inverse_affine_matrix(unwrapped_scene_transform(scene.root(),portal.id));
+            section.portal_width[k]=portal.real(0x1e2);section.portal_depth[k]=portal.real(0x1e3);  // m_rWidth +0x122, m_rLength +0x12a (0x49aaf5, 0x49ab55)
+            if(!(section.portal_width[k]>=0) || !(section.portal_depth[k]>=0) || section.portal_width[k]>1e6f || section.portal_depth[k]>1e6f) bad("implausible WPortal size");
+        }
         for(const ModeRow& row:route.rows) if(row.ground_object_id) {
             auto& s=bricks[row.ground_object_id];
             if(std::find(s.begin(),s.end(),int(sections_.size()))==s.end()) s.push_back(int(sections_.size()));
@@ -98,6 +104,7 @@ RaceTrack::RaceTrack(const Archive& course,const Scene& scene,bool battle) {
             if(sign.type<0 || sign.type>4 || !(sign.radius>0)) continue;
             section.signs.push_back(sign);
         }
+        for(const ModeRow& row:route.rows) section.row_objects.insert(section.row_objects.end(),row.object_ids4e8.begin(),row.object_ids4e8.end());
         sections_.push_back(std::move(section));
         bounds.push_back({route.rows[0].vectors[2],route.rows[0].vectors[3]});
     }
@@ -186,6 +193,8 @@ RaceTrack::RaceTrack(const Archive& course,const Scene& scene,bool battle) {
         linked=outer;drawn=outer_drawn;
     };
     collect(scene.root(),0);
+    for(Section& s:sections_) for(uint32_t id:s.row_objects)
+        for(size_t k=0;k<power_ups_.size();++k) if(power_ups_[k].node==id) {s.power_up_list.push_back(int(k));break;}
     objects_.load(scene);
     objects_.load_log_meshes(course,scene);
     objects_.link([this](uint32_t id) {const auto i=links_.find(id);return i==links_.end()?std::vector<int>{}:i->second;});
@@ -479,6 +488,17 @@ void RaceTrack::build_field(Section& s,size_t index,const Vec3& low,const Vec3& 
         // fraction for it instead of failing the race.
         s.distance.clear();s.width=s.height=0;
     }
+}
+int RaceTrack::portal_test(int section,const Vec3& p) const {
+    if(section<0 || size_t(section)>=sections_.size()) return 0;
+    const Section& s=sections_[size_t(section)];
+    // The exit portal first (0x4a1a3e, +0x50), then the entry (0x4a1b04, +0x48).
+    for(const size_t k:{size_t(1),size_t(0)}) {
+        const Vec3 l=transform_point(s.portal_inverse[k],p);
+        const float w=s.portal_width[k],d=s.portal_depth[k];
+        if(-w<=l[0] && l[0]<=w && -d<=l[2] && l[2]<=d && (k==1?l[2]>=0:l[2]<=0)) return k==1?1:-1;
+    }
+    return 0;
 }
 long RaceTrack::cell(const Section& s,const Vec3& p) const {
     if(s.distance.empty()) return -1;

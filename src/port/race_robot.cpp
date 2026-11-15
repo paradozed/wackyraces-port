@@ -213,11 +213,28 @@ bool RoboDriver::avoid(const RaceTrack& track,const RoboCarState& car) {
     // with the distance in 1/4096 units, under 120, gets an aim beside it:
     // to the side with room (the edges more than 300 from us and 700 from
     // it), at its position plus min(room / 700, 1.3) x its +0x345 or +0x351.
-    if(!(car.speed>0.07f)) return avoiding_=false;
+    // 0x4e699a: not in a battle (app +0x1a60 = 1, ebx = 1 from 0x4e68ce).
+    if(car.battle || !(car.speed>0.07f)) return avoiding_=false;
     const Vec3& p=car.position;const Vec3& f=car.forward;
     float best=120;int side=0;uint32_t mask=follow_mask_;
-    const int my_step=moved(car.position,car.previous),k=car.progress>=20000?15:5;
-    RoadEdges mine;bool mine_known=false;
+    const int k=car.progress>=20000?15:5;
+    AvoidCache local;AvoidCache& cache=car.cache?*car.cache:local;
+    // The step and edges of a car, from the cache or filled from it as it is now.
+    const auto step_of=[&](int slot,const Vec3& at,const Vec3& before) {
+        int& s=cache.step[size_t(slot&7)];
+        if(s<0) s=moved(at,before);
+        return s;
+    };
+    const auto edges_of=[&](int slot,const RaceTrack::Route& m,const RaceTrack::Route& n,const Vec3& at) {
+        const size_t i=size_t(slot&7);
+        if(cache.edges[i]==-1) {
+            cache.road[i]=road_edges(track,m,n);
+            cache.edges[i]=cache.road[i].hit?1:-2;
+            if(cache.road[i].hit) {cache.left[i]=cache.road[i].left_distance(at);cache.right[i]=cache.road[i].right_distance(at);}
+        }
+        return i;
+    };
+    int my_step=-1;
     for(int i=0;i<car.other_count;++i) {
         const OtherCar& o=car.others[size_t(i)];
         const uint32_t bit=1u<<o.slot;
@@ -233,20 +250,22 @@ bool RoboDriver::avoid(const RaceTrack& track,const RoboCarState& car) {
             const float r=wrap(heading(f)-std::atan2(dz,dx));
             if(r< -2.0943952f || r>2.0943952f) continue;
         } else if(dz*f[2]+dx*f[0]<0) continue;
-        const int its_step=moved(o.position,o.previous);
+        if(my_step<0) my_step=step_of(car.slot,car.position,car.previous); // 0x4e6c76
+        const int its_step=step_of(o.slot,o.position,o.previous);            // 0x4e6db0
         if(float(its_step-k)>float(my_step)) continue;
         mask|=bit;
         const float t=octagonal(dz,dx)/float(my_step-its_step+k);
         if(!(t<best)) continue;
-        const RoadEdges its=road_edges(track,o.module,o.next);
-        if(!its.hit) continue;
-        if(!mine_known) {mine=road_edges(track,module_,next_);mine_known=true;}
-        if(!mine.hit) continue;
+        const size_t oi=edges_of(o.slot,o.module,o.next,o.position);          // 0x4e6fba
+        if(cache.edges[oi]!=1) continue;
+        const size_t mi=edges_of(car.slot,module_,next_,p);
+        if(cache.edges[mi]!=1) continue;
+        const RoadEdges& its=cache.road[oi];const RoadEdges& mine=cache.road[mi];
         // Only while driving along our left side.
         const float ex=mine.left_dir[0],ez=mine.left_dir[2];
         if(ex*f[0]+ez*f[2]<0) continue;
-        const int my_left=mine.left_distance(p),my_right=mine.right_distance(p);
-        const int its_left=its.left_distance(o.position),its_right=its.right_distance(o.position);
+        const int my_left=cache.left[mi],my_right=cache.right[mi];
+        const int its_left=cache.left[oi],its_right=cache.right[oi];
         if(my_left<301 || its_left<701 || (its_left<my_left && my_right>699 && avoid_side_!=-1)) {
             if(my_right>300 && its_right>700 && (my_right<=its_right || my_left<700 || avoid_side_==1)) {
                 const float r=std::min(float(its_right)*0.0014285714f,1.3f);

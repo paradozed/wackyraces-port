@@ -163,6 +163,169 @@ natively. Both runs start from the grid after 25 s idle.
   - so the original's lap 3 is **1559 frames**, against its lap 2 (2029) and the port's lap 3 at the
     same decision rate (2013);
   - every stretch of lap 3 is quicker than lap 2's: waypoint 102 → 223 in 27 s against 36 s. There is
-    no shortcut in its path. Not explained: a pickup (the driver uses no items, but picks them up),
-    the opponents, or a rule for human cars on the last lap. Open.
+    no shortcut in its path.
+  - Per frame on the same waypoint stretches (laps 2 / 3, in units a frame): 0–40 55.1 / 55.5, 40–80
+    62.4 / 70.8, 80–120 70.6 / 104.4, 120–160 95.8 / 78.0, 160–200 47.5 / 124.6.
+    - Lap 2 lost time at 160–200 (459 frames against 171): held up there.
+    - Lap 3's 124.6 a frame is above the 110–120 measured at top speed, so something sped the car
+      (a boost, or a push).
+  - So neither of the original's laps is a clean match: lap 2 has a hold-up, and lap 3 a faster stretch.
+    The port's laps at the same decision rate (2046, 2013) lie between them.
+- **The fast stretch, found in a repeat run** (2026-11-13; the player's `+0x3ef`, `+0x385` and `+0x19f`
+  polled every 10 ms):
+  - the player's effect `+0x385` becomes 8, TurboSpeed, at 198.48 s on lap 3, at (21943, −42581);
+  - the speed climbs to 1.276, against the Dingo's top of 0.58, until the effect ends at 200.94 s;
+  - this run's crossings came at frames 296, 2009 and 3730.
+- **The driver never presses the gadget key.** The saved MenuPrefs (`system.reg`, record 0x178) bind
+  player 1 to the defaults: the arrows for accelerate, brake, left and right (actions
+  `0x40000`/`0x80000`/`0x10000`/`0x20000`), Return, `.`, `/` (the gadget, `0x800000`) and right Shift.
+- **The spot** is the refill pickup power-up 564, which the port's player also takes on every lap at
+  (22064, −43263). The original's refill branch (`0x46ab42..0x46ab58`) only empties the slots
+  (`+0x39f`, `+0x3a0`, `+0x371`, `+0x375`).
+- **The port's player never gets effect 8** on the same drive (effects logged).
+- **Open:** what starts the player's TurboSpeed in the original without the key. The TurboSpeed action
+  writes `+0x385` = 8 at `0x4d6d4d` and `0x4d7302`; their callers and conditions are not traced.
+  (The port's charge of 4 in that log is the moment between the pickup's increment and the item
+  update, which caps it at 3, as the original's `0x46809f` does; not a difference.)
 
+
+## The TurboSpeed explained: the race ends once every robot has finished (2026-11-13)
+
+- **The repeat run's log** (`+0x385`, `+0x371`, `+0x375`, `+0x399`, `[car+0x18]+0xc0` polled every 10 ms):
+  the player's controller flag `[+0x18]+0xc0` becomes **2 at 193.32 s**, mid-lap 3 at (21203, 1178), before
+  the TurboSpeed (198.48 s) and long before the player's own last crossing (211.61 s). With the flag at 2
+  the car is robot-driven: the robot item code used the player's slots, which is the TurboSpeed seen
+  without a key press.
+- **What sets the flag:** the race state handler `0x4a2dbd` calls the lap pass `0x4015be` and the rank
+  update `0x405b91` = `0x4a8a10`. If the lap pass returns more than 0 or the rank update returns non-zero,
+  state `+0xf30` = 4 and `0x403bd4` = `0x49eb20` writes 2 into the player car's `[+0x18]+0xc0`
+  (`0x4a2df8`; `0x49eb20` also sets bit 2 of the car's `+0x1c3` object).
+- **The rank update `0x4a8a10`:** it sorts the cars by progress `+0x1a7` into `+0x7f0` and writes the ranks
+  `+0x1af`; then (`0x4a8b2f..0x4a8b61`) it counts the cars in the list at `+0x60` (stride 0xc, count
+  `+0x40`) whose lap `+0x19f` is above the lap count (app `+0x1a70`), and returns 1 when all are, with a
+  non-empty list.
+- **The list:** filled at `0x49d6ec..0x49d752` from the car table `0x6f2ce0`, skipping empty slots and the
+  player (`[+0x38]`), up to the robot count (`[edi+0x8c]`); the cars beyond it are parked (flag 0x100,
+  `0x49d757`). So it holds the robots. In two players `0x49d949` and `0x49d977` set other counts; the
+  port's two-player race has no robots (its rule needs a non-empty list).
+- **Native:** `RaceSession::check_lap` (the lap count) ends the race when the last robot finishes in a
+  single-player race with robots: phase Finished and `finish()`, as when the player finishes. The player
+  is then last in the standings (finished robots rank ahead by their finishing update).
+- **Checks:** `native_drive_test` on the 20 courses all pass (2026-11-13). Before the test was adjusted,
+  `dt_t4` and `sh_t2` failed: every robot finished before the test driver (on its laps 3 and 2), which
+  is the control showing the rule acts; the test now accepts that end when every robot has 3 laps and
+  the player is 7th. The 18 other courses are unchanged (the test driver finishes first in the race of
+  its own laps).
+- **The player's autopilot after the end (provisional, 2026-11-13).** With `[+0x18]+0xc0` non-zero the speed
+  update takes the robot branch on the throttle byte `+0x2ac` (`0x466e0b`), and the steering copies `+0x2ad`
+  (`0x467886`). Only WCtrlRoboCar code (`0x4e5332..0x4e7d28`) writes those two fields, so a robot
+  controller drives the player's car; which object that is for the player was not traced. In the Wine run
+  the car drove on to its crossing at 211.61 s and kept lapping (wraps every ~1000 frames): its lap count
+  presumably stays below the finish (inferred: the lap pass `0x4015be` is called from the state-3 handler
+  `0x4a2dbd`, not traced in state 4), so the finished robots' brake
+  never applies to it.
+  - **The controller, found under Wine** (2026-11-13, `cc_t1` race, memory census): the seven WackyAuto
+    objects (vtable `0x51295c`) and seven WCtrlRoboCar objects (vtable `0x516ae4`, constructor `0x4e4320`,
+    made by the class factory at `0x4e3a35`). Each car's `+0x1c3` points at its own WCtrlRoboCar, the player's
+    car included:
+    ```
+    car 4532a44 ctl 0440abc4 vt 005129a0 flag 00000000 1c3 045342a4   (the player)
+    car 451c154 ctl 0440197c vt 005129a0 flag 00000001 1c3 0451d9b4   (a robot; five more alike)
+    robo 45342a4 car(+0x24) 00000000                                  (the player's, not yet attached)
+    robo 451d9b4 car(+0x24) 0451c154
+    ```
+    The race setup sets bit 2 of each robot's `+0x1c3` object `+0xc` (`0x49d73d`); `0x49eb20` sets it on the
+    player's when it writes 2 (`0x49eb47`). So the autopilot is the player car's own WCtrlRoboCar, enabled at
+    the end. Not traced: where its `+0x24` gets the car (0 during the race).
+  - **Its items:** WCtrlRoboCar writes 5 into the gadget state `+0x3a0` (TurboSpeed `0x4e5a2a`: the slot's item
+    `+0x371` is the TurboSpeed, top speed not boosted, wait `+0xb0` 0, not battle) or the weapon state `+0x39f`
+    (`0x4e5edb`/`0x4e5f33`: item `+0x375` set, charge ≥ 1, no running weapon `+0x36d`, gadget state not 5).
+    The car's item update takes state 5 for any controller: charge − 1, the item's action, state 4 (`0x467c9c`,
+    `0x46803b`). That is the TurboSpeed of the Wine run.
+    - Native: `human_items` has state 5 for both slots, and `autopilot_items()` makes the robot decisions on
+      the player's slots while the autopilot drives (before the item update, as `robot_items` does). The gates
+      use the slot's state 3 and a charge above 0 for "the slot holds an item" (the original tests the item
+      field; provisional). On `dt_t4` the autopilot fired weapon 14 within 300 updates of the end; with the init's item wait (below) it
+      fires none in those 300 updates (all 20 courses pass, 2026-11-13; after the init `sh_t2` drives 13709 units
+      with one respawn, `dt_t4` 19938).
+  - **Native:** `RaceSession::autopilot()` (phase Finished in a single race, not practice or two players):
+    `drive()` asks a `RoboDriver` (`autopilot_`, given the route forks as the robots are) for the control,
+    then runs `update_robot_speed` and `robot_steering` instead of the keys. A player who finished
+    (`body_.finished`, the lap count reached before the end) drives on too (see the Wine check below).
+  - **Its init** (2026-11-13): `0x4e45e0`, WCtrlRoboCar's vtable slot 4 (`0x516ae4` + 0x10, thunk `0x40535d`; no
+    direct caller). It writes the controller's `+0x8c`/`+0x94`/`+0x9c`/`+0xac`, attaches the car (`+0x24` =
+    `+0x10`), doubles the car's gravity `+0x98`, and in a single race or championship (app `+0x1a60` 0 or 3) with
+    the manager in state 4..7 (the race has ended, `0x4e468c..0x4e46a4`) sets `+0x30` = 0, row `+0x10` × 1.0
+    (`0x52e66c`), m_rDirModifier 0.25 (`0x52e62c`) and the item wait `+0xb0` = 100 + rand() % 100. It then compares
+    `+0x24` with the player's car (`0x4e4704`). So the end-of-race branch is the player's controller's init.
+    That the init runs when `0x49eb20` enables the controller is inferred (the player's `+0x24` is 0 during the race).
+    - Native: `start_autopilot()` right after the end: `tuning_.gravity` × 2, the autopilot's dir modifier 0.25,
+      its item wait 100 + rand() % 100.
+  - **Not ported:** the rank scaling (`0x4e4f6b`) on the player's car.
+  - **Check:** `native_drive_test` copies the ended race and runs 300 more updates: on `dt_t4` the car
+    drives 22619 units (one seam jump), on `sh_t2` 11143 (two respawns: the autopilot sticks at the same
+    spot near (42700, 92500) as the test driver did, which made it last). Control: with `autopilot()` forced
+    false the `dt_t4` car coasts 2052 units to speed 0 and the check fails. Not compared with Wine.
+  - Two `dt_t1` checks parked the player while the robots raced 3 laps; the race now ends there, so the idle and
+    hidden-robot loops stop at the end and the tram loop keeps the car parked. All 20 courses pass (2026-11-13).
+
+## Finished cars drive on; the init confirmed (Wine, 2026-11-13)
+
+Two runs on `cc_t1` with the memory reader. In the first, the player's lap `+0x19f` was set to 3 at the grid;
+in the second, every car's was. Then Up was held for 15 s, so the first crossing finished the race.
+- **The player's WCtrlRoboCar** (`+0x1c3`) before and after the end:
+  ```
+  start:   robo+24 00000000 +30 0 +b0 9400ffff +b4 3f800000 | ctl+c0 0 ctl+98 3d4ccccd | lap 0 | mgr f30 3
+  after15: robo+24 04532a44 +30 0 +b0 00000000 +b4 3f800000 | ctl+c0 2 ctl+98 3dcccccd | lap 4 speed 0.584 | mgr f30 5
+  ```
+  The init `0x4e45e0` ran: the car is attached (`+0x24`) and its gravity `+0x98` went from 0.05 to 0.1. The
+  player's `+0xb4` is 1.0, against a robot's 1.234 (`3f9df01a`), so a rank boost would leave its top speed.
+- **Every car keeps driving after its finish.** 15, 25 and 40 s after the end, the robots at lap 4 run at 0.56
+  (`3f0f5c29`) in the far (`+0x2b1` = 0x1000) or near (2) mode, and their positions move by thousands of
+  units. The player's car (lap 4, `+0xc0` = 2) runs at 0.43–0.58. No lap count changed in those 40 s.
+- **The stop state** `+0x2b1` = 0x10000000, which brakes a robot to a stop (`0x4e532b..0x4e5389`, then
+  0x20000000 at `0x4e5396`), is written only by the manager's battle and time-limit ends (`0x4a317e`,
+  `0x4a3188`, `0x4a31d5`, `0x4a31df`). Nothing writes it when a car finishes.
+- **Native, before:** a finished robot braked to a stop and parked past the line (`robocar-ai-20261028.md`
+  called this "states 0x10000000/0x20000000"), and the far mode skipped finished robots. **Now:** a body flag
+  `stopped` (set only by the battle's end) brakes; finished robots and the autopilot drive on, far or near. A
+  finished car counts no more laps (provisional: no lap change was seen within the 40 s).
+- **Rank scaling and items after the finish** (static, 2026-11-13): WCtrlRoboCar's update `0x4e4f10` runs the
+  rank scaling (`0x4e4f52..`, single races and championships) and, in the near mode, the item code (`0x4e53d4`
+  → `0x4e5931`) with no lap or finish test. Only the stop states return first (0x10000000 `0x4e532b`,
+  0x20000000 `0x4e53a8`). The port's `!b.finished` guards on `scale_by_rank` and `robot_items` are removed
+  (the item guard is now `!b.stopped`). The autopilot gets the same scaling (`autopilot_scale()`). Its `+0xb4`
+  is 1.0, so a boost scales only row[4] (× 0.3) and sets the dir modifier to 0.4. Leaving the boost restores
+  them and 0.25. The init clears `+0x30` (not boosted).
+- **Checks:** all 20 courses pass `native_drive_test` (2026-11-13). `dr_t3` now also ends by the robots (the test
+  driver on lap 3, 7th; before it finished 6th): with finished robots no longer parked, the last robot is no
+  longer held up past the line. After the end the autopilot drives 23351 units in 300 updates on `dt_t4`, 8982
+  on `sh_t2` and 17032 on `dr_t3`.
+  - Checks: all 20 courses pass (2026-11-13). After the end the autopilot drives 20493 units in 300 updates on
+    `dr_t3`, 23351 on `dt_t4` and 11531 on `sh_t2` (still two respawns at the pocket).
+
+## The autopilot against Wine (`sh_t1`, 2026-11-13)
+
+- **Setup, both builds:** player 1's lap set to its last (Wine: `+0x19f` = 3 at the grid; native:
+  `debug_last_lap()`), Up held from the start until the finish, then nothing. Wine logged the player's
+  position, lap, speed and `[+0x18]+0xc0` every 10 ms for 75 s (`ap_watch.log`). Native ran a scratch harness
+  linked against the port's objects, printing every 60 updates.
+- **The finish:** both at (−16808, −1457), native after 84 updates.
+- **Wine after the finish:** about 0.56–0.58 all along the route: (−6448, −1475) at 4 s, (−267, −5707) at 8 s,
+  (−2729, 9286) at 14 s, (22020, 972) at 24 s. A TurboSpeed (1.27) on the straight south of (22374, −13021)
+  at 28 s, then a fall at (26371, −24601) and a return at (22599, −11240) at 32 s. The lap wraps at 49 s, and at
+  54 s the car sticks at (−6117, −3073) at the first hairpin, speed 0.164, for the 20 s left.
+- **Native, first run:** the same route, but the speed fell to 0.1 or reversed every few hundred updates; the
+  far hairpin came at about update 1020. The autopilot's stall counter (+0xa8: 100 updates with less than
+  50 units moved since `+0x173`) read the position at the start of this update, so it always counted. After
+  101 updates the unstick (30 back, 30 forward at ±5°) started. Fixed: `+0x173` is the last update's start, as
+  the robots pass it.
+- **Native, fixed:** 0.56–0.58 along the route, (22020, 972) at about update 650 (21.7 s; Wine's 24 s are
+  ~21.6 s of motion at its ~0.9 pace). It falls into the water past (23453, −30811) and returns near (22231, −16696).
+  It does not stick at the first hairpin on its second lap. Wine's car did, a matter of line, not checked further.
+- **Pickups after the end:** the Wine car took its TurboSpeed after the finish (it had no item at the
+  crossing), so the car update's pickup `0x46aad5` runs after the end. The port took pickups only while
+  racing; now in the Finished phase too. The native autopilot then takes power-ups and uses weapon 14,
+  MonsterTires and weapon 22 within 1800 updates.
+- Checks: all 20 courses pass (2026-11-13). After the end the autopilot drives 28759 units in 300 updates on
+  `dt_t4`, 22028 on `dr_t3` and 18034 on `sh_t2` (one respawn; before the stall fix 11531 with two).

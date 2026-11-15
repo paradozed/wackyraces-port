@@ -153,25 +153,39 @@ that WackyAutoBomba type (e.g. `0x80`) at that race update.
   [note](analysis/section-culling-20261107.md)), section culling
   (only the player's section and the two beside it are drawn, as the original's `0x4a8680` enables
   each row's brick and linked nodes; [note](analysis/section-culling-20261107.md)),
-  `m_nLapNum` laps, the PRET!/PARTEZ! countdown, the recovered WackyAuto
+  `m_nLapNum` laps, the PRET!/PARTEZ! countdown (with the original's rev, false start and GO boosts,
+  [start](analysis/start-boost-20261113.md)), the recovered WackyAuto
   speed/steering/motion equations, drowning in the deep river, the follow
   camera (`WFollowCamera_2` `0x478070`: spring, wall and ceiling rays, the
   Return view toggle, the '.' rear view, the near mode and the swing before
   the countdown; [camera](analysis/follow-camera-20261102.md)), viewport fog and backdrop, and the recovered one-player HUD: lap,
-  position (the WModManager route cursor, `0x4a3937`) and suffix, timer, speedometer, bend arrows, the power-up gauge and
+  position (the WModManager route cursor: the polygon's `+0x11` share, `0x4a3a10`) and suffix, timer, speedometer, bend arrows, the power-up gauge and
   the vehicle's gadget/weapon icons, and the racer progress strip
   ([HUD](analysis/native-hud-20261028.md)). Power-up pickups spin on the
   course; taking one adds a charge and runs the gadget or weapon roulette, and
   the MenuPrefs keys ('/' gadget, right Shift weapon by default; OPTIONS > JOUEUR 1 rebinds them) use it; the item effects are below
   ([power-ups](analysis/native-powerups-20261028.md)). Up/Down accelerate and brake/reverse, Left/Right steer, Escape
-  leaves the race, and Enter after the finish returns to the menu. Opponents
+  leaves the race, and Enter after the finish returns to the menu. The race
+  ends when the player finishes or, as the rank update `0x4a8a10` decides, once
+  every robot has finished (the player then places last). After the end a
+  robot driver takes the player's car, provisionally, as the original's
+  `+0xc0` = 2 does ([driven race](analysis/driven-race-20261112.md)). Opponents
   follow the recovered `WCtrlRoboCar` driver along the WGNR route layer
   ([RoboCar AI](analysis/robocar-ai-20261028.md)); they touch other cars, take
-  and use items, and away from the player slide along the route (laps within
-  about 5% of the original's on `cc_t1`); outside the player's previous, current and next
+  and use items, and away from the player slide along the route (each robot's lap ends
+  within 10 updates of the original's on `sh_t1`, counted in updates, [far-step laps](analysis/far-step-laps-20261114.md));
+  they drive straight for 20 updates after GO (`+0xb8`, [start](analysis/start-boost-20261113.md));
+  the race load reseeds the game's random stream with 0x1312d6e (`0x431fc3`), so the grid and the robots' draws
+  are the original's every time (the stream's other consumers after GO, the robot init, the goals and the engine
+  jitter, are drawn in the original's order, and so are the countdown's 80 draws, the course creatures' (`Kosza`), [race stream](analysis/race-stream-20261114.md));
+  every car moves along the last update's heading and turns after (`0x46ba57`), and the robots update in their
+  `general.wgm` template order (4, 0, 6, 5, 1, 2), each car update before its controller, so their first
+  decisions on `sh_t1` equal the original's; outside the player's previous, current and next
   sections they are hidden and run on along the route rows until they show again at a
   section's entry portal (`0x4a1c8b`, dt_t1), or at the start line model right after a lap counted in section 0 (`0x4a2108`), and steer round the car ahead to the side with room (`0x4e69bd`, road
-  edges `0x468890`; [avoidance](analysis/robot-avoidance-20261030.md)). The turbo (gadget 8) and the shield (gadget 10) work. The missile, breath, tank gun and boomerang fire guided projectiles, the TNT
+  edges `0x468890`; [avoidance](analysis/robot-avoidance-20261030.md); the steps and edges it reads are per-car caches
+  cleared at the end of each car's turn, so a robot's own step is its last update's move, and on `cc_t1` and
+  `sh_t1` the near robots follow the original's lines within 10 units for 150..240 updates). The race stream's consumers follow the original's order (the cars in their template order with the player at its vehicle's place, the course objects before the cars, each car's item slots after its controller), and with the player idle the robots' lap times are within 1.4% of Wine's on `cc_t1`, `sh_t1` and `ct_t1`, and within 7.6% on `dt_t1` (where the near robots' float arithmetic drifts from the original's x87 near a goal from update 53) ([far-step laps](analysis/far-step-laps-20261114.md), [race stream](analysis/race-stream-20261114.md)). The turbo (gadget 8) and the shield (gadget 10) work. The missile, breath, tank gun and boomerang fire guided projectiles, the TNT
   bounces towards a target, the storm cloud strikes cars along the route, the
   detour sign turns a car round, and the landmine (icon 19) drops behind the
   car and arms after 15 updates. Holding look-back while using a weapon fires it backward, as the
@@ -196,8 +210,8 @@ that WackyAutoBomba type (e.g. `0x80`) at that race update.
   section whose WMOD row links it)
   ([trams](analysis/trams-20261030.md)). On `cc_t2` the bascule bridge (`WMisty`) opens and shuts
   at its sensors, carries cars and redirects the robots
-  ([bridge](analysis/misty-bridge-20261106.md)). `WGeyser`, `WFountain` (`dt_t2`), `WLogRollingB` (`sh_t2`, player cars only) and
-  `WDynamiteHole` (`dr_t1`) are ported too, as are `WRolling` and `WChiselCrossover` with `WBlowUp` (`cc_t4`, `ct_t2`, `dr_t4`; [note](analysis/rolling-chisel-blowup-20261106.md), `cc_t4` compared with Wine), `WLogJam` (`sh_t3`, [note](analysis/log-jam-20261106.md), compared with Wine in memory and on screen), and `WRotoHill`, `WBumSteer`, `WMagnet`, `WVolcano` and course `WRot` (`dr_t2`, `dr_t3`, [note](analysis/roto-magnet-volcano-20261106.md)), and `WSaw`, `WJunkyard`, `WConstructionSite`, `WShiftedRoad` and `WGoldenGate` (`sh_t2`, `dr_t3`, `sh_t4`, [note](analysis/saw-crane-gate-road-20261107.md)), and `WDicksTrick2` (`cc_t3`) and `UVScroll` ([note](analysis/dickstrick-uvscroll-rooms-20261107.md)); the fountain and the log were compared with Wine
+  ([bridge](analysis/misty-bridge-20261106.md)). `WGeyser`, `WFountain` (`dt_t2`; far robots it catches are turned back to their frozen yaw and circle it for good, as under Wine, [note](analysis/lap-line-geyser-20261106.md)), `WLogRollingB` (`sh_t2`, player cars only) and
+  `WDynamiteHole` (`dr_t1`) are ported too, as are `WRolling` and `WChiselCrossover` with `WBlowUp` (`cc_t4`, `ct_t2`, `dr_t4`; [note](analysis/rolling-chisel-blowup-20261106.md), `cc_t4` compared with Wine), `WLogJam` (`sh_t3`, [note](analysis/log-jam-20261106.md), compared with Wine in memory and on screen), and `WRotoHill`, `WBumSteer`, `WMagnet`, `WVolcano` and course `WRot` (`dr_t2`, `dr_t3`, [note](analysis/roto-magnet-volcano-20261106.md)), and `WSaw`, `WJunkyard`, `WConstructionSite`, `WShiftedRoad` and `WGoldenGate` (`sh_t2`, `dr_t3`, `sh_t4`, [note](analysis/saw-crane-gate-road-20261107.md)), and `WDicksTrick2` (`cc_t3`) and `UVScroll` ([note](analysis/dickstrick-uvscroll-rooms-20261107.md)), and the `Kosza` creatures (birds and walkers: states, random draws, flight curves and paths, frames, clips and the car squash; sh_t1 and cc_t1 compared with Wine, [race stream](analysis/race-stream-20261114.md), [motion](analysis/kosza-motion-20261114.md)); the fountain and the log were compared with Wine
   ([notes](analysis/lap-line-geyser-20261106.md)). Escape opens the original in-race pause menu
   (general.wgm's `WMenuBrick`) over the race, dimmed by the renderer's closing wipe in one-player races: resume, volumes, restart and
   quit with its confirmation ([pause](analysis/pause-menu-20261030.md)). Race audio covers every car's engine and skid loop,
@@ -261,7 +275,7 @@ pixel parity are unverified. See
 Specialized node lifecycle
 callbacks other than demos, replays, credits and the keyboard controls page,
 multiplayer readiness, joysticks in the menus, complete race-world
-rendering, the rest of the wall/contact response and the item effects, the championship results and progression remain to be ported. Recovered routines elsewhere
+rendering, the rest of the wall/contact response and the item effects remain to be ported. Recovered routines elsewhere
 in `src/` and legacy native stubs do not imply those systems execute in this
 build. The port is not a complete or playable game.
 Race rendering uses the shared follow camera's projection and the ported

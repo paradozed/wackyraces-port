@@ -269,7 +269,8 @@ struct Landmine {
     int life=300;   // +0x38, counted down every update
     int lifetime=300; // m_nLifeTime, for the unlock test
     int owner=-1;   // +0x28: the car that dropped it (-1 the player)
-    int section=0;  // the object's +0x104: its slot row's (0x4a6d20), else the dropper's
+    int section=0;  // the object's +0x104: its slot row's (0x4a6d20), -1 for none (0xffff)
+    bool filed=true; // a slot row held it; else the original's group is 0xffff (drawn always, unwrapped)
     uint16_t type=0x80;
     float gravity=50,trap=200;
     bool detour=false;
@@ -280,7 +281,12 @@ struct Landmine {
     // alternating sign is added each update to the car's steer (+0x2ad
     // robot, +0x403 player), clamped to +/-0.698, and its speed is capped at
     // m_rTargetSpeed (0.3).
-    bool hive=false;int victim=-2,trap_time=0;float kick=0;
+    // +0x68 before the first draw: nothing in the hive's code writes it, and
+    // under Wine (dt_t1, 2026-11-15, the object found by its vtable 0x5167e4)
+    // it held 6257.73584 from the drop to the first draw, so the steer sits
+    // at the clamp (+0.698) for the first updates and the first swing is
+    // negative. Provisional: the value is what the clone leaves there.
+    bool hive=false;int victim=-2,trap_time=0;float kick=6257.73584f;
     int scale_num=10,fade=0; // WPowerUpAction m_nScaleNum (+0x2c), the fade count (+0x3c)
     bool done=false;
 };

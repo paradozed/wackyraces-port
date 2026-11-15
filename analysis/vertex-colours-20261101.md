@@ -85,6 +85,14 @@ Earlier state (first pass, superseded):
 - `game_world` and `menu_models` multiply opaque textured materials by the clamped vertex colour.
 - Untextured materials keep COLS[1], and translucent ones keep 1 − TRAN. Both are unchanged and marked as not ported.
 - The clamp to 0..1 is provisional: how the backend packs out-of-range values is not traced.
+- **Packing (2026-11-15, ported).** `0x4b2297..0x4b22be` builds the diffuse as
+  `((a << 8 | r) << 8 | g) << 8 | b` with ORs of the `ftol` values: no mask, no clamp. A channel past 255
+  spills its high bits into the channel above (b into g, g into r, r into the alpha), a negative one sets
+  every bit above it, and `ftol` truncates toward zero (-0.5 gives 0). The values out of range on the
+  shipped data are not colours: ct_t1's GMDL 361 (on WGndModel 388 at (-21305, -788, 45666)) carries VCOL from
+  -3000 to 2997, GMDL 289 (ct_t1, +-2698) and dt_t1's 786 (-22957..5009) are not referenced by a node's model
+  link. `textured_vertex_color` packs and unpacks the same way (`ftol32`); `native_mesh_test` checks the
+  truncation, the spill, a negative channel and the zero colour's alpha. Not compared with Wine on screen.
 
 ## Verified
 

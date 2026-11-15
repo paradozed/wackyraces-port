@@ -43,7 +43,7 @@ void RaceAudio::setup(Car& car,int vehicle,const Scene& shared) {
     const Node& actor=shared.find(templates.vehicles.at(size_t(vehicle)).actor_id);
     for(const Node& child:actor.children) if(child.class_name=="GDSound") car.sounds.push_back(&child);
     car.min_pitch=actor.real(0xf6,1);car.max_pitch=actor.real(0xf7,1);car.pitch_rate=actor.real(0xf8,0);
-    car.pitch=car.min_pitch;car.random=7u+unsigned(vehicle);
+    car.pitch=car.min_pitch;
     // The engine voice is created at actor setup and loops for the race.
     if(!car.sounds.empty())
         if(const SharedPcm engine=sample(*car.sounds[0]))
@@ -75,10 +75,7 @@ void RaceAudio::update_car(Car& car,const RaceCar& state,float top,bool skidding
     if(car.engine) {
         const float speed=state.speed.speed;
         float ratio=std::abs(speed/top);
-        if(top-speed<0.15f) {
-            car.random=car.random*0x343fdu+0x269ec3u;
-            ratio+=float(int((car.random>>16)&0x7fff)%20-10)*0.03f;
-        }
+        ratio+=state.engine_jitter;   // the car update's race-stream draw (0x47058a), 0 without one
         const float target=(car.max_pitch-car.min_pitch)*ratio+car.min_pitch;
         car.pitch+=(target-car.pitch)*car.pitch_rate;
         audio_.mixer().set_pitch(car.engine,silent?0.05f:car.pitch);

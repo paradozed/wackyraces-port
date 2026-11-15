@@ -17,7 +17,7 @@ constexpr float fall_cap=100;
 // (0x512a3c) to +0x93b = 30 below (0x46610b) along the car's down axis.
 constexpr float ray_above=80,ray_below=30,probe_across=52;
 constexpr float step_height=150;  // 0x49eb70 spawn query height
-constexpr int drown_delay=45;     // Wine: splash then return after ~1.5 s
+constexpr int drown_delay=40;     // 0x4700ac: +0x8e7 = 0x28 (Wine 2026-11-14: 0x26 two updates after the landing); the earlier ~1.5 s was wall time at ~26.7 updates/s
 // WackyAuto PRIM GDPrimSphere radius (0x8d) on all seven vehicles, centred
 // on the car's origin; the cars are unscaled.
 constexpr float car_sphere=100;
@@ -78,6 +78,12 @@ RaceSession::RaceSession(const RaceTrack& track,int vehicle,uint32_t seed,int mo
     :track_(track),tuning_(vehicle_tuning(vehicle)),objects_(track.objects()),mode_(mode) {
     const bool two=vehicle2>=0 && vehicle2<7;
     const auto roster=two ? std::vector<Racer>{{vehicle,0,true},{vehicle2,3,false}} : race_roster(mode==3?0:mode,vehicle,seed);
+    // One stream (0x5472c8): the race load reseeds it with 0x1312d6e
+    // (0x431fc3), the grid shuffle takes the first six draws and each robot's
+    // +0xb4 the next six (0x49f51d), in grid order. Wine (sh_t1 and cc_t1,
+    // vehicle 3, 2026-11-14): the state reads 0x1312d6e at the load, and the
+    // six +0xb4 values are draws 7..12 of that stream.
+    random_=MsvcRandom(seed);fx_random_=MsvcRandom(seed);   // 0x430e20 seeds both
     grid_=place_race_grid(roster,track_.start_line(),[&](GroundPoint start,GroundPoint end,uint32_t) {
         GroundQueryResult result;
         const TrackSurface s=ground(start.x,start.z,start.y,end.y);
@@ -104,7 +110,7 @@ RaceSession::RaceSession(const RaceTrack& track,int vehicle,uint32_t seed,int mo
             Opponent o;o.vehicle=placed.racer.vehicle;o.tuning=vehicle_tuning(o.vehicle);
             o.human=two;
             if(!two) o.tuning.gravity*=2; // 0x4e45e0 doubles the robots' +0x98
-            o.car.vehicle=o.vehicle;o.car.position=p;o.car.yaw=yaw;o.previous=p;
+            o.car.vehicle=o.vehicle;o.car.position=p;o.car.yaw=yaw;o.angle_yaw=yaw;o.previous=p;
             opponents_.push_back(o);opponent_bodies_.push_back(Body{});
             opponent_bodies_.back().fx.set_track_width(CarEffects::track_width(o.vehicle));
         }
@@ -112,6 +118,10 @@ RaceSession::RaceSession(const RaceTrack& track,int vehicle,uint32_t seed,int mo
     // 0x49f51d: each robot's +0xb4 = 1 + c + rand() x 2^-15 x c / 4, with c
     // the course's 0x6f2cd4.
     for(Opponent& o:opponents_) o.rank_unit=random_.unit();
+    // The course's Kosza creatures start at the load, after these draws:
+    // Wine sh_t1's stream holds their 65 start draws (draws 13..77) before
+    // vehicle 6's weapon draw of the first update (78, 0x467cfa).
+    objects_.init_creatures(random_);
     set_course(0,0);
     body_.fx.set_track_width(CarEffects::track_width(vehicle));
     init_cameras();
@@ -132,7 +142,7 @@ float RaceSession::fraction(int car) const {
     const Body& b=car<0?body_:opponent_bodies_.at(size_t(car));
     if(car>=0 && b.hidden)
         return std::clamp(float(b.virtual_distance)/float(std::max(1,track_.row_length(c.section))),0.f,1.f);
-    // 0x4a3937: the distance left in the row is the cursor polygon's +0x17
+    // 0x4a3a10: the distance left in the row is the cursor polygon's +0x11
     // x the row length >> 8; the geodesic field stands in before the first
     // hit in this section.
     if(b.cursor>=0 && b.cursor_section==c.section) return 1-float(b.cursor)/256.f;
@@ -145,17 +155,44 @@ void RaceSession::set_course(int environment,int course) {
 float RaceSession::progress_length(int section) const {
     // The rows' route lengths (+0x34): the lap is their sum (0x4a3ba0, the
     // manager's +0xf38), and a car's distance in its row that row's length x
-    // its fraction (0x4a3937: the cursor polygon's +0x17 x the length >> 8).
+    // its fraction (0x4a3a10: the cursor polygon's +0x11 x the length >> 8).
     return float(track_.row_length(section));
 }
 int RaceSession::race_distance(int car) const {
     const RaceCar& c=car<0?player_:opponents_.at(size_t(car)).car;
+    // 0x4a3d66: before its first crossing (+0x19f <= 0) a car's +0x1a7 is
+    // count - index - 10000, its index in the rank table +0x7f0, which
+    // 0x49d806..0x49d841 fills from the highest slot down: the robots in
+    // reverse grid order, then player 2, then player 1 (last).
+    {
+        const Body& b=car<0?body_:opponent_bodies_.at(size_t(car));
+        if(!b.started) {
+            const int n=int(opponents_.size());
+            const int index=car<0?n:n-1-car;
+            return (n+1)-index-10000;
+        }
+    }
+    {
+        const Body& b=car<0?body_:opponent_bodies_.at(size_t(car));
+        if(b.cursor_lost && !(car>=0 && b.hidden)) return b.held_distance;
+    }
     float lap=0,before=0;
     for(size_t s=0;s<track_.sections();++s) {
         const float l=progress_length(int(s));
         lap+=l;if(int(s)<c.section) before+=l;
     }
-    return int(float(c.loops)*lap+before+fraction(car)*progress_length(c.section));
+    int d=int(float(c.loops)*lap+before+fraction(car)*progress_length(c.section));
+    // 0x4a3f28..0x4a4085: in its cursor's row, with forward links from the
+    // cursor polygon (+0x16 & 0xf0), the distance to the first link's point
+    // comes off: (max(|dx|,|dz|) + min(|dx|,|dz|) / 2) / 4, truncated (__ftol,
+    // sar). Not for hidden robots (+0x2b5 instead, 0x4a3ec4).
+    const Body& b=car<0?body_:opponent_bodies_.at(size_t(car));
+    if(!(car>=0 && b.hidden) && b.cursor_link && b.cursor_section==c.section) {
+        const float dx=std::abs(b.cursor_target[0]-c.position[0]),dz=std::abs(b.cursor_target[2]-c.position[2]);
+        const int big=int(std::max(dx,dz)),small=int(std::min(dx,dz));
+        d-=((small>>1)+big)>>2;
+    }
+    return d;
 }
 int RaceSession::race_rank(int car) const {
     const auto finished=[&](int i)->const Body& {return i<0?body_:opponent_bodies_.at(size_t(i));};
@@ -171,17 +208,19 @@ int RaceSession::race_rank(int car) const {
     return ahead+1;
 }
 void RaceSession::robot_boxes(size_t i) {
-    // 0x4e7480: every 31 updates (+0xcc counts to 30), the four nearest
+    // 0x4e7321: every 31 updates (+0xcc counts to 30), the four nearest
     // power-ups (flag 0x2000000) within 6000 (0x516b3c) on each axis, by
-    // integer squared distance (provisional: every course power-up rather
-    // than the section cell's object list).
+    // integer squared distance, from the object list of the robot's section
+    // row (0x4e7386..0x4e73e7: [0x6f2d00]+0x2c, section +0x1b7, row +0x3c
+    // x 0xcf0, count +0x360, references +0x4e4).
     Opponent::Items& it=opponents_[i].items;
     if(it.list_timer<30) {++it.list_timer;return;}
     it.list_timer=0;it.boxes={{-1,-1,-1,-1}};
     std::array<int64_t,4> best{{INT64_MAX,INT64_MAX,INT64_MAX,INT64_MAX}};
     const Vec3& p=opponents_[i].car.position;
     const auto& spots=track_.power_ups();
-    for(size_t k=0;k<spots.size();++k) {
+    for(const int ki:track_.section_power_ups(opponents_[i].car.section)) {
+        const size_t k=size_t(ki);
         const Vec3& q=spots[k].centre;
         if(std::abs(q[0]-p[0])>6000 || std::abs(q[1]-p[1])>6000 || std::abs(q[2]-p[2])>6000) continue;
         const int64_t dx=int64_t(q[0]-p[0]),dy=int64_t(q[1]-p[1]),dz=int64_t(q[2]-p[2]);
@@ -250,7 +289,7 @@ void RaceSession::robot_items(size_t i) {
                 break;
             }
             case 10: use=b.hit.guard==1 && !b.hit.active() && aim(10)!=-2;break; // 0x2ab07b4 (5000, 2 pi)
-            default: break; // the vehicle's own gadget: +0x1c7 states 1/0xb (not ported)
+            default: break; // the vehicle's own gadget (0..6) only comes with +0x1c7 = 2 (0x4e59a4), which nothing writes
         }
         if(use) it.gadget_state=5;
     }
@@ -295,16 +334,10 @@ void RaceSession::scale_by_rank(size_t i) {
 }
 int RaceSession::lap() const {return std::min(body_.laps+1,track_.laps());}
 int RaceSession::rank() const {
-    const float mine=float(player_.loops*int(track_.sections())+player_.section)+fraction(-1);
-    int ahead=0;
-    // Racers level with the player (the same grid row) count as ahead, so a
-    // fresh grid shows 7th as in the Wine start frame.
-    for(size_t i=0;i<opponents_.size();++i) {
-        const Body& b=opponent_bodies_[i];
-        if((b.finished && (!body_.finished || b.finish_update<=body_.finish_update)) ||
-           (!body_.finished && opponent_progress(i)>=mine-0.01f)) ++ahead;
-    }
-    return ahead+1;
+    // The HUD's rank (WHudBrick child 4, 0x485d8d) is car +0x1af, which the
+    // rank update 0x4a8a10 assigns from the +0x1a7 order: race_rank. A fresh
+    // grid shows 7th through the pre-crossing rule (0x4a3d66).
+    return race_rank(-1);
 }
 double RaceSession::race_seconds() const {
     if(phase_==Phase::Ready || phase_==Phase::Go) return 0;
@@ -477,7 +510,145 @@ void RaceSession::pick_up() {
     }
 }
 void RaceSession::update_items(const DriveInput& input) {
-    human_items(items_,player_.vehicle,rank(),body_,!drowning(),input,-1);
+    if(autopilot()) {autopilot_scale();autopilot_items();}
+    (void)input;
+}
+void RaceSession::autopilot_scale() {
+    // 0x4e4f6b on the player's WCtrlRoboCar (as scale_by_rank): its +0xb4
+    // is 1.0 (Wine, 2026-11-13), so a boost keeps the top speed and the
+    // gravity and only scales row[4] (slide_push) by 0.3 and sets the dir
+    // modifier 0.4; leaving it restores the row and 0.25.
+    RankView v;
+    v.rank=race_rank(-1);v.lap=body_.laps+1;v.progress=race_distance(-1);v.player=race_distance(-1);
+    for(size_t j=0;j<opponents_.size();++j) if(race_rank(int(j))==v.rank-1) {v.has_ahead=true;v.ahead=race_distance(int(j));break;}
+    const int r=rank_scale(v,rank_row_,environment_,course_);
+    if(r<1 && autopilot_boosted_ && body_.laps+1>1) {
+        autopilot_boosted_=false;tuning_.slide_push=autopilot_slide_push_;autopilot_.set_dir_modifier(0.25f);
+    } else if(r==1 && !autopilot_boosted_) {
+        autopilot_boosted_=true;autopilot_slide_push_=tuning_.slide_push;tuning_.slide_push*=0.3f;autopilot_.set_dir_modifier(0.4f);
+    }
+}
+int RaceSession::template_place(int vehicle) {
+    static const int template_order[7]={1,4,5,6,0,3,2}; // vehicle -> place
+    return vehicle>=0 && vehicle<7?template_order[vehicle]:6;
+}
+std::vector<size_t> RaceSession::update_order() const {
+    std::vector<size_t> order(opponents_.size());
+    for(size_t k=0;k<order.size();++k) order[k]=k;
+    std::stable_sort(order.begin(),order.end(),[&](size_t x,size_t y){return template_place(opponents_[x].vehicle)<template_place(opponents_[y].vehicle);});
+    return order;
+}
+void RaceSession::start_boosts() {
+    // 0x4a2c22..0x4a2d69, the countdown's end (state 1 -> 2). In one player
+    // (app +0x1a64 = 0) the first three cars of the robot list (+0x60, the
+    // grid's slots 0..2) get row[1] x 3 x (3, 2, 1) (0x511894 = 3), so 9, 6, 3
+    // (Wine sh_t1: slot 0's robot 0.101, 0.189, 0.266 a frame, slot 2's
+    // 0.041, 0.080, 0.116). Player 1 gets row[1] x (rev x 4 + 1) (0x510434,
+    // 0x510214) and its speed back to 0. Each sets +0x3b3 = 100.
+    // The robots' WCtrlRoboCar init runs at GO (Wine: their fields are set on
+    // the GO frame) and sets +0xb8 = 20 (0x4e48d2).
+    // The extra update once fitted here (21) was the car update's order: it
+    // moves along the last update's heading and turns after (0x46ba57).
+    // The same init draws +0xac = 100 + rand() % 100 (0x4e48bf), and the
+    // item code 0x4e5931 then runs in the GO update too, its +0xe0 at 0: the
+    // preference timer and flag are drawn there (Wine sh_t1, the rand hook,
+    // 2026-11-14: 0x4e48c4, 0x4e594e, 0x4e5973 for each robot in turn).
+    for(size_t i:update_order()) {
+        Opponent& o=opponents_[i];
+        o.start_hold=20;
+        // 0x4e4804..0x4e4869: the probes in mode 2 (0x468280: the position plus
+        // the frame's rows x (-52, 0, +-102), unstretched at speed 0, in float)
+        // and +0x4c = ftol of the distance between +0x40b and +0x423. The
+        // float sums leave it just under or at 204: 203 on every robot of
+        // sh_t1 (Wine 2026-11-14), 204 on dt_t1 (Wine's far steps 142.7 x
+        // speed, 2026-11-15).
+        {
+            const Matrix4 f=o.car.frame();
+            float fl[3],rl[3];
+            for(int a=0;a<3;++a) {const float base=(f[12+a]+f[a]*-52.f)+f[4+a]*0.f;fl[a]=base+f[8+a]*102.f;rl[a]=base+f[8+a]*-102.f;}
+            const long double dx=(long double)fl[0]-rl[0],dy=(long double)fl[1]-rl[1],dz=(long double)fl[2]-rl[2];
+            o.span=int(std::sqrt(dx*dx+dy*dy+dz*dz));
+        }
+        if(o.human) continue;
+        o.items.weapon_wait=random_.next()%100+100;
+        o.items.prefer_timer=random_.next()%300+300;
+        o.items.prefer_player=random_.unit()<rank_row_.prefer;
+    }
+    if(!two_players()) for(size_t i=0;i<opponents_.size() && i<3;++i) {
+        Body& b=opponent_bodies_[i];
+        b.base_convergence=opponents_[i].tuning.convergence;
+        opponents_[i].tuning.convergence*=3.f*float(3-i);b.start_boost=100;
+    }
+    body_.base_convergence=tuning_.convergence;
+    tuning_.convergence*=player_.speed.speed*4+1;body_.start_boost=100;
+    player_.speed.speed=0;
+}
+void RaceSession::end_turbo(Body& b) {
+    // 0x46a9b6 (a solid contact) and 0x46c5c1 (a wall): a running TurboSpeed
+    // (+0x385 = 8) ends, +0x3b3 = 0 and row[1] comes back from +0x3b7, so a
+    // start boost still running ends too.
+    b.turbo=0;b.effect=-1;
+    if(b.start_boost>0) {
+        VehicleTuning& t=&b==&body_?tuning_:opponents_.at(size_t(&b-opponent_bodies_.data())).tuning;
+        t.convergence=b.base_convergence;b.start_boost=0;
+    }
+}
+void RaceSession::count_start_boost(Body& b,VehicleTuning& t) {
+    // 0x46967c: the car update counts +0x3b3 down; at 1, row[1] returns to
+    // the car init's +0x3b7 (0x469692), so the boost lasts 99 updates.
+    if(b.start_boost==0) return;
+    if(--b.start_boost==1) t.convergence=b.base_convergence;
+}
+void RaceSession::start_autopilot() {
+    if(!autopilot()) return;
+    // 0x49eb20 enables the player car's WCtrlRoboCar (+0x1c3); its init
+    // 0x4e45e0 (vtable 0x516ae4 slot 4) attaches the car (+0x24), doubles
+    // its gravity +0x98 and, with the manager in states 4..7 of a single
+    // race or championship, sets m_rDirModifier to 0x52e62c (0.25) and the
+    // item wait +0xb0 to 100 + rand() % 100 (0x4e46a6..0x4e46e7). Provisional:
+    // that the init runs when the controller is enabled is inferred.
+    tuning_.gravity*=2;autopilot_boosted_=false; // +0x30 = 0
+    autopilot_.set_dir_modifier(0.25f);
+    autopilot_field_wait_=int(random_.next()%100)+100;
+}
+void RaceSession::autopilot_items() {
+    // The player's WCtrlRoboCar (+0x1c3, enabled by 0x49eb20) runs the robot
+    // item decisions on the player's slots (provisional, as robot_items):
+    // it writes state 5 (0x4e5a2a, 0x4e5edb/0x4e5f33), which the human item
+    // path uses without a key (0x467c9c, 0x46803b). Its gates test the slot's
+    // item (+0x371/+0x375), filled in state 3, not the state itself.
+    Items& it=items_;const RaceCar& c=player_;const Body& b=body_;
+    if(autopilot_weapon_wait_>0) --autopilot_weapon_wait_;
+    if(autopilot_field_wait_>0) --autopilot_field_wait_;
+    const auto distance=[&](int t) {
+        if(t<0) return 0.f;
+        const Vec3& q=opponents_[size_t(t)].car.position;
+        return std::sqrt((q[0]-c.position[0])*(q[0]-c.position[0])+(q[1]-c.position[1])*(q[1]-c.position[1])+(q[2]-c.position[2])*(q[2]-c.position[2]));
+    };
+    const auto aim=[&](int icon) {const ItemAim& a=aims_.at(size_t(std::clamp(icon,0,26)));return find_target(c.position,c.yaw,c.section,a.angle,int(a.range),-1);};
+    if(it.gadget_state==3 && it.charge>0 && autopilot_field_wait_==0 && b.effect<0) {
+        bool use=false;
+        switch(it.gadget) {
+            case 8: use=b.turbo==0;break;                                  // 0x4e59de: not already boosted
+            case 7: use=(c.surface&0x80007c)!=0;break;                     // 0x4e5a3f
+            case 9: {const int t=aim(9);use=t>=0 && distance(t)>700;break;} // 0x4e5b61
+            case 10: use=b.hit.guard==1 && !b.hit.active() && aim(10)>=0;break;
+            default: break;
+        }
+        if(use) it.gadget_state=5;
+    }
+    if(it.weapon>=0 && it.weapon_state==3 && it.charge>0 && it.gadget_state!=5 && autopilot_field_wait_==0 && b.weapon.id<0 && !b.hit.active()) {
+        switch(it.weapon) {
+            case 0x11:case 0x12:case 0x13:case 0x15:case 0x17: it.weapon_state=5;break; // dropped at once
+            default: {
+                const int t=aim(it.weapon);
+                if(t>=0 && distance(t)>700 && autopilot_weapon_wait_<1) {
+                    it.weapon_state=5;autopilot_weapon_wait_=random_.next()%100+100;
+                }
+                break;
+            }
+        }
+    }
 }
 void RaceSession::human_items(Items& it,int vehicle,int place,Body& body,bool can_use,const DriveInput& input,int car) {
     // 0x4679d0 for a human player (+0xc0 != 1) in a race (not battle mode 1);
@@ -511,6 +682,11 @@ void RaceSession::human_items(Items& it,int vehicle,int place,Body& body,bool ca
             }
             break;
         case 4: if(body.effect<0) it.gadget_state=0;break; // the effect (+0x385) has ended
+        case 5:
+            // 0x467c9c: state 5, written by a WCtrlRoboCar (the player's own
+            // once the race has ended), uses the gadget without a key.
+            --it.charge;use_gadget(it.gadget,car);it.gadget=-1;it.gadget_state=4;
+            break;
         default: break;
     }
     switch(it.weapon_state) {
@@ -552,6 +728,10 @@ void RaceSession::human_items(Items& it,int vehicle,int place,Body& body,bool ca
             }
             break;
         case 4: if(body.weapon.id<0) {it.weapon_state=0;it.weapon_preview=false;} break; // +0x389 ended
+        case 5:
+            // 0x46803b: the same for the weapon (a robot driver: no look-back).
+            --it.charge;use_weapon(it.weapon,car);it.weapon=-1;it.weapon_state=4;
+            break;
         default: break;
     }
     if(it.charge>3) it.charge=3;
@@ -628,7 +808,7 @@ void RaceSession::update(const DriveInput& raw,const DriveInput& raw2) {
        (body_.frags>=frag_limit || opponent_bodies_[0].frags>=frag_limit)) {
         phase_=Phase::Finished;finish_update_=updates_;finish_state_=10;
         finish_counter_=two_players()?60:0; // 0x4a31ef: 60 in two players
-        body_.finished=true;for(Body& b:opponent_bodies_) {b.finished=true;b.finish_update=updates_;} // brake to a stop
+        body_.finished=body_.stopped=true;for(Body& b:opponent_bodies_) {b.finished=b.stopped=true;b.finish_update=updates_;} // brake to a stop
     }
     // The WModManager's route cursor (+0x2c5) of every car: the route
     // polygon under it, kept when the query misses.
@@ -636,9 +816,30 @@ void RaceSession::update(const DriveInput& raw,const DriveInput& raw2) {
     // player's is queried.
     const auto cursor=[&](const RaceTrack::Route& r,Body& b) {
         if(!r.hit) return;
-        try {b.cursor=track_.route_node(r.section,r.record,r.polygon).remaining;b.cursor_section=r.section;} catch(const std::exception&) {}
+        b.cursor_lost=false;
+        try {
+            const RouteNode n=track_.route_node(r.section,r.record,r.polygon);
+            b.cursor=n.remaining;b.cursor_section=r.section;
+            b.cursor_link=!n.forward.empty();
+            if(b.cursor_link) b.cursor_target=track_.route_point(r.section,n.forward[0].point);
+        } catch(const std::exception&) {}
     };
-    cursor(track_.route(player_.position,player_.section),body_);
+    {
+        // 0x47c331: the shadow's query (0x47c180) missing clears the player's
+        // +0x2c5, and the rank loop then skips the car (0x4a3d91), keeping its
+        // last progress (Wine sh_t1: +0x1a3 holds 5608 across the first
+        // hairpin's unrouted corner).
+        const RaceTrack::Route r=track_.route(player_.position,player_.section);
+        if(!r.hit && !body_.cursor_lost) {body_.held_distance=race_distance(-1);body_.cursor_lost=true;}
+        cursor(r,body_);
+    }
+    // The robots' +0x2c5 comes from the same shadow query (0x4e82be only
+    // clears with it when it is already 0); in the far mode its mask is the
+    // route layer alone (0x80000000, +0x12a > 0), which still hits (Wine
+    // sh_t1: a far robot's cursor stayed set and advanced for 36 s). Its
+    // miss rule (0x47c331) is not applied to them: natively the robots leave
+    // the route layer more often, and holding their progress kept them in
+    // the early avoidance window (ct_t3's aims on the route fell to 81%).
     for(size_t i=0;i<opponents_.size();++i) if(!opponent_bodies_[i].hidden) cursor(opponents_[i].robot.module(),opponent_bodies_[i]);
     // Every WackyAuto runs its WCarFx; the player first, then the robots in
     // grid order (provisional: the original object order is not traced).
@@ -693,23 +894,69 @@ std::array<WheelContact,4> RaceSession::wheel_contacts(const RaceCar& car) const
 }
 void RaceSession::step(const DriveInput& raw) {
     ++updates_;++phase_updates_;
-    if(phase_==Phase::Ready && phase_updates_>ready_updates) {phase_=Phase::Go;phase_updates_=0;}
+    if(phase_==Phase::Ready && mode_!=1) {
+        // 0x4a2b6e..0x4a2bfe, the countdown (state 1): accelerate held revs
+        // player 1's +0x3ef by 0.026 (0x514bbc) an update while it is below
+        // row[0]; reaching it is a false start (+0x3ef = 0, 0x6f5834 = 1, no
+        // more revving). Released, the rev falls by 0.03 (0x512a34) down to
+        // below 0.03. The car does not move meanwhile.
+        if(!false_start_) {
+            SpeedState& sp=player_.speed;
+            if(raw.accelerate) {
+                if(sp.speed<tuning_.top_speed) {sp.speed+=0.026f;sp.brake_state=0;}
+                else {sp.speed=0;false_start_=true;}
+            } else if(sp.speed>=0.03f) sp.speed-=0.03f;
+        }
+    }
+    if(phase_==Phase::Ready && phase_updates_>ready_updates) {start_boosts();phase_=Phase::Go;phase_updates_=0;}
     else if(phase_==Phase::Go && phase_updates_>go_updates) {
         phase_=Phase::Racing;phase_updates_=0;start_update_=updates_;
     }
     if(finish_counter_>0) --finish_counter_;
     DriveInput input=raw;
-    if(phase_==Phase::Ready || phase_==Phase::Finished || body_.drown>0) input={};
+    if(phase_==Phase::Ready || (phase_==Phase::Go && phase_updates_==0) || phase_==Phase::Finished || body_.drown>0) input={};
     update_power_ups();
     update_items(input);
-    update_opponents(input);
+    // The creatures update before the cars (Wine cc_t1: the waiting Kosza's
+    // draw 0x45941b comes first in each update, the countdown's included).
+    objects_.step_creatures(random_,car_probes(),player_.section,track_.sections());
+    // The other course objects too: they are scene actions, updated before
+    // the cars, which the race load adds after them (Wine sh_t4, the rand
+    // hook 2026-11-15: WShiftedRoad's 0x4cbba5 and WGoldenGate's 0x4c6b5c
+    // draw in their updates 0x4cbb60/0x4c6b10 before vehicle 6's first car
+    // update draws 0x467cfa). Their order among the creatures is provisional.
+    update_objects();
+    const int place=template_place(player_.vehicle);
+    update_opponents(input,0,place);
     if(body_.drown>0) {
         if(--body_.drown==0) respawn(player_,body_,true);
+        human_items(items_,player_.vehicle,rank(),body_,!drowning(),input,-1);   // 0x469550 still runs
+        update_opponents(input,place+1,7);
         // The effect objects update on their own while the car drowns.
         update_gadgets();update_weapons();update_tnts();update_storms();update_strikes();update_barriers();update_mines();update_blasts();
         return;
     }
-    drive(input);
+    if(phase_==Phase::Ready && mode_!=1) {
+        // PRET: the car update runs, but in state 1 (and 0xc) it zeroes the
+        // update's motion, the forward step and the pushes summed into it
+        // (0x46b97b..0x46b9f5): contacts are computed, the car stays put.
+        // +0x3ef meanwhile holds the rev (Wine sh_t1: 0.026, 0.052, the
+        // position unchanged), so the update runs at speed 0 and the rev and
+        // the position are put back.
+        const float rev=player_.speed.speed;player_.speed.speed=0;
+        const Vec3 at=player_.position;
+        drive(input);
+        player_.speed.speed=rev;player_.position=at;
+    } else drive(input);
+    // 0x47057e: the player's car update draws the engine pitch too, on the
+    // same test (its +0x3ef: the rev before GO), at the player's place in
+    // the order (update_opponents runs in two parts round it).
+    player_.engine_jitter=tuning_.top_speed*(body_.turbo>0?turbo_top:1.f)-player_.speed.speed<0.15f ? float(random_.next()%20-10)*0.03f : 0.f;
+    // 0x469550, the end of the player's turn: its item slots (0x4679d0, a
+    // human's: input, roulette) after its car update, as the robots'.
+    human_items(items_,player_.vehicle,rank(),body_,!drowning(),input,-1);
+    avoid_cache_.clear(player_.vehicle);
+    update_opponents(input,place+1,7);
     update_gadgets();
     update_weapons();
     update_tnts();
@@ -721,18 +968,54 @@ void RaceSession::step(const DriveInput& raw) {
     update_barriers();
     update_mines();
     update_blasts();
-    if(phase_==Phase::Racing) pick_up();
-    update_objects();
+    // 0x46aad5 runs in every car update; after the end too (Wine sh_t1,
+    // 2026-11-13: the autopilot took a TurboSpeed after the finish and used it).
+    if(phase_==Phase::Racing || phase_==Phase::Finished) pick_up();
     update_bend_arrow();
 }
-void RaceSession::update_opponents(const DriveInput&) {
+void RaceSession::update_opponents(const DriveInput&,int first,int last) {
     // Robots get no control before PARTEZ!, as the player.
-    const bool controlled=phase_!=Phase::Ready;
+    // The countdown's last update sets state 2 (0x4a2c25) after the cars
+    // have run, so they are first driven on the update after it (Wine sh_t1:
+    // at the first state-2 frame the robots stand at speed 0; 0.101 the next).
+    const bool controlled=phase_!=Phase::Ready && !(phase_==Phase::Go && phase_updates_==0);
     if(!robots_enabled_) return;
-    std::vector<int> placed(track_.sections(),0);
-    for(size_t i=0;i<opponents_.size();++i) {
+    if(first==0) placed_.assign(track_.sections(),0);
+    std::vector<int>& placed=placed_;
+    // The cars update in the order of their WackyAuto templates in
+    // general.wgm (ids 11, 40, 118, 144, 175, 200, 225: vehicles 4, 0, 6, 5,
+    // 1, 2, 3), the order they are created and allocated in. Wine (sh_t1 and
+    // cc_t1, the rand hook with the callers' esi/ebp, 2026-11-14): the GO
+    // init draws and every update's car update and decision draws come robot
+    // 4, 0, 6, 5, 1, 2, the cars' addresses rising in that order. A robot
+    // sees the ones before it after their update and the ones after it
+    // before. The player's car update runs at its own vehicle's place
+    // (Wine sh_t1 with vehicle 5, 2026-11-14: robot 4's car update and
+    // decision, then the player's engine draw, then car 1's), so update
+    // runs this loop in two parts round it.
+    for(size_t i:update_order()) {
         Opponent& o=opponents_[i];Body& b=opponent_bodies_[i];
-        if(b.drown>0) {if(--b.drown==0) respawn(o.car,b,o.human);continue;}
+        if(template_place(o.vehicle)<first || template_place(o.vehicle)>=last) continue;
+        o.car.engine_jitter=0;
+        // 0x469550: the car's avoidance caches (+0x2ed, +0x35d) are cleared at
+        // the end of its turn, after its controller (see AvoidCache).
+        struct ClearAfter {AvoidCache& c;int slot;~ClearAfter() {c.clear(slot);}} clear_after{avoid_cache_,o.vehicle};
+        if(b.drown>0) {
+            // 0x4700ec..0x47011f: the drowning counter +0x8e7 counts down in the
+            // car's contact and the return comes below 1. A far robot's stops at
+            // 1: Wine, sh_t2 (2026-11-14), vehicle 6 struck by the storm while
+            // far fell into the pocket at (40571, 1168, 89821); +0x8e7 ran 0x26 ..
+            // 1 and stayed 1 for the 1150+ updates logged, the car unmoved and its
+            // route contact frozen (0x47c1ad skips the shadow query meanwhile).
+            // Natively it is held at 1 while far (0x4e4f10's distance test);
+            // near again it returns.
+            const int dx=int(o.car.position[0]-player_.position[0]),dz=int(o.car.position[2]-player_.position[2]);
+            const bool far=!o.human && controlled && !robots_near_ && (std::abs(dx)>=5000 || std::abs(dz)>=5000 || dx*dx+dz*dz>24999999);
+            o.far=far;
+            if(far && b.drown<=1) {b.drown=1;continue;}
+            if(--b.drown==0) respawn(o.car,b,o.human);
+            continue;
+        }
         if(o.human) {
             const DriveInput in=controlled && !b.finished ? input2_ : DriveInput{};
             // Presses, as player 1's (the key words are ANDed with the last update's).
@@ -741,26 +1024,94 @@ void RaceSession::update_opponents(const DriveInput&) {
             drive_human(i,in);continue;
         }
         if(controlled && virtual_robot(i,placed)) continue;
-        // 0x4e4f6b, in single races and championships (app +0x1a60 0 or 3).
-        if(controlled && !b.finished) scale_by_rank(i);
+        // 0x4e4f6b, in single races and championships (app +0x1a60 0 or 3);
+        // no finish test (0x4e4f52..), so finished robots go on scaling.
+        if(controlled) scale_by_rank(i);
         Opponent::Items& it=o.items;
         if(it.weapon_wait>0) --it.weapon_wait;
         if(it.field_wait>0) --it.field_wait;
-        if(controlled && !b.finished && !o.far) {robot_boxes(i);robot_items(i);}
+        // 0x4e53d4: the item code 0x4e5931 runs in the near mode, finished or
+        // not; the battle's stop (0x10000000) returns before it (0x4e532b).
+        if(controlled && !b.stopped && !o.far) {
+            // 0x4e7321, the power-up list, is in the decision path: skipped,
+            // its +0xcc not counting, while the start hold runs (+0xb8 > 0
+            // after 0x4e4f70's decrement, which drive_opponent makes below)
+            // and while a WackyAutoBomba hit runs (0x4e53df). Wine: the first
+            // list count about 22 frames after GO.
+            if(o.start_hold<=1 && !b.hit.active()) robot_boxes(i);
+            robot_items(i);
+        }
+        if(!controlled && mode_!=1) {
+            // PRET (state 1): the update's motion is zeroed (0x46b97b), so the
+            // robot stays put whatever its contacts push.
+            const Vec3 at=o.car.position;drive_opponent(o,b,controlled);o.car.position=at;
+        } else drive_opponent(o,b,controlled);
+        // 0x469550 (WackyAuto vtable slot 2) runs after the car update
+        // (0x46a4a0, another slot) and the controller: its item slots
+        // (0x4679d0) draw the roulette after the car's engine draw (Wine
+        // dt_t1, the rand hook 2026-11-15: car 2's 0x47058f, then its 0x467d60,
+        // race draw 103; natively before, draw 102: Landmine for BeeHive).
         robot_slots(i);
-        drive_opponent(o,b,controlled);
     }
 }
 void RaceSession::drive_opponent(Opponent& o,Body& b,bool controlled) {
+    count_start_boost(b,o.tuning);
     RaceCar& car=o.car;
-    const Vec3 start=car.position;
+    // The original's order, a robot at a time: the car update 0x46a4a0 with
+    // the control its controller left last update, then the controller
+    // 0x4e4f10 (far test, far step or decision) for the next one. Wine
+    // sh_t1 (2026-11-14): +0x2ad is set on update 19 and turns the car from
+    // 20; the rand hook logs the car update's engine draw, then the
+    // decision's, robot after robot; the update that takes a robot far runs
+    // its near move and its far step. Robots later in the order are seen
+    // before their update, earlier ones after it.
+    if(!o.far || b.hit.active()) {
+        // A far robot whose far step is skipped (a running WackyAutoBomba,
+        // 0x4e53df) goes through the car update, which rebuilds the frame from
+        // the angles (0x468620): its heading snaps back to the frozen +0x26b.
+        // Wine, sh_t2 (2026-11-14): vehicle 6, struck by the storm while far
+        // (+0x26b 1.738), left the route 1420 west within 10 updates and fell
+        // into the pocket below. Back to near, the angles come from the frame
+        // instead (0x4e5249), so no snap.
+        if(o.far_framed && o.far) car.yaw=o.angle_yaw;
+        o.far_framed=false;
+        o.previous=car.position;   // +0x173, the position before the car's update
+        DriveInput none;
+        if(!controlled) {
+            update_speed(car.speed,o.tuning,none);
+            car.steer=update_steering(car.steer,o.tuning,none);
+        } else {
+        const SpeedState before=car.speed;
+        // 0x4701f5: the modifiers follow +0x8bb (the last contact's flags)
+        // at every update's end, in the air too.
+        update_grip(b.grip,o.vehicle,car.surface);
+        update_boost(b.grip,b.boost);
+        VehicleTuning row=o.tuning;
+        if(b.turbo>0) {row.top_speed*=turbo_top;row.convergence*=turbo_convergence;}
+        update_robot_speed(car.speed,row,o.control.throttle,b.grip,b.follow_lock!=0);
+        car.steer=robot_steering(o.control.steer);
+        update_brake_skid(b.skid,o.control.throttle==1,o.control.throttle==2,before.speed,before.brake_state,car.grounded);
+        update_slide(b.skid,car.speed.speed,b.effect==7?0.f:car.steer,farol_speed_limit(o.vehicle),b.grip.friction,car.grounded,true);
+        }
+        move(car,b,o.tuning,false);
+        bomb_step(car,b);
+        // The car update keeps its angles (+0x267/+0x26b/+0x26f) and rebuilds
+        // the frame from them; the far step turns the frame +0x2c alone
+        // (0x4e583f/0x4e5885), so +0x26b keeps the yaw of the last near update.
+        o.angle_yaw=car.yaw;
+        // 0x47057e..0x47058a: the engine pitch adds (rand() % 20 - 10) x 0.03
+        // when the row's top minus the speed is below 0.15, from the race
+        // stream (Wine sh_t1, rand hook: 0x47058f before each robot's
+        // decision draw 0x4e7ab6). Far robots skip it. The row top is
+        // TurboSpeed's while it runs (restored at its end, 0x4d7326).
+        car.engine_jitter=!o.far && o.tuning.top_speed*(b.turbo>0?turbo_top:1.f)-car.speed.speed<0.15f ? float(random_.next()%20-10)*0.03f : 0.f;
+    }
     // 0x4e4f10: away from the player (5000 units on an axis, or 25e6 squared
     // with integer coordinates) and with no item effect running, the robot
     // switches to 0x1000 and slides along the route; back near, it drives.
     const int dx=int(car.position[0]-player_.position[0]),dz=int(car.position[2]-player_.position[2]);
     const bool far=controlled && !robots_near_ && (std::abs(dx)>=5000 || std::abs(dz)>=5000 || dx*dx+dz*dz>24999999);
     if(far!=o.far) {o.far=far;car.speed.speed=o.tuning.top_speed*0.8f;car.speed.brake_state=0;}
-    const float time=frame_time_factor(race_update_seconds*1000);
     // 0x4e53df: in the far state (0x1000) a running WackyAutoBomba (+0x2c set)
     // skips the far step, so the car update moves the robot with its last
     // control: held for the hit, then driving, until the hit ends. Wine,
@@ -768,9 +1119,11 @@ void RaceSession::drive_opponent(Opponent& o,Body& b,bool controlled) {
     // frames, accelerating 0.0216 a frame, gliding again at the hit's end.
     const bool hit=b.hit.active();
     // 0x4e53f0: a far robot waiting at a crossing (+0x1c7 = 5) stays put.
-    if(far && !b.finished && !hit && o.effect==5) {o.previous=start;return;}
-    if(far && !b.finished && !hit) {
-        Vec3 from=start;
+    // A finished robot drives on, far or near (Wine cc_t1, 2026-11-13); only
+    // the battle's stop (+0x2b1 = 0x10000000) holds it.
+    if(far && !b.stopped && !hit && o.effect==5) return;
+    if(far && !b.stopped && !hit) {
+        Vec3 from=car.position;
         // The last section's ground runs past its route (cc_t1: about 200
         // units); there the route continues only through the loop
         // transform, so the far robot crosses the seam with it, or it would
@@ -784,13 +1137,18 @@ void RaceSession::drive_opponent(Opponent& o,Body& b,bool controlled) {
             if(!track_.route(transform_point(k>0?track_.wrap():track_.unwrap(),car.position)).hit) continue;
             cross_seam(car,b,k,false);from=transform_point(k>0?track_.wrap():track_.unwrap(),from);here=track_.route(car.position);break;
         }
-        // 0x4e5300..: speed x 0.56 when ahead of the player, else 0.48, in
-        // units per update (top x +0x163 x the probe span); turn by half the
-        // goal angle (0x4530a0), then rest on the ground. 0x4e5538: x
-        // 0x6f2cd8 while catching up, x 0x6f2cdc while holding back.
+        // 0x4e54ef..0x4e552a: the row's top speed (0x6f2990, which the
+        // catch-up boost scales in place) x +0x163 (1) x WCtrlRoboCar +0x4c
+        // x 0.56 (0x516b5c) when the robot ranks ahead of the player, else
+        // 0.48 (0x516b58), in units per update with no frame factor. +0x4c
+        // is the truncated distance between the mode-2 probe points +0x40b
+        // and +0x423 taken at the init (0x4e4804..0x4e4869): 203 on every
+        // robot under Wine (sh_t1, 2026-11-14). Turn by half the goal angle
+        // (0x4530a0), then rest on the ground. 0x4e5538: x 0x6f2cd8 while
+        // catching up, x 0x6f2cdc while holding back.
         const Vec3 f=forward_of(car.yaw);
         const bool ahead=progress(car.position,car.section,car.loops)>player_progress();
-        float step=o.tuning.top_speed*time*204.f*(ahead?0.56f:0.48f);
+        float step=o.tuning.top_speed*float(o.span)*(ahead?0.56f:0.48f);
         if(o.rank_scale==1) step*=rank_row_.far_catch_up;
         else if(o.rank_scale==-1) step*=rank_row_.far_hold;
         float turn=0;
@@ -829,25 +1187,49 @@ void RaceSession::drive_opponent(Opponent& o,Body& b,bool controlled) {
         for(Body::Push& p:b.pushes) {for(float& c:p.force) c*=p.decay;p.yaw*=p.yaw_decay<0?p.decay:p.yaw_decay;}
         b.pushes.erase(std::remove_if(b.pushes.begin(),b.pushes.end(),[](const Body::Push& p){return dot(p.force,p.force)<2 && std::abs(p.yaw)<1e-3f;}),b.pushes.end());
         o.previous=from;
+        o.far_framed=true;
         return;
     }
-    DriveInput none;
+    // The GO update's controller (+0xb8 just set to 20) counts the hold once
+    // and leaves the default control (throttle 1, steer 0) for the first car
+    // update after it, so the first decision comes on update 19 (Wine:
+    // +0x2ad set on update 19, the car turning from 20).
     if(!controlled) {
-        update_speed(car.speed,o.tuning,none);
-        car.steer=update_steering(car.steer,o.tuning,none);
-    } else {
+        if(phase_==Phase::Go) {o.control=RoboControl{};if(o.start_hold>0) --o.start_hold;}
+        return;
+    }
+    {
         RoboCarState state;
         state.position=car.position;state.forward=forward_of(car.yaw);state.previous=o.previous;
-        state.speed=car.speed.speed;state.top_speed=o.tuning.top_speed;state.surface=car.surface;
+        state.speed=car.speed.speed;state.top_speed=o.tuning.top_speed;state.surface=car.surface;state.probe_span=o.span;
         // 0x4e4a10 skips taken power-ups (+0x142).
         for(int k:o.items.boxes) if(k>=0 && power_ups_[size_t(k)].state==0 && power_ups_[size_t(k)].enabled) state.boxes[size_t(state.box_count++)]=track_.power_ups()[size_t(k)].centre;
         other_cars(size_t(&o-opponents_.data()),state);
         state.effect=o.effect;
-        // 0x4e9750 ff. after the finish: brake to a stop (0x10000000/0x20000000).
-        if(b.finished) {
+        // 0x4e532b..0x4e53a8: +0x2b1 = 0x10000000 (set only by the battle's end,
+        // 0x4a317e/0x4a31d5) brakes to a stop, then 0x20000000. A finished
+        // robot is not stopped: under Wine (cc_t1, every car forced onto its
+        // last lap) robots past the finish drove on at 0.56 for 40 s.
+        // 0x4e4f70 counts +0xb8 down at the start of each update of a single
+        // race or championship, whatever the car does.
+        if(o.start_hold>0) --o.start_hold;
+        if(b.stopped) {
             o.control={car.speed.speed< -0.1f?1:car.speed.speed>0.1f?2:0,0};
             if(o.control.throttle==0) car.speed.speed=0;
-        } else if(!b.hit.active()) {
+        } else if(b.hit.active()) {
+            // 0x4e53df: no driving decision while WackyAutoBomba runs (the
+            // last control stays; provisional), checked before the hold.
+        } else if(o.start_hold>0) {
+            // 0x4e6962..0x4e697d skips the whole decision to 0x4e7d60 (states
+            // 2 and 3) while +0xb8 is above 0, leaving the default control:
+            // throttle 1, steer 0. So a robot drives straight off the grid
+            // for 20 updates (Wine sh_t1 and cc_t1: the first steer and the
+            // first power-up list count come about 22 frames after GO).
+            // The goals still update before the skip: Wine draws the 12 link
+            // draws (0x4e967b, two a robot) on update 1 (rand hook, sh_t1).
+            o.robot.update_goals(track_,track_.route(car.position),random_);
+            o.control=RoboControl{};
+        } else {
             o.control=o.robot.drive(track_,state,random_);
             // 0x4e75c0: a WSaw's +0x1c7 = 7 or 8 steers aside for +0x1cb (3) updates.
             if(o.effect==7 || o.effect==8) {
@@ -855,23 +1237,7 @@ void RaceSession::drive_opponent(Opponent& o,Body& b,bool controlled) {
                 else o.effect=0;
             }
         }
-        // 0x4e53df: no driving decision while WackyAutoBomba runs (the last
-        // control stays; provisional).
-        const SpeedState before=car.speed;
-        // 0x4701f5: the modifiers follow +0x8bb (the last contact's flags)
-        // at every update's end, in the air too.
-        update_grip(b.grip,o.vehicle,car.surface);
-        update_boost(b.grip,b.boost);
-        VehicleTuning row=o.tuning;
-        if(b.turbo>0) {row.top_speed*=turbo_top;row.convergence*=turbo_convergence;}
-        update_robot_speed(car.speed,row,o.control.throttle,b.grip,b.follow_lock!=0);
-        car.steer=robot_steering(o.control.steer);
-        update_brake_skid(b.skid,o.control.throttle==1,o.control.throttle==2,before.speed,before.brake_state,car.grounded);
-        update_slide(b.skid,car.speed.speed,b.effect==7?0.f:car.steer,farol_speed_limit(o.vehicle),b.grip.friction,car.grounded,true);
     }
-    move(car,b,o.tuning,false);
-    bomb_step(car,b);
-    o.previous=start;
 }
 void RaceSession::drive_human(size_t i,const DriveInput& input) {
     Opponent& o=opponents_[i];Body& b=opponent_bodies_[i];RaceCar& car=o.car;
@@ -892,14 +1258,18 @@ void RaceSession::drive_human(size_t i,const DriveInput& input) {
     bomb_step(car,b);
     o.previous=start;
 }
+std::vector<CarProbe> RaceSession::car_probes() const {
+    std::vector<CarProbe> cars{{player_.position,false,false,body_.bridge,forward_of(player_.yaw),player_.section,body_.hit.active(),body_.effect<0,player_.surface,player_.speed.speed}};
+    for(size_t i=0;i<opponents_.size();++i) cars.push_back({opponents_[i].car.position,!opponents_[i].human,opponent_bodies_[i].hidden,opponent_bodies_[i].bridge,forward_of(opponents_[i].car.yaw),opponents_[i].car.section,opponent_bodies_[i].hit.active(),opponent_bodies_[i].effect<0,opponents_[i].car.surface,opponents_[i].car.speed.speed});
+    return cars;
+}
 void RaceSession::update_objects() {
-    // The course objects run after the cars (provisional order). Car 0 is
-    // the player, then the robots in grid order.
-    std::vector<CarProbe> cars{{player_.position,false,false,body_.bridge,forward_of(player_.yaw),player_.section,body_.hit.active(),body_.effect<0,player_.surface}};
-    for(size_t i=0;i<opponents_.size();++i) cars.push_back({opponents_[i].car.position,!opponents_[i].human,opponent_bodies_[i].hidden,opponent_bodies_[i].bridge,forward_of(opponents_[i].car.yaw),opponents_[i].car.section,opponent_bodies_[i].hit.active(),opponent_bodies_[i].effect<0,opponents_[i].car.surface});
+    // The course objects, before the cars (see update). Car 0 is the
+    // player, then the robots in grid order.
+    std::vector<CarProbe> cars=car_probes();
     object_effects_.resize(cars.size());
     for(size_t i=0;i<opponents_.size();++i) object_effects_[i+1]=opponents_[i].effect;
-    objects_.update(cars,object_hits_,object_effects_,player_.section,track_.sections());
+    objects_.update(cars,object_hits_,object_effects_,player_.section,track_.sections(),&random_);
     // 0x4cd9eb: a dynamite hole's blast.
     for(const CarPush& p:objects_.pushes()) (p.car==0?body_:opponent_bodies_[p.car-1]).pushes.push_back({p.force,p.decay,p.yaw,p.yaw_decay});
     // 0x4cfa50: a WRotoHill holds the car: stopped, its slots cleared, turned and
@@ -917,11 +1287,18 @@ void RaceSession::update_objects() {
         RaceCar& car=l.car==0?player_:opponents_[l.car-1].car;
         Body& b=l.car==0?body_:opponent_bodies_[l.car-1];
         car.speed.speed=0;b.pushes.clear();car.position=l.position;car.airtime=l.airtime;
+        // 0x4ca647 -> 0x468620: the frame is rebuilt from the position copy
+        // +0x288 and the angles, so a far robot's heading snaps back to its
+        // last near yaw (+0x26b). Wine, dt_t2 (2026-11-14): vehicle 6, far,
+        // turned from (58, -93) a step to (96, -56) as the fountain caught it.
+        if(l.car>0 && opponents_[l.car-1].far) car.yaw=opponents_[l.car-1].angle_yaw;
     }
     for(const MistyBridge& m:objects_.bridges()) if(m.fork_section>=0)
-        for(Opponent& o:opponents_) o.robot.set_route_fork({m.fork_section,m.fork_polygon,m.fork_weight()});
+        {for(Opponent& o:opponents_) o.robot.set_route_fork({m.fork_section,m.fork_polygon,m.fork_weight()});
+         autopilot_.set_route_fork({m.fork_section,m.fork_polygon,m.fork_weight()});}
     for(const RouteWeight& w:objects_.route_weights())
-        for(Opponent& o:opponents_) o.robot.set_route_fork({w.section,w.polygon,w.weight,w.link});
+        {for(Opponent& o:opponents_) o.robot.set_route_fork({w.section,w.polygon,w.weight,w.link});
+         autopilot_.set_route_fork({w.section,w.polygon,w.weight,w.link});}
     // 0x4cc69e: a car whose +0x89f is a log moves by that log's motion,
     // and +0x89f is cleared.
     const auto ride=[&](RaceCar& car,Body& b) {
@@ -948,7 +1325,7 @@ void RaceSession::update_objects() {
 void RaceSession::other_cars(size_t self,RoboCarState& state) const {
     // 0x4e69bd walks 0x6f2ce0[0..7], the cars by vehicle slot.
     const Opponent& me=opponents_[self];
-    state.slot=me.vehicle;state.progress=race_distance(int(self));
+    state.slot=me.vehicle;state.progress=race_distance(int(self));state.cache=&avoid_cache_;state.battle=mode_==1;
     std::array<OtherCar,8> by_slot{};std::array<bool,8> used{};
     const auto put=[&](const OtherCar& c) {if(c.slot>=0 && c.slot<8) {by_slot[size_t(c.slot)]=c;used[size_t(c.slot)]=true;}};
     {OtherCar c;c.slot=player_.vehicle;c.position=player_.position;c.previous=player_previous_;c.forward=forward_of(player_.yaw);
@@ -962,6 +1339,8 @@ void RaceSession::other_cars(size_t self,RoboCarState& state) const {
     for(size_t k=0;k<8;++k) if(used[k] && int(k)!=me.vehicle) state.others[size_t(state.other_count++)]=by_slot[k];
 }
 void RaceSession::drive(const DriveInput& input) {
+    count_start_boost(body_,tuning_);
+    const Vec3 last_start=player_previous_; // +0x173 as the autopilot reads it: the last update's start
     player_previous_=player_.position;
     player_.steer=update_steering(player_.steer,tuning_,input);
     const SpeedState before=player_.speed;
@@ -974,9 +1353,33 @@ void RaceSession::drive(const DriveInput& input) {
     if(body_.turbo>0) {row.top_speed*=turbo_top;row.convergence*=turbo_convergence;}
     // 0x466f91: more than 6 updates in the air skips the throttle and brake
     // (the Wine sh_t1 jump holds its speed from airtime 7).
+    if(autopilot()) {
+        // 0x4a2df8: once the race has ended the car is robot-driven
+        // (provisional, see autopilot_): the route driver.
+        // The car drives on after its own finish too (Wine cc_t1: lap 4,
+        // speed 0.56 for 40 s after the crossing).
+        if(!body_.hit.active()) {
+            RoboCarState state;
+            state.position=player_.position;state.forward=forward_of(player_.yaw);state.previous=last_start;
+            state.speed=player_.speed.speed;state.top_speed=tuning_.top_speed;state.surface=player_.surface;
+            state.slot=player_.vehicle;state.progress=race_distance(-1);
+            for(size_t j=0;j<opponents_.size() && state.other_count<8;++j) {
+                if(opponent_bodies_[j].hidden) continue;
+                const Opponent& o=opponents_[j];OtherCar oc;
+                oc.slot=o.vehicle;oc.position=o.car.position;oc.previous=o.previous;oc.forward=forward_of(o.car.yaw);
+                oc.module=o.robot.module();oc.next=o.robot.next_module();state.others[size_t(state.other_count++)]=oc;
+            }
+            state.cache=&avoid_cache_;state.battle=mode_==1;
+            autopilot_control_=autopilot_.drive(track_,state,random_);
+        }
+        update_robot_speed(player_.speed,row,autopilot_control_.throttle,body_.grip,body_.follow_lock!=0);
+        player_.steer=robot_steering(autopilot_control_.steer);
+        update_brake_skid(body_.skid,autopilot_control_.throttle==1,autopilot_control_.throttle==2,before.speed,before.brake_state,player_.grounded);
+    } else {
     if(player_.airtime<=6) update_speed(player_.speed,row,input,body_.grip,body_.skid.kick,body_.follow_lock!=0);
     steer_creep(player_.speed,input);
     update_brake_skid(body_.skid,input.accelerate,input.brake,before.speed,before.brake_state,player_.grounded);
+    }
     // 0x46ae73: during MonsterTires (the original's +0x385 = 0) x is 0 (0x510124).
     update_slide(body_.skid,player_.speed.speed,body_.effect==7?0.f:player_.steer,farol_speed_limit(player_.vehicle),body_.grip.friction,player_.grounded);
     move(player_,body_,tuning_,true);
@@ -1162,7 +1565,7 @@ void RaceSession::use_weapon(int icon,int car) {
         case 18: {                                 // WPU_BeeHive
             const RaceCar& d=car<0?player_:opponents_.at(size_t(car)).car;
             mines_.push_back(drop_hive(d.position,d.yaw,car));
-            const int k=slot_section(mines_.back().position);mines_.back().section=k>=0?k:d.section;
+            const int k=slot_section(mines_.back().position);mines_.back().section=k;mines_.back().filed=k>=0;   // -1: the original's 0xffff
             break;
         }
         case 20: case 22: {
@@ -1479,7 +1882,7 @@ void RaceSession::drop_mine(int car,bool detour,bool oil) {
     // strict 150 test (0x4e37d0) follows.
     if(detour) mines_.back().trap=aims_[23].range;
     const int k=slot_section(mines_.back().position);
-    mines_.back().section=k>=0?k:c.section;
+    mines_.back().section=k;mines_.back().filed=k>=0;   // -1: the original's 0xffff
 }
 int RaceSession::slot_section(const Vec3& p) const {
     // 0x4a6d20 (WPU_OilSpill, BeeHive, Landmine, FallingTree, BrickWall and
@@ -1490,8 +1893,10 @@ int RaceSession::slot_section(const Vec3& p) const {
     // first (0x49dc90 at the start, 0x4a0880 on a move back; 3 x 0x94 bytes
     // per player from +0x830, six with two players). On a hit the group
     // (+0x104) is that row's section (0x49c890).
-    // Not ported: none holding it, the original leaves the group 0xffff
-    // (always drawn); natively the callers keep the dropper's section.
+    // None holding it, the original leaves the group 0xffff: always drawn,
+    // unwrapped (0x5472d0[7] is never marked). A mine keeps it (-1): its
+    // target search 0x4a71e0 wraps the cars only for section 0 or the last
+    // (0x4a7329..0x4a734a), so 0xffff wraps none, as find_target with -1.
     const int n=int(track_.sections());
     if(n<=0) return -1;
     const auto look=[&](int s)->int {
@@ -1926,6 +2331,7 @@ void RaceSession::solid_contacts(RaceCar& car,Body& b) {
             const float f=std::min(sp,0.5f)*270+25;
             b.pushes.push_back({{{n[0]*f,std::abs(n[1]*f),n[2]*f}},0.4f});
             car.speed.speed=0;
+            if(b.effect==8) end_turbo(b); // 0x46a9b6
         } else car.speed.speed*=0.8f; // 0x46a9f6: in the air
         if(b.sound_timer==0) {b.sound_timer=30;++b.rock_sounds;}
     };
@@ -2028,6 +2434,10 @@ void RaceSession::car_contacts(RaceCar& car,Body& b,Vec3& move) {
     }
     // Pushed away by (here - there) x 0.025 x 2.1 (0x512a68, 0x512a64), a
     // slot decaying by 0.6 (type 3).
+    // 0x46b822: a rand() from the race stream whose result is dropped (eax
+    // is overwritten at 0x46b827); Wine sh_t1 (2026-11-14, rand hook): 43
+    // draws with ebp = the car in contact.
+    random_.next();
     Body::Push p;
     for(size_t i=0;i<3;++i) p.force[i]=-rel[i]*0.025f*2.1f;
     p.decay=0.6f;p.yaw=turn;
@@ -2047,7 +2457,11 @@ void RaceSession::move(RaceCar& car,Body& b,const VehicleTuning& tuning,bool pla
     solid_contacts(car,b);
     b.last=car.position;b.has_last=true;
     Vec3 before=car.position;
-    const float time=frame_time_factor(race_update_seconds*1000);
+    // 0x469550: +0x163 is 1.0 when [car+0x18]+0xc0 is set, else the frame
+    // factor (0x5299b4 = 2 units x 0.4667). Wine (sh_t1, 2026-11-14): 1.0 on
+    // every robot (+0xc0 = 1), 0.9333 on the player (+0xc0 = 0); a robot's
+    // step is 204 x its speed at low speed, the player's 190.4.
+    const float time=player?frame_time_factor(race_update_seconds*1000):1.f;
     float yaw=yaw_step(car.steer,car.speed.speed,tuning,time,!player,b.grip.yaw);
     // 0x46ad3b: the player's turn x 0.3 (0x512a04) past 4 updates in the
     // air, unless +0x385 is 1 (Wine, sh_t1: 0.11 -> 0.033 a step off a ledge).
@@ -2068,7 +2482,11 @@ void RaceSession::move(RaceCar& car,Body& b,const VehicleTuning& tuning,bool pla
     // 0x4727b0 adds the slots' rotation step; 0x472890 then takes the next.
     yaw+=b.spin.step;
     decay_spin(b.spin);
-    car.yaw=wrap_angle(car.yaw+yaw);
+    // The turn is not applied yet: 0x46ba57..0x46baae add the update's angle
+    // steps ([esp+0x80] for the yaw) to +0x267/+0x26b/+0x26f and rebuild the
+    // frame (0x468280 mode 1) after the move, so the forward step 0x46ab98
+    // runs along the last update's probe axis (+0x40b - +0x423). Wine,
+    // sh_t1 v0 (2026-11-14): +0x26b turns at update 20, the position at 21.
     // 0x46a70d: a non-positive +0x3eb counts up by one and the motion block
     // (0x46ab98..0x46ac7c: probes and the forward step) is skipped; the
     // yaw, pushes and ground contact still run.
@@ -2096,7 +2514,7 @@ void RaceSession::move(RaceCar& car,Body& b,const VehicleTuning& tuning,bool pla
         for(float& c:p.force) c*=p.decay;
         push_yaw+=p.yaw;p.yaw*=p.yaw_decay<0?p.decay:p.yaw_decay;
     }
-    car.yaw=wrap_angle(car.yaw+push_yaw);
+    car.yaw=wrap_angle(car.yaw+yaw+push_yaw);
     // 0x46b357: then the fall, min(airtime^2 x m_gravity, 100), scaled by
     // the frame factor with the motion (0x46ac.. x +0x163). Checked under
     // Wine on sh_t1's first ramp: ~30 updates in the air, peak ~+510.
@@ -2216,7 +2634,7 @@ void RaceSession::wall_contacts(RaceCar& car,Body& b,const Vec3& frame_position)
     // 0x46c5ad: a push whose unit y is below 0.92 (a wall, not a floor)
     // ends a running TurboSpeed (+0x385 = 8): the rows back, speed x 0.4.
     const float length=std::sqrt(dot(push,push));
-    if(length>0 && push[1]/length<0.92f && b.effect==8) {b.turbo=0;b.effect=-1;car.speed.speed*=0.4f;}
+    if(length>0 && push[1]/length<0.92f && b.effect==8) {end_turbo(b);car.speed.speed*=0.4f;}
     // 0x46c607: in the air (+0x8a7 > 4), a hit on flags 0x600000 sets
     // +0x157 and keeps the unit push in +0x23b.
     if((flags&0x600000) && car.airtime>4 && length>0) {b.glide=1;for(size_t i=0;i<3;++i) b.glide_dir[i]=push[i]/length;}
@@ -2240,21 +2658,18 @@ int RaceSession::carry_across_seam(Vec3& at,int& section,std::initializer_list<V
     // it passes the row's exit or entry WPortal (0x4a1a20). From the last
     // row of the last section into section 0 its matrix is multiplied by
     // the WMOD transform count + 3 (0x4a23c2, flag 0x100000), and back by
-    // count + 5 (0x4a25b5, 0x200000). Natively (provisional, as for the far
-    // robots): no route under it, but one through the transform.
+    // count + 5 (0x4a25b5, 0x200000). The test is the portal's: past the
+    // last section's exit WPortal it wraps into section 0, past section 0's
+    // entry WPortal back into the last (one row per section on the shipped
+    // courses, so the row's portals are the route's).
     const int last=int(track_.sections())-1;
-    if(last<=0 || (section!=0 && section!=last) || track_.route(at).hit) return 0;
-    for(const int k:{1,-1}) {
-        if(k>0?section!=last:section!=0) continue;
-        const Matrix4& m=k>0?track_.wrap():track_.unwrap();
-        const Vec3 moved=transform_point(m,at);
-        const RaceTrack::Route r=track_.route(moved);
-        if(!r.hit) continue;
-        at=moved;section=r.section;
-        for(Vec3* v:along) *v=rotate(m,*v);
-        return k;
-    }
-    return 0;
+    if(last<=0 || (section!=0 && section!=last)) return 0;
+    const int k=track_.portal_test(section,at);
+    if(!(k>0 && section==last) && !(k<0 && section==0)) return 0;
+    const Matrix4& m=k>0?track_.wrap():track_.unwrap();
+    at=transform_point(m,at);section=k>0?0:last;
+    for(Vec3* v:along) *v=rotate(m,*v);
+    return k;
 }
 TrackSurface RaceSession::ground(float x,float z,float top,float bottom) const {
     TrackSurface s=track_.ground(x,z,top,bottom);
@@ -2476,6 +2891,9 @@ void RaceSession::crossings(RaceCar& car,Body& b,const Vec3& before,bool player)
 }
 void RaceSession::count_lap(Body& b,bool player) {
     if(phase_!=Phase::Racing || mode_==1) return; // a battle has no laps
+    // Finished cars drive on; their count stays (provisional: under Wine the
+    // robots' +0x19f stayed 4 for the 40 s watched, less than a lap).
+    if(b.finished) return;
     ++b.laps;b.visited=1;b.started=true;b.lap_mark=true;
     if(player && b.laps>=1 && b.laps<=3) {
         // 0x4a33ac..0x4a33f6: each lap's time, the race timer less the laps before.
@@ -2490,7 +2908,17 @@ void RaceSession::count_lap(Body& b,bool player) {
         // race at once (state 4) and stops and times both players (0x403bd4,
         // +0x19b = 2, 0x4a2dee..0x4a2e60). So the first player to finish ends it.
         const bool human=player || (two_players() && &b==&opponent_bodies_[0]);
-        if(human) {phase_=Phase::Finished;finish_update_=updates_;finish();}
+        if(human) {phase_=Phase::Finished;finish_update_=updates_;finish();start_autopilot();}
+        else if(!two_players() && !opponents_.empty() && phase_==Phase::Racing &&
+                std::all_of(opponent_bodies_.begin(),opponent_bodies_.end(),[](const Body& o){return o.finished;})) {
+            // 0x4a8b2f..0x4a8b61 (the rank update 0x4a8a10, read by 0x4a2dca):
+            // it returns 1 once every car in the robot list (+0x60, count
+            // +0x40, filled at 0x49d6ec..0x49d752 with the cars other than the
+            // player) has a lap +0x19f past the lap count (app +0x1a70). The
+            // race then ends as when the player finishes (state 4, the player
+            // on autopilot, 0x4a2df8). Two players have no robots (count 0).
+            phase_=Phase::Finished;finish_update_=updates_;finish();start_autopilot();
+        }
     }
 }
 void RaceSession::count_glide(Body& b,int walls) {
@@ -2582,7 +3010,7 @@ bool RaceSession::virtual_robot(size_t i,std::vector<int>& placed) {
     // 0x4e530f: +0x2b5 += +0x4c a robot update; 0x4a1fe7: past the row's
     // +0x34 it starts the next row.
     const int before=b.virtual_distance;
-    b.virtual_distance+=204;   // the probe span, as in the far step
+    b.virtual_distance+=o.span;   // +0x4c, as in the far step
     // 0x4a43f4..0x4a444c (the lap pass, per hidden robot): in section 0,
     // coming from a later one (+0x1bb > 0) and past the manager's +0x34, the
     // start line's distance into row 0 (0x49e552: the row length less its
@@ -2616,6 +3044,9 @@ bool RaceSession::virtual_robot(size_t i,std::vector<int>& placed) {
     for(size_t a=0;a<3;++a) car.position[a]=f[12+a]+z[a]*200+x[a]*side;
     car.position[1]+=50;
     car.yaw=std::atan2(-z[0],z[2]);
+    // 0x4a2223..0x4a2248: the angles +0x267/+0x26b/+0x26f are taken from the
+    // new frame (0x4035e9), so the yaw a later rebuild uses is the portal's.
+    o.angle_yaw=car.yaw;
     car.grounded=false;car.airtime=1;
     b.hidden=false;b.virtual_distance=0;b.shown_section=car.section;b.shown_updates=0;
     o.previous=car.position;

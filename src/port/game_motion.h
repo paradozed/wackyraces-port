@@ -57,6 +57,9 @@ public:
     void toggle_freeze() {flags_^=4;}
     // The controller's time (+0x2c), as WPU_Flipper writes it (0x4d9bff, 0x4da02e).
     void set_time(int32_t t) {time_=t;}
+    // The speed +0x24 each step's dt is scaled by (0x43fed9; 1 from 0x43fdbb),
+    // as Kosza writes it through 0x440a70.
+    void set_speed(float s) {speed_=s;}
     // Advance by dt and accumulate into pairs (9 per segment); pairs may be
     // null, as for the zero step that play makes.
     void update(int32_t dt,MotionPairs* pairs);

@@ -2,6 +2,7 @@
 #define WPC_RACE_OBJECTS_H
 #include "game_scene.h"
 #include "game_transform.h"
+#include "game_random.h"
 #include <algorithm>
 #include <array>
 #include <functional>
@@ -482,8 +483,55 @@ struct LogJam {
 };
 struct SolidSphere {Vec3 centre{};float radius=0;int rock=-1;bool cylinder=false;float height=0;int bump=-1,gate=-1;int golden=-1,door=-1;};
 struct RouteWeight {int section=-1;uint32_t polygon=0;int link=0,weight=0;};
-struct CarProbe {Vec3 position{};bool robot=false,hidden=false;int bridge=-1;Vec3 forward{};int section=-1;bool busy=false;bool gadget_idle=true;uint32_t surface=0;};  // hidden: flag 0x100, out of the queries; busy: WackyAutoBomba running
+struct CarProbe {Vec3 position{};bool robot=false,hidden=false;int bridge=-1;Vec3 forward{};int section=-1;bool busy=false;bool gadget_idle=true;uint32_t surface=0;float speed=0;};  // hidden: flag 0x100, out of the queries; busy: WackyAutoBomba running; speed +0x3ef
 struct ObjectHit {size_t car=0;};
+// Kosza (vtable 0x5125c0, built by 0x457460; a WGoPath): a course creature
+// on a GDHModel or GDModel (sh_t1's five birds, cc_t1's two, dt_t3's six).
+// Members type 0xd7, mode 0xd8, r 0xd9, speed 0xda, wait 0xdb (the course
+// archives' ids, 0xd5.. in the executable). Its start (slot +0x10,
+// 0x457a00) scatters four waypoints round the node's place +0x9c (modes
+// 4..7: x and z in [0, r), y in [0, r/3) in modes 5 and 7, from the race
+// stream), sets the rate +0x70 = |frame row 2| x 0x52a980[type] x speed /
+// D (D = 4r in modes 4..7, 2 pi r in 0 and 3, the GDPath's length in 1 and
+// 2), and starts the model's clip at a random frame (frand x 300). With a
+// wait it waits (+0x131 = 0, 0x458e90), else it moves (1, 0x458f10) and
+// runs an update at once. Update 0x459030: waiting, frand() < 0.1 twice
+// starts it moving; moving, t (+0x6c) grows by 2/3 x rate a frame tick
+// (0x5299b4 x 0x512620) and modes 4..7 draw the waypoint two ahead anew when
+// the segment int(4 frac t) changes (0x458230); a mode 1/2 creature at its
+// path's end goes back to t = 0 and waits. State 2 (after a car squashed it,
+// not ported) moves again on frand() < 0.01. Wine sh_t1 (2026-11-14): t =
+// 0.28 at GO and a change every 0.25. Each move places the node before t
+// grows: modes 6/7 on 0x458230's Hermite through the segment's waypoints,
+// 4/5 on its chord, 0 on a circle and 3 on a Lissajous figure round +0x9c
+// (0x458be0), 1 along the GDPath (0x444be0); with m_bRotate (+0x48, 1 in
+// every course) turned along the motion (creature_place). Not ported: mode
+// 2's walk 0x456af0 (no course uses it). With m_bCollision (only
+// cc_t1/cc_t2/cc_b's mode 1 creature) a car touching it after its move
+// (0x459311, query 0x4a60c0 mask 0x100) stops it (state 2, 0x458fa0) and,
+// coming at it, squashes it: y axis x 0.1 (0x43b190); see step_creatures.
+struct Creature {
+    uint32_t node=0;
+    int type=0,mode=0;float r=1000,speed=100,wait=0;
+    Vec3 centre{};float scale=1,path_length=0;bool clip=false;
+    bool loop=false;float start=0,end=1;
+    bool rotate=true,closed=false;         // m_bRotate +0x48, the GDPath's m_bClosed
+    bool collision=false;                  // m_bCollision +0x58
+    std::vector<ScenePrim> prims;          // the node's PRIM (local)
+    std::vector<Vec3> path;                // modes 1/2: the GDPath's points (world)
+    Matrix4 base=identity_matrix();        // +0x74: the node's frame at init (world)
+    Matrix4 placed=identity_matrix();      // the frame the last move wrote (world)
+    // The GDHModel's clip 0 (0x405e1b(0, 0, 1, -1) at init): its start time
+    // +0x2c = int(frand x 300) (0x512610), its speed +0x24 = speed x
+    // 0x52a990[type] (0.1, 0.03, 0.1, 0.1), x 2/3 each moving update
+    // (0x459233, 0x440a70); frozen (command 3, 0x4569a0) while waiting or
+    // squashed, running while moving (0x458e90, 0x458f10, 0x458fa0).
+    int clip_time=0;float clip_speed=1;bool clip_frozen=false;
+    std::array<Vec3,4> points{};           // +0xfd..+0x129
+    float t=0,rate=0;int segment=0;        // +0x6c, +0x70, +0x12d
+    int state=-1;                          // +0x131
+    std::vector<int> sections;
+};
 class CourseObjects {
 public:
     void load(const Scene& scene);
@@ -500,9 +548,17 @@ public:
     // a crossing sets to 5 (wait) and back to 0. An object runs while
     // one of its sections is player_section or next to it (of sections, a
     // loop).
-    void update(const std::vector<CarProbe>& cars,std::vector<ObjectHit>& hits,std::vector<int>& effect,int player_section=-1,size_t sections=0);
+    // random: the race stream (0x5472c8); the objects' rand() calls (0x404a8e
+    // -> 0x430f60, 0x40321a -> 0x430ec0) draw from it. None (synthetic
+    // checks): a local stream.
+    void update(const std::vector<CarProbe>& cars,std::vector<ObjectHit>& hits,std::vector<int>& effect,int player_section=-1,size_t sections=0,MsvcRandom* random=nullptr);
     const std::vector<TramCrossing>& crossings() const {return crossings_;}
     const std::vector<PathMover>& movers() const {return movers_;}
+    // Kosza: the start draws at the race load, then one update a frame
+    // before the cars (Wine: their draws come first in each update).
+    void init_creatures(MsvcRandom& random);
+    void step_creatures(MsvcRandom& random,const std::vector<CarProbe>& cars,int player_section=-1,size_t sections=0);
+    const std::vector<Creature>& creatures() const {return creatures_;}
     const std::vector<LogRide>& log_rides() const {return log_rides_;}
     const std::vector<MistyBridge>& bridges() const {return bridges_;}
     const std::vector<Geyser>& geysers() const {return geysers_;}
@@ -569,9 +625,15 @@ private:
     std::vector<ModelSpin> model_spins_;
     std::vector<CarHeld> held_;
     std::vector<bool> hovering_;
-    uint32_t geyser_random_=1; // provisional: the original draws from rand()
+    uint32_t geyser_random_=1; // the local stream when update has none
+    MsvcRandom* stream_=nullptr;
+    int draw_random() {   // rand() (0x430e40) on the race stream
+        if(stream_) return stream_->next();
+        geyser_random_=geyser_random_*214013u+2531011u;return int(geyser_random_>>16&0x7fff);
+    }
     std::vector<TramCrossing> crossings_;
     std::vector<PathMover> movers_;
+    std::vector<Creature> creatures_;
     std::vector<std::vector<bool>> inside_;  // per crossing, per car: +499 bit 2
 };
 }

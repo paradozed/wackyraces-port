@@ -25,7 +25,6 @@ private:
         std::vector<const Node*> sounds;
         uint32_t engine=0,skid=0;
         float min_pitch=1,max_pitch=1,pitch_rate=0,pitch=1; // m_minpitch/m_maxpitch/m_pitchmul, +0x3bb
-        uint32_t random=7;
         RaceSession::CarSounds heard{};  // the robots' counters already played
         uint64_t wall_until=0;           // +0x3e7 for the wall sound
     };

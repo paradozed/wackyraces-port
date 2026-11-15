@@ -119,4 +119,4 @@ dropped weapons fire at once and leave the state set.
 - The section of a chisel's route node (under the brick).
 - `0x4a71e0` is reduced to the nearest shown car not being hit; its heading,
   section and last-section rules are not applied to the bricks' 2pi queries.
-- The update order within a tick (brick, then boulder; bricks after the cars).
+- The update order within a tick (brick, then boulder). (The bricks run before the cars since 2026-11-15, `analysis/race-stream-20261114.md`.)

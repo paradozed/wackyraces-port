@@ -293,7 +293,12 @@ int main(int argc,char **argv) {
                 const bool menu_race=name==requested_course;
                 const int vehicle2=menu_race && controller.session().player_mode==1 ? controller.session().vehicles[1] :
                                    name==config.race ? config.vehicle2 : -1;
-                next->session=std::make_unique<wpc::RaceSession>(*next->track,vehicle,uint32_t(wpc_time_now()*1000),mode,vehicle2);
+                // The race load reseeds the game's stream with 0x1312d6e (0x431fc3),
+                // so a race's grid and draws are the same each time, as under Wine.
+                // WPC_GRID_SEED overrides it (debug).
+                const char* gs=std::getenv("WPC_GRID_SEED");
+                const uint32_t seed=gs && *gs?uint32_t(std::strtoul(gs,nullptr,10)):0x1312d6eu;
+                next->session=std::make_unique<wpc::RaceSession>(*next->track,vehicle,seed,mode,vehicle2);
                 {int e=0,c=0;if (mode==2 && wpc::course_indices(name,e,c) && e*4+c<20) next->session->set_record(controller.session().profile.records[size_t(e*4+c)]);}
                 // The menu's POUSSIERE and METEO options (0x6f4650, 0x6f464c).
                 next->session->set_dust_option(controller.session().dust);
