@@ -144,7 +144,7 @@ that WackyAutoBomba type (e.g. `0x80`) at that race update.
   the grid, lap splits, the course record and the finish state 0xf) and two players (page 61's
   cursors, then a split-screen race without robots that ends when the first player finishes;
   [two players](analysis/two-player-20261101.md)), including the two-player
-  battle on the `*_b.wgm` arenas (hits received, the end at five;
+  battle on the `*_b.wgm` arenas (hits received, the end at five, the battle roulettes;
   [battle](analysis/battle-20261102.md)).
 - Racing on the Championship I courses `cc_t1`, `sh_t1`, `dt_t1` and `ct_t1`:
   WMOD route sections, WGNR ground in each brick's frame, the rigid loop

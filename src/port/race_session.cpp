@@ -651,16 +651,19 @@ void RaceSession::autopilot_items() {
     }
 }
 void RaceSession::human_items(Items& it,int vehicle,int place,Body& body,bool can_use,const DriveInput& input,int car) {
-    // 0x4679d0 for a human player (+0xc0 != 1) in a race (not battle mode 1);
+    // 0x4679d0 for a human player (+0xc0 != 1), in races and battles;
     // input.gadget/weapon are presses (0x6e42b0). car: -1 player 1, 0 player 2.
+    const bool battle=mode_==1;
     switch(it.gadget_state) {
         case 0:
             if(it.gadget<0) {it.gadget=vehicle;it.gadget_state=3;}
             break;
         case 1: {
             it.gadget=(random_.next()&3)+7;
-            // Trailing racers (rank 4 and below) are favoured with 7 or 8.
-                        if(place>3 && random_.unit()<float(place-4)*0.15f+0.3f) it.gadget=random_.unit()>=0.7f?8:7;
+            // 0x467a63: in a battle (app +0x1a60 = 1) icons 7 and 9 become 8 and 10.
+            if(battle && (it.gadget==7 || it.gadget==9)) ++it.gadget;
+            // Trailing racers (rank 4 and below) are favoured with 7 or 8 (not in a battle, 0x467ab8).
+                        if(!battle && place>3 && random_.unit()<float(place-4)*0.15f+0.3f) it.gadget=random_.unit()>=0.7f?8:7;
             it.gadget_steps=1;it.gadget_tick=1;it.gadget_state=2;
             break;
         }
@@ -670,6 +673,7 @@ void RaceSession::human_items(Items& it,int vehicle,int place,Body& body,bool ca
                 if(++it.gadget_tick==5) {
                     ++it.gadget_steps;it.gadget_tick=0;
                     if(++it.gadget==11) it.gadget=7;
+                    if(battle && (it.gadget==7 || it.gadget==9)) ++it.gadget; // 0x467bdb: 8 and 10 only
                     if(it.gadget_steps==10) it.gadget_state=3;
                 }
             } else it.gadget_state=3;
@@ -695,7 +699,9 @@ void RaceSession::human_items(Items& it,int vehicle,int place,Body& body,bool ca
             break;
         case 1: {
             it.weapon=random_.next()%9+0x11;
-                        if(place>3 && random_.unit()<float(place-4)*0.1f+0.5f) {
+            // 0x467d71: a battle draws again, rand()%3 → 0x13, 0x18, 0x19.
+            if(battle) {const int k=random_.next()%3;it.weapon=k==0?0x13:k==1?0x18:0x19;}
+                        if(!battle && place>3 && random_.unit()<float(place-4)*0.1f+0.5f) {
                 const float f=random_.unit();
                 it.weapon=f>=0.25f?(f>=0.5f?0x15:0x19):0x18;
             }
@@ -707,6 +713,7 @@ void RaceSession::human_items(Items& it,int vehicle,int place,Body& body,bool ca
                 if(++it.weapon_tick==5) {
                     ++it.weapon_steps;it.weapon_tick=0;
                     if(++it.weapon==0x1a) it.weapon=0x11;
+                    if(battle) it.weapon=it.weapon<0x13?0x13:it.weapon<0x18?0x18:it.weapon; // 0x467f2e: 0x13, 0x18, 0x19 only
                     if(it.weapon_steps==10) {it.weapon_preview=false;it.weapon_state=3;}
                 }
             } else it.weapon_state=3;

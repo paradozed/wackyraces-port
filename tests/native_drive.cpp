@@ -709,6 +709,23 @@ void test_battle(const wpc::RaceTrack& track,const std::string& path) {
     require(avoiding==0,"a battle robot never avoids");
     require(battle.finish_state()==10 && battle.frags(0)==5 && !battle.battle_lost() && battle.laps_completed()==0,"five hits end the battle, the player wins");
     require(battle.accept(),"Enter at once in one player (0x4a31fe)");
+    // 0x4679d0 in a battle (app +0x1a60 = 1): the gadget roulette holds 8 and
+    // 10 only (0x467a63, 0x467bdb), the weapon draw is rand()%3 → 0x13, 0x18,
+    // 0x19 and its roulette keeps to them (0x467d71, 0x467f2e).
+    int gadgets=0,weapons=0;
+    for(const auto& p:track.power_ups()) {
+        if(p.type>1) continue;
+        wpc::RaceSession pick(track,3,1,1);
+        for(int i=0;i<200;++i) pick.update({});
+        pick.place(p.position[0],p.position[2],0);
+        for(int i=0;i<70;++i) pick.update({});
+        const int g=pick.gadget_icon(),w=pick.weapon_icon();
+        if(pick.charge_level()==0) continue; // placed on an overhang above it (cc_b, ct_b): not taken
+        if(p.type==0) {require(g==8 || g==10,"battle gadget roulette: 8 or 10");++gadgets;}
+        else {require(w==0x13 || w==0x18 || w==0x19,"battle weapon roulette: 0x13, 0x18 or 0x19");++weapons;}
+    }
+    std::printf("%s: battle roulettes, %d gadgets %d weapons\n",path.c_str(),gadgets,weapons);
+    require(gadgets>0 && weapons>0,"battle pickups taken");
     // Two players (the menu's only battle, page 47): player 2 at the second
     // spawn; its fifth hit ends with the counter at 60 (0x4a31ef).
     wpc::RaceSession two(track,3,1,1,4);

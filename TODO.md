@@ -551,7 +551,8 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   tests every course object; `WPrimCylinder` 0x482310, car contacts and
   the 0x10000/0x40000 hits are ported); the pickup range matches Wine (2026-11-16, cc_t1: taken up to 174
   from the pickup over the road, not from 175, in both builds, `analysis/native-powerups-20261028.md`);
-  the roulette outcomes are not compared with Wine.
+  the roulette outcomes are not compared with Wine (the rule re-read 2026-11-16; the battle branch of
+  `0x4679d0`, gadgets 8/10 and weapons `0x13`/`0x18`/`0x19`, ported then, `analysis/native-powerups-20261028.md`).
 - [ ] Pause remainders: (page 243 is not shown in two players either, Wine 2026-11-12: the option list at
   once, `analysis/pause-menu-20261030.md`; its list sits about 20 px higher than the port's there: static, not a slide, the page data and the layout `0x48bab0` are the same in both modes, source not found, 2026-11-12); the x shift of the list seen under Wine
   between the root and the option node; force-feedback output (`0x417180` on reload).
