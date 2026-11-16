@@ -250,14 +250,17 @@ code before starting one. The follow camera (`0x478070`) has since been ported
     Wine on `cc_t1`: textures at half intensity (`0x4b08b1`), the clear/fog colour (`0x4ae364`), the
     dome's vertex colours (`0x4b4347`).
   - The rain streaks and the snow were not compared with Wine.
-- [ ] WKBumm not compared with Wine (cactus not reached with key scripts);
-  the shadow sits further from the airborne native car than in Wine, and the
+- [ ] (WKBumm compared with Wine 2026-11-15: the car hopped next to `cc_t1`'s cactus 25 in both builds, the same
+  burst of pieces around a standing car for about a second, the cactus gone after; `analysis/car-effects-20261028.md`.)
+  The shadow sits further from the airborne native car than in Wine, and the
   native car still drowns on the bank.
   - The drowning splash was recorded in both builds (2026-11-12, `analysis/car-effects-20261028.md`). The
     column, foam and timing are close. Wine's WalkOnWater ripples merge into one swirl as the car sinks;
     the port's stay as two ring sets at the frozen front wheels. That waits on the original's drowning
     motion (`+0x947`, the car rolling in and sinking).
-- [ ] Winner scenes, remainders: not compared with Wine; the GDCamera, the WMenuItem's own placement.
+- [ ] Winner scenes, remainders: WinCrep compared with Wine on screen (2026-11-16, reached by memory writes from a
+  cc_t1 race, `analysis/native-championship-i-20261028.md`: the same frames, sequence and length); the other six scenes, DickOff,
+  the timing and the sound not compared; the GDCamera, the WMenuItem's own placement.
   (The music is settled, 2026-11-12, `analysis/native-championship-i-20261028.md`: the sound manager's play
   `+0x4c` (`0x4273a0`) first destroys the running stream (`+0x44` = `0x427430`, `+0xbc`), then opens
   `music\WinMean.snd`, which the disc lacks. So the scene is silent after the course music stops, as natively.)
@@ -423,7 +426,8 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   on the route layer.
 - [ ] Trams, remainders (the crossing lights' UV animation `0x4caf95` is
   ported, 2026-11-01, for renderer mode 1): the tram frame copy and the pi/2 turn axis
-  (provisional, not seen under Wine); the other WSaw/WRotoHill/WGoldenGate
+  (provisional; seen under Wine 2026-11-15 with the car hopped along a recorded line to dt_t1's crossing:
+  the red two-car tram upright and side-on across the road in both builds, `analysis/runtime-capture.md`); the other WSaw/WRotoHill/WGoldenGate
   states (no instance on Championship I). A
   native robot reaching the crossing at 0.817 (always-near test pack)
   flies over the dip before it and stops outside the zone, keeping state
@@ -438,7 +442,7 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   the trackers `0x4a13ae`/`0x4a234d`/`0x4a201d` and cleared by a forward crossing; and a robot shown
   into a row is no longer hidden at once on the previous section's ground, which on `dr_t2` held
   every robot hidden in section 0 with the player two sections ahead, provisional grace of 60
-  updates; `analysis/robocar-ai-20261028.md`); (the section-0 placement with `+0x93f` set, `0x4a2108`,
+  updates (dt_t1 against Wine, 2026-11-15: every hidden span 83 updates in both builds, no re-hide soon after a show in either); `analysis/robocar-ai-20261028.md`); (the section-0 placement with `+0x93f` set, `0x4a2108`,
   is ported since 2026-11-12: a robot shown in section 0 right after its lap stands at
   `m_idStartLineModel`'s frame, 611–709 from it on the 11 four-section courses, against 1100–4900 from
   row 0's portal without the branch; the mark's clearing off section 0 is provisional; not compared with
@@ -452,8 +456,10 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   2026-11-01.)
 - [ ] Vertical motion remainders: (the second `sh_t1` ramp's pitch matches: per frame under Wine it reaches
   0.493, the port's 0.491; the old 0.437 was a sampling gap, 2026-11-12, `analysis/vertical-motion-20261030.md`), the
-  robots' ×1.3 ray, the lift ray (`0x512a44`), the contact-point spreads
-  `+0x15b`/`+0x15f`, the `0x800000` return (`0x4a6730`).
+  ceiling ray (`0x46c6cf..0x46c7c4`, ported 2026-11-16 and compared with Wine on dt_t1: in the air, a one-sided ray of mask
+  `0x1e000ff` from 26 under the car to 200 above that point lowers the car by B - H under a ceiling; not a lift;
+  `analysis/vertical-motion-20261030.md`; the 26 is measured, provisional), the contact-point spreads `+0x15b`/`+0x15f`. (The robots' ×1.3 ray `0x512a40` and the
+  `0x800000` return `0x4a6730`, frame + 200 along + 50 up, are ported: `RaceSession::settle`, `respawn`.)
 - [ ] Robot lines (compared with Wine on `cc_t1`, 2026-11-12: on the same branch within ~20–30 units; the
   fork's branch is the random `0x4e9610` draw, and from the grid start too; `dt_t1` too, medians 22–44, one robot returned
   to the track under Wine at the tram crossing; the 18 other courses too: medians 4–17 from some native
@@ -543,8 +549,10 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   `analysis/native-powerups-20261028.md`).
 - [ ] Rest of the object query `0x4a5730`: the route-grid cell scan (native
   tests every course object; `WPrimCylinder` 0x482310, car contacts and
-  the 0x10000/0x40000 hits are ported); compare pickup range and roulette
-  outcomes with Wine.
+  the 0x10000/0x40000 hits are ported); the pickup range matches Wine (2026-11-16, cc_t1: taken up to 174
+  from the pickup over the road, not from 175, in both builds, `analysis/native-powerups-20261028.md`);
+  the roulette outcomes are not compared with Wine (the rule re-read 2026-11-16; the battle branch of
+  `0x4679d0`, gadgets 8/10 and weapons `0x13`/`0x18`/`0x19`, ported then, `analysis/native-powerups-20261028.md`).
 - [ ] Pause remainders: (page 243 is not shown in two players either, Wine 2026-11-12: the option list at
   once, `analysis/pause-menu-20261030.md`; its list sits about 20 px higher than the port's there: static, not a slide, the page data and the layout `0x48bab0` are the same in both modes, source not found, 2026-11-12); the x shift of the list seen under Wine
   between the root and the option node; force-feedback output (`0x417180` on reload).
@@ -635,8 +643,7 @@ code before starting one. The follow camera (`0x478070`) has since been ported
   `0x458be0`, GDPath `0x457f80`), the frame along the motion (`m_bRotate`), the hidden waiting state (flag
   0x100), the clip (speed `0x52a990`, start frame, freeze) and the car hit (`0x459311`/`0x45905b`) are ported;
   sh_t1's birds and cc_t1's two creatures match Wine's node frames (birds until the stream splits at t 0.5).
-  Open: mode 2's walk `0x456af0` (unused); the hit not compared with Wine (mode 4 on dt_t3 is, 2026-11-14); the car order of
-  the object query (`creature_touch`, provisional); the clip's pace on screen (the view's 10 per update).
+  The hit was compared with Wine on cc_t1 (2026-11-15): the car parked on its line stops it unsquashed and squashes it once it moves, as natively, now that the query's radius is the PRIM's own, unscaled (`0x4a6198`; it stopped one step early before). A moving car's squash and the restart (frand() < 0.01, counters patched into the original) match Wine too (2026-11-15). Open: mode 2's walk `0x456af0` (unused); a reversing car's touch not compared with Wine (mode 4 on dt_t3 is compared, 2026-11-14); the object query's car order is Wine's (the manager's list in grid order, the player first, read on cc_t1 2026-11-16; two players not checked); the clip's pace matches Wine (2026-11-16: the bird's controller, `[node + 0x166]` element 2, steps 20 an update = dt 10 x speed 2, as the view does).
 - [ ] Course object classes not ported, by course (scene census, 2026-11-06;
   they probably explain several driving failures, as WMisty did on `cc_t2`):
   `cc_t4` none (WChiselCrossover, WRolling and their WBlowUp ported,

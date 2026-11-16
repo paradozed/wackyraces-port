@@ -651,16 +651,19 @@ void RaceSession::autopilot_items() {
     }
 }
 void RaceSession::human_items(Items& it,int vehicle,int place,Body& body,bool can_use,const DriveInput& input,int car) {
-    // 0x4679d0 for a human player (+0xc0 != 1) in a race (not battle mode 1);
+    // 0x4679d0 for a human player (+0xc0 != 1), in races and battles;
     // input.gadget/weapon are presses (0x6e42b0). car: -1 player 1, 0 player 2.
+    const bool battle=mode_==1;
     switch(it.gadget_state) {
         case 0:
             if(it.gadget<0) {it.gadget=vehicle;it.gadget_state=3;}
             break;
         case 1: {
             it.gadget=(random_.next()&3)+7;
-            // Trailing racers (rank 4 and below) are favoured with 7 or 8.
-                        if(place>3 && random_.unit()<float(place-4)*0.15f+0.3f) it.gadget=random_.unit()>=0.7f?8:7;
+            // 0x467a63: in a battle (app +0x1a60 = 1) icons 7 and 9 become 8 and 10.
+            if(battle && (it.gadget==7 || it.gadget==9)) ++it.gadget;
+            // Trailing racers (rank 4 and below) are favoured with 7 or 8 (not in a battle, 0x467ab8).
+                        if(!battle && place>3 && random_.unit()<float(place-4)*0.15f+0.3f) it.gadget=random_.unit()>=0.7f?8:7;
             it.gadget_steps=1;it.gadget_tick=1;it.gadget_state=2;
             break;
         }
@@ -670,6 +673,7 @@ void RaceSession::human_items(Items& it,int vehicle,int place,Body& body,bool ca
                 if(++it.gadget_tick==5) {
                     ++it.gadget_steps;it.gadget_tick=0;
                     if(++it.gadget==11) it.gadget=7;
+                    if(battle && (it.gadget==7 || it.gadget==9)) ++it.gadget; // 0x467bdb: 8 and 10 only
                     if(it.gadget_steps==10) it.gadget_state=3;
                 }
             } else it.gadget_state=3;
@@ -695,7 +699,9 @@ void RaceSession::human_items(Items& it,int vehicle,int place,Body& body,bool ca
             break;
         case 1: {
             it.weapon=random_.next()%9+0x11;
-                        if(place>3 && random_.unit()<float(place-4)*0.1f+0.5f) {
+            // 0x467d71: a battle draws again, rand()%3 → 0x13, 0x18, 0x19.
+            if(battle) {const int k=random_.next()%3;it.weapon=k==0?0x13:k==1?0x18:0x19;}
+                        if(!battle && place>3 && random_.unit()<float(place-4)*0.1f+0.5f) {
                 const float f=random_.unit();
                 it.weapon=f>=0.25f?(f>=0.5f?0x15:0x19):0x18;
             }
@@ -707,6 +713,7 @@ void RaceSession::human_items(Items& it,int vehicle,int place,Body& body,bool ca
                 if(++it.weapon_tick==5) {
                     ++it.weapon_steps;it.weapon_tick=0;
                     if(++it.weapon==0x1a) it.weapon=0x11;
+                    if(battle) it.weapon=it.weapon<0x13?0x13:it.weapon<0x18?0x18:it.weapon; // 0x467f2e: 0x13, 0x18, 0x19 only
                     if(it.weapon_steps==10) {it.weapon_preview=false;it.weapon_state=3;}
                 }
             } else it.weapon_state=3;
@@ -780,6 +787,7 @@ void RaceSession::place(float x,float z,float yaw) {
     player_.position={{x,g.y,z}};player_.yaw=yaw;player_.section=g.section;
     settle(player_,body_,true);init_cameras();
 }
+void RaceSession::lift(float y) {player_.position[1]=y;player_.airtime=1;player_.pitch=player_.roll=0;player_.up={{0,1,0}};}
 void RaceSession::set_dust_option(bool on) {
     body_.fx.set_smoke(on);
     for(Body& b:opponent_bodies_) b.fx.set_smoke(on);
@@ -2538,6 +2546,18 @@ void RaceSession::move(RaceCar& car,Body& b,const VehicleTuning& tuning,bool pla
         car.up=tilted_up(car.yaw,car.pitch,car.roll);
     }
     wall_contacts(car,b,before);
+    // 0x46c6cf: in the air (+0x8a7 > 1, the last settle's count) a ray of mask
+    // 0x1e000ff (0x4a4830 -> 0x4054e3, one-sided) runs from P up to P + 200
+    // (0x512a44); P is the car's place less 26 along its up axis (provisional:
+    // the mean y of +0x40f/+0x433 less 50 along up, 0x46bafe..0x46bc41, measured
+    // 26 under +0x28c under Wine). A ceiling met turned towards P lowers the car
+    // by B - H (0x46c766..0x46c7c4: +0x28c += H.y - B.y). Wine, dt_t1 under the
+    // roof at y 532.8: P.y 410.6, H.y 532.8, +0x28c 436.6 -> 358.4 next update.
+    if(car.airtime>1) {
+        Vec3 p{};for(size_t i=0;i<3;++i) p[i]=car.position[i]-26*car.up[i];
+        const TrackSurface h=track_.ray(p,{{p[0],p[1]+200,p[2]}},0x01e000ff);
+        if(h.hit) car.position[1]+=h.point[1]-(p[1]+200);
+    }
     const int loops=car.loops;
     settle(car,b,player);
     // Compare the start-line crossing in the frame the car now occupies.

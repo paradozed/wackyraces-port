@@ -232,3 +232,27 @@ So the outro plays only after Championship V is won. The random check before the
 - WinMean skipped with Enter loads DickOff.
 - `native_menu_test` checks `PlayWinner` for Championships I and V.
 - Not compared with Wine. The music during the scene is unknown: there is no `Music\Win*.snd`, so the native port is silent.
+
+## A winner scene under Wine (2026-11-16)
+
+Reached from a single race on cc_t1 (scratch prefix, Xvfb `:77`, `build/wine-scratch/win_cc1.sh`):
+
+- during the countdown, app `+0x1a60` = 3 (app `[0x5472b8]`), `0x6f41d8` = 3 (the last race's environment),
+  vehicle 3's total `0x6f4568 + 0x10d + 3` = 100, and the player's laps `+0x19f` = 3, which ends the race at
+  once (the player ranked 7th); then Return shows the championship points page;
+- on that page the rank `0x6f41c4` and the car's `+0x1af` are held at 1 (the game rewrites them), and Return
+  runs `0x486fe0` (counters on its entry and after each check: mode 3, leader `0x496d90`, rank <= 3,
+  environment 3), which queues `win\wincrep.wgm` (app `+0x1850`, resolved to `D:\win\wincrep.wgm`);
+- the scene's update `0x494be0` skips at once when the word `0x52aada` (0x40) meets player 1's input
+  `0x6e42b0`: the Return that leaves the points page sets `0x1400040` there for about 70 ms, and the scene
+  loads in about 20 ms under Wine. For the capture the skip call `0x494c02` was patched out (no keys pressed
+  afterwards).
+
+The scene then played 11.65 s and its sequence ended (`0x494e98` -> `0x494b20`), loading `MENU.WGM`.
+Native `WPC_WINNER=3,3,0` (Xvfb `:78`), captured the same way (every 0.3 s): the same fade from black, the
+Creepy Coupe's driver with the trophy, the passenger's jump onto his shoulders and back, the slide to Dick
+Dastardly and Muttley, and the menu after about the same number of captures (25 natively, 27 under Wine).
+Two frames in the same pose differ in 1.7 % of the pixels beyond an 8 % fuzz, along the outlines.
+
+Not compared: the scene's exact timing (the captures are not clocked), its sound, the other six scenes and
+DickOff; whether the original on real hardware also skips the scene with that Return (load time).

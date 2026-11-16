@@ -58,7 +58,15 @@ flag `0x8000`. If its state is 0:
 
 So a power-up is taken when the car's origin, at road level, comes within 200
 units of the power-up's origin, 100 units above the road. That's about 173
-units of horizontal reach over the road. The respawn check (`0x4040e8`) uses
+units of horizontal reach over the road.
+
+Compared with Wine (2026-11-16, cc_t1's weapon pickup at (-4562.0, 1233.8, 5794.9), ground 1133.9 along -x):
+the car taken there along a robot's line, then for each trial 4 s at (-5262, 5794.9), its charge `+0x399`
+zeroed, moved to (-4562 - d, 1134.1, 5794.9) (it settles at 1133.8) and the charge read 0.4 s later (`wmem.py
+reach`). Taken at d = 160, 166, 168, 170, 172, 173, 174; not at 175, 176, 178, 180, 190, 200. Native, the
+player placed at the same points after GO (a fresh race each): taken up to 174, not from 175, the same 13
+answers. (The bare sphere sum with the car's origin 99.9 under the centre gives 173.3; both builds reach one
+unit further, so the spheres are not exactly at those two points; not traced.) The respawn check (`0x4040e8`) uses
 the same overlap.
 
 `node_prims` (`game_scene`) decodes `PRIM` chunks. `RaceTrack` keeps each
@@ -76,6 +84,16 @@ squares and all touched at once.
 | 3 | key + charge > 0 + not drowning + no active effect (`+0x385`): charge −1, spawn the effect (`0x4d2970`), state 4 | icons 0x14/0x16 first spawn a held preview (`+0x395`); then the same with `+0x389` |
 | 4 | when the effect has ended, state 0 | the same |
 
+- **Battle (app `+0x1a60` = 1, read 2026-11-16, ported):** the same routine runs in a battle with
+  three changes. Gadget icons 7 and 9 become 8 and 10, after the draw (`0x467a63`) and after every
+  roulette step (`0x467bdb`), so the gadget roulette shows 8 and 10 only. The weapon's `rand()%9+0x11`
+  is followed by a second draw, `rand()%3`: 0 → `0x13`, 1 → `0x18`, 2 → `0x19` (`0x467d71`); each
+  roulette step then raises an icon below `0x13` to `0x13` and one below `0x18` to `0x18` (`0x467f2e`),
+  so it cycles `0x13`, `0x18`, `0x19`. The rank favour is skipped for both slots (`0x467ab8`,
+  `0x467de8`). `RaceSession::human_items` follows; `native_drive_test` on the five `*_b.wgm` arenas
+  takes every pickup it can stand on (two sit under an overhang, on `cc_b` and `ct_b`, and are skipped)
+  and checks the outcome; with the rule disabled `dt_b` fails. Not compared with Wine (a battle needs
+  two players' input there).
 - **Random numbers:** MSVC `rand()` seeded `0x1312d6e` by the scene loader;
   `frand(x)` = `rand()·2⁻¹⁵·x` (`0x430fa0`, `0x430ec0`).
 - **Item keys:** the gadget and weapon bits (`0x52aac8` = `0x0001`,
@@ -118,7 +136,9 @@ therefore in that template's actions (`WPU_Missile`, `WPU_OilSpill`,
   - the pickup makes the icons opaque and moves the gauge needle;
   - the gadget roulette runs, and Ctrl uses the gadget, after which the
     icons fade again.
-- Not compared with Wine: roulette outcomes and sounds. The pickup range is
+- Not compared with Wine: roulette outcomes and sounds. The roulette's steps, key stop, rank favour
+  and constants (0.3/0.15/0.7, 0.5/0.1/0.25/0.5) were re-read against `0x4679d0` on 2026-11-16 and match
+  the port; the battle branch was missing (above). The pickup range is
   now the recovered sphere test.
 
 ## Robots and a taken pickup (2026-11-12, static reading)

@@ -709,6 +709,23 @@ void test_battle(const wpc::RaceTrack& track,const std::string& path) {
     require(avoiding==0,"a battle robot never avoids");
     require(battle.finish_state()==10 && battle.frags(0)==5 && !battle.battle_lost() && battle.laps_completed()==0,"five hits end the battle, the player wins");
     require(battle.accept(),"Enter at once in one player (0x4a31fe)");
+    // 0x4679d0 in a battle (app +0x1a60 = 1): the gadget roulette holds 8 and
+    // 10 only (0x467a63, 0x467bdb), the weapon draw is rand()%3 → 0x13, 0x18,
+    // 0x19 and its roulette keeps to them (0x467d71, 0x467f2e).
+    int gadgets=0,weapons=0;
+    for(const auto& p:track.power_ups()) {
+        if(p.type>1) continue;
+        wpc::RaceSession pick(track,3,1,1);
+        for(int i=0;i<200;++i) pick.update({});
+        pick.place(p.position[0],p.position[2],0);
+        for(int i=0;i<70;++i) pick.update({});
+        const int g=pick.gadget_icon(),w=pick.weapon_icon();
+        if(pick.charge_level()==0) continue; // placed on an overhang above it (cc_b, ct_b): not taken
+        if(p.type==0) {require(g==8 || g==10,"battle gadget roulette: 8 or 10");++gadgets;}
+        else {require(w==0x13 || w==0x18 || w==0x19,"battle weapon roulette: 0x13, 0x18 or 0x19");++weapons;}
+    }
+    std::printf("%s: battle roulettes, %d gadgets %d weapons\n",path.c_str(),gadgets,weapons);
+    require(gadgets>0 && weapons>0,"battle pickups taken");
     // Two players (the menu's only battle, page 47): player 2 at the second
     // spawn; its fifth hit ends with the counter at 60 (0x4a31ef).
     wpc::RaceSession two(track,3,1,1,4);
@@ -1807,6 +1824,58 @@ void test_course(const std::string& path) {
         }
         if(path.find("sh_t1")!=std::string::npos) require(bird,"sh_t1's bird reached t 0.02667");
         if(path.find("cc_t1")!=std::string::npos) require(path_seen && squashed,"cc_t1's path Kosza started within 1200 updates");
+    }
+    if(path.find("dt_t1")!=std::string::npos) {
+        // 0x46c6cf, Wine (2026-11-16): a car in the air under the roof at
+        // (-8154.8, 23857.8), lifted to y 436.8 (as by a hop), is lowered by
+        // the ceiling ray at its first airborne update: Wine's +0x28c reads
+        // 436.6, then 358.4 and 357.7 (after the following falls).
+        wpc::RaceSession race(track,3);race.place(-8154.8f,23857.8f,0);
+        for(int i=0;i<300;++i) race.update({});
+        race.lift(436.8f);
+        float y[4]{};
+        for(float& v:y) {race.update({});v=race.player().position[1];}
+        std::printf("%s: ceiling ray: lifted to 436.8 under the roof, then y %.1f %.1f %.1f %.1f\n",path.c_str(),y[0],y[1],y[2],y[3]);
+        require(std::abs(y[0]-436.8f)<0.5f && std::abs(y[1]-358.8f)<0.2f && std::abs(y[2]-358.4f)<0.2f && std::abs(y[3]-357.7f)<0.2f,"a car in the air under dt_t1's roof is lowered by the ceiling ray, as under Wine");
+    }
+    if(path.find("cc_t1")!=std::string::npos) {
+        // Wine (2026-11-15): the player parked across the path creature's line at
+        // (-35380, 15000), row 2 (-0.147, 0, 0.989): it stops at t 0.43153, z 15190,
+        // unsquashed (speed 0); with Up held it is squashed the update after the
+        // car first moves. The query's radius is the PRIM's own (0x4a6198): scaled
+        // by 2.5 it stopped one step early (t 0.42730).
+        wpc::RaceSession race(track,3);race.place(-35380,15000,0.1475f);
+        const wpc::Creature* k=nullptr;
+        int stop=-1;float t=0,z=0,y0=0,y1=0;
+        for(int i=0;i<700;++i) {
+            wpc::DriveInput in{};in.accelerate=stop>=0 && i>=stop+60;
+            race.update(in);
+            for(const wpc::Creature& c:race.objects().creatures()) if(c.collision) k=&c;
+            if(k && k->state==2 && stop<0) {stop=i;t=k->t;z=k->placed[14];y0=k->placed[5];}
+            if(stop>=0 && i==stop+59) y0=k->placed[5];
+            if(stop>=0 && i==stop+70) {y1=k->placed[5];break;}
+        }
+        std::printf("%s: path Kosza stopped by the parked player at update %d, t %.5f z %.1f, y axis %.3f while the car rests, %.3f once it moves\n",path.c_str(),stop,t,z,y0,y1);
+        const auto near=[](float a,float b,float tol) {return std::abs(a-b)<=tol;};
+        require(stop>=0 && near(t,0.43153f,1e-4f) && near(z,15190.0f,0.5f) && near(y0,2.5f,0.01f) && near(y1,0.25f,0.01f),"cc_t1's path Kosza stops on the parked car and is squashed once it moves, as under Wine");
+        // Wine (2026-11-15): Up held from t 0.367 (the car's first move with the
+        // creature at t 0.37230): it is squashed at its first touch while moving
+        // (0x459311), at t 0.41461 z 15290 with the car at (-35403.7, 15159.8),
+        // speed 0.14; restarted (frand() < 0.01, 0x4591fb) it goes on from t
+        // 0.41884, unsquashed (the move rebuilds the frame from +0x74).
+        wpc::RaceSession run(track,3);run.place(-35380,15000,0.1475f);
+        int press=-1,hit=-1,again=-1;float th=0,zh=0,yh=0,cz=0,cv=0,ta=0,ya=0;
+        for(int i=0;i<900 && again<0;++i) {
+            const wpc::Creature* q=nullptr;for(const wpc::Creature& c:run.objects().creatures()) if(c.collision) q=&c;
+            if(press<0 && q->state==1 && q->t>=0.367f) press=i;
+            wpc::DriveInput in{};in.accelerate=press>=0 && i<press+45;
+            run.update(in);
+            for(const wpc::Creature& c:run.objects().creatures()) if(c.collision) q=&c;
+            if(hit<0 && press>=0 && q->state==2) {hit=i;th=q->t;zh=q->placed[14];yh=q->placed[5];cz=run.player().position[2];cv=run.player().speed.speed;}
+            else if(hit>=0 && q->state==1) {again=i;ta=q->t;ya=q->placed[5];}
+        }
+        std::printf("%s: path Kosza struck by the moving player at update %d, t %.5f z %.1f, y axis %.3f, car z %.1f speed %.2f; restarted at update %d, t %.5f, y axis %.3f\n",path.c_str(),hit,th,zh,yh,cz,cv,again,ta,ya);
+        require(hit>=0 && near(th,0.41461f,1e-4f) && near(zh,15290.0f,0.5f) && near(yh,0.25f,0.01f) && near(cz,15159.8f,0.5f) && again>hit && near(ta,0.41884f,1e-4f) && near(ya,2.5f,0.01f),"cc_t1's path Kosza squashed by the moving car and restarted, as under Wine");
     }
     if(cc) {
         // Wine (2026-10-30): with the player parked at (-57000, 14172) the

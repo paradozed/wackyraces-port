@@ -136,14 +136,15 @@ that WackyAutoBomba type (e.g. `0x80`) at that race update.
   Finishing a race and pressing Enter returns to PISTE SUIVANTE with the next
   race; Escape abandons without advancing. Points, unlocks and the post-race
   pages follow the original. A won championship plays its winner scene
-  (`Win/Win*.WGM`, `WWinnerMovie` `0x494be0`, [championship](analysis/native-championship-i-20261028.md)),
+  (`Win/Win*.WGM`, `WWinnerMovie` `0x494be0`, [championship](analysis/native-championship-i-20261028.md);
+  WinCrep compared with Wine on screen),
   then DickOff after Championship IV, or the outro and credits after
   Championship V. Profiles and saves, demos, replays, credits and the
   keyboard controls page are ported, as is practice (ENTRAINEMENT: alone on
   the grid, lap splits, the course record and the finish state 0xf) and two players (page 61's
   cursors, then a split-screen race without robots that ends when the first player finishes;
   [two players](analysis/two-player-20261101.md)), including the two-player
-  battle on the `*_b.wgm` arenas (hits received, the end at five;
+  battle on the `*_b.wgm` arenas (hits received, the end at five, the battle roulettes;
   [battle](analysis/battle-20261102.md)).
 - Racing on the Championship I courses `cc_t1`, `sh_t1`, `dt_t1` and `ct_t1`:
   WMOD route sections, WGNR ground in each brick's frame, the rigid loop
@@ -211,7 +212,7 @@ that WackyAutoBomba type (e.g. `0x80`) at that race update.
   ([trams](analysis/trams-20261030.md)). On `cc_t2` the bascule bridge (`WMisty`) opens and shuts
   at its sensors, carries cars and redirects the robots
   ([bridge](analysis/misty-bridge-20261106.md)). `WGeyser`, `WFountain` (`dt_t2`; far robots it catches are turned back to their frozen yaw and circle it for good, as under Wine, [note](analysis/lap-line-geyser-20261106.md)), `WLogRollingB` (`sh_t2`, player cars only) and
-  `WDynamiteHole` (`dr_t1`) are ported too, as are `WRolling` and `WChiselCrossover` with `WBlowUp` (`cc_t4`, `ct_t2`, `dr_t4`; [note](analysis/rolling-chisel-blowup-20261106.md), `cc_t4` compared with Wine), `WLogJam` (`sh_t3`, [note](analysis/log-jam-20261106.md), compared with Wine in memory and on screen), and `WRotoHill`, `WBumSteer`, `WMagnet`, `WVolcano` and course `WRot` (`dr_t2`, `dr_t3`, [note](analysis/roto-magnet-volcano-20261106.md)), and `WSaw`, `WJunkyard`, `WConstructionSite`, `WShiftedRoad` and `WGoldenGate` (`sh_t2`, `dr_t3`, `sh_t4`, [note](analysis/saw-crane-gate-road-20261107.md)), and `WDicksTrick2` (`cc_t3`) and `UVScroll` ([note](analysis/dickstrick-uvscroll-rooms-20261107.md)), and the `Kosza` creatures (birds and walkers: states, random draws, flight curves and paths, frames, clips and the car squash; sh_t1 and cc_t1 compared with Wine, [race stream](analysis/race-stream-20261114.md), [motion](analysis/kosza-motion-20261114.md)); the fountain and the log were compared with Wine
+  `WDynamiteHole` (`dr_t1`) are ported too, as are `WRolling` and `WChiselCrossover` with `WBlowUp` (`cc_t4`, `ct_t2`, `dr_t4`; [note](analysis/rolling-chisel-blowup-20261106.md), `cc_t4` compared with Wine), `WLogJam` (`sh_t3`, [note](analysis/log-jam-20261106.md), compared with Wine in memory and on screen), and `WRotoHill`, `WBumSteer`, `WMagnet`, `WVolcano` and course `WRot` (`dr_t2`, `dr_t3`, [note](analysis/roto-magnet-volcano-20261106.md)), and `WSaw`, `WJunkyard`, `WConstructionSite`, `WShiftedRoad` and `WGoldenGate` (`sh_t2`, `dr_t3`, `sh_t4`, [note](analysis/saw-crane-gate-road-20261107.md)), and `WDicksTrick2` (`cc_t3`) and `UVScroll` ([note](analysis/dickstrick-uvscroll-rooms-20261107.md)), and the `Kosza` creatures (birds and walkers: states, random draws, flight curves and paths, frames, clips and the car squash; sh_t1 and cc_t1 compared with Wine, the squash too, [race stream](analysis/race-stream-20261114.md), [motion](analysis/kosza-motion-20261114.md)); the fountain and the log were compared with Wine
   ([notes](analysis/lap-line-geyser-20261106.md)). Escape opens the original in-race pause menu
   (general.wgm's `WMenuBrick`) over the race, dimmed by the renderer's closing wipe in one-player races: resume, volumes, restart and
   quit with its confirmation ([pause](analysis/pause-menu-20261030.md)). Race audio covers every car's engine and skid loop,

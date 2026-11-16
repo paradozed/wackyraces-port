@@ -678,3 +678,18 @@ Each Wine point was measured against the same vehicle's native path (the nearest
 - **So the robots' lines agree with the original on all 20 courses.** Branch choice is random. One trap
   seen only under Wine (`dt_t2`'s fountain holding a far robot) is open.
 
+
+## Hidden spans against Wine (dt_t1, 2026-11-15)
+
+Wine's far log (`+0x2b1` & `0x10000` each update, 4919 updates, the player idle) against native: every hidden
+span lasts 83 updates in both builds, for every robot and lap (Wine v1 892..975, 2211..2294, 3510..3593;
+native 888..971, 2217..2300, 3419..3502; the starts drift with the robots' lines). No robot is hidden again
+soon after a show in either build (the shortest show-to-hide gap is Wine's v4, 96 updates), so the provisional
+60-update grace after a show is neither contradicted nor tested here.
+
+The same log's far flag (`0x1000`): each robot's first switch to far comes on the same update in both builds
+(v0 40, v1 71, v2 37, v4 47, v5 99, v6 84). Under Wine a hidden robot loses `0x1000` while `0x10000` is set and
+gets it back at the show (v1: far 71, hidden 892 without `0x1000`, far again 975); natively `Opponent::far`
+stays set through the hidden span. The later near/far switches drift with the robots' lines. The difference
+matters only where a rule tests the far flag on a hidden robot; none was found in the port's hidden path
+(`virtual_robot` returns before the far rules).
