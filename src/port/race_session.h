@@ -64,6 +64,9 @@ public:
     void update(const DriveInput& input,const DriveInput& input2={});
     // Debug placement (WPC_RACE_PLACE): put the player on the ground at x,z.
     void place(float x,float z,float yaw);
+    // Debug: the player level and in the air at height y (airtime 1), as a hop of
+    // the original's car under Wine leaves it.
+    void lift(float y);
 
     Phase phase() const {return phase_;}
     const RaceCar& player() const {return player_;}

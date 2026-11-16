@@ -58,7 +58,15 @@ flag `0x8000`. If its state is 0:
 
 So a power-up is taken when the car's origin, at road level, comes within 200
 units of the power-up's origin, 100 units above the road. That's about 173
-units of horizontal reach over the road. The respawn check (`0x4040e8`) uses
+units of horizontal reach over the road.
+
+Compared with Wine (2026-11-16, cc_t1's weapon pickup at (-4562.0, 1233.8, 5794.9), ground 1133.9 along -x):
+the car taken there along a robot's line, then for each trial 4 s at (-5262, 5794.9), its charge `+0x399`
+zeroed, moved to (-4562 - d, 1134.1, 5794.9) (it settles at 1133.8) and the charge read 0.4 s later (`wmem.py
+reach`). Taken at d = 160, 166, 168, 170, 172, 173, 174; not at 175, 176, 178, 180, 190, 200. Native, the
+player placed at the same points after GO (a fresh race each): taken up to 174, not from 175, the same 13
+answers. (The bare sphere sum with the car's origin 99.9 under the centre gives 173.3; both builds reach one
+unit further, so the spheres are not exactly at those two points; not traced.) The respawn check (`0x4040e8`) uses
 the same overlap.
 
 `node_prims` (`game_scene`) decodes `PRIM` chunks. `RaceTrack` keeps each

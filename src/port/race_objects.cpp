@@ -938,12 +938,16 @@ void CourseObjects::init_creatures(MsvcRandom& random) {
 namespace {
 // The first car (not hidden) whose sphere touches the creature's PRIM
 // (0x4a60c0 with mask 0x100; car order provisional), or -1.
+// The object query 0x4a60c0: the querying PRIM's centre goes through the
+// node's world matrix (0x4200e0, 0x43b880) but its radius is the PRIM's own
+// (0x4a6198 [ebp+0x54] -> [esp+0x84]), not scaled: cc_t1's path creature
+// (scale 2.5) touches with r 24, as under Wine (2026-11-15).
 int creature_touch(const Creature& c,const std::vector<CarProbe>& cars,Vec3& normal) {
     for(size_t i=0;i<cars.size();++i) {
         if(cars[i].hidden) continue;
         for(const ScenePrim& p:c.prims) {
             const Vec3 at=point_of(c.placed,{{p.centre[0],p.centre[1],p.centre[2]}});
-            if(!spheres_touch(cars[i].position,at,car_radius+p.radius*axis_length(c.placed))) continue;
+            if(!spheres_touch(cars[i].position,at,car_radius+p.radius)) continue;   // 0x4a6198: the radius unscaled
             normal=unit3(sub3(at,cars[i].position));                       // 0x482273: creature - car
             return int(i);
         }
@@ -1261,7 +1265,7 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
         for(size_t i=0;i<cars.size();++i) {
             if(cars[i].hidden) continue;
             bool touch=false;
-            for(const ScenePrim& p:c.prims) touch=touch || spheres_touch(cars[i].position,point_of(w,{{p.centre[0],p.centre[1],p.centre[2]}}),car_radius+p.radius*axis_length(w));
+            for(const ScenePrim& p:c.prims) touch=touch || spheres_touch(cars[i].position,point_of(w,{{p.centre[0],p.centre[1],p.centre[2]}}),car_radius+p.radius);
             if(touch) {if(!cars[i].busy) hits.push_back({i});break;}
         }
     }
@@ -1303,7 +1307,7 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
             bool struck=false;
             for(size_t i=0;i<cars.size() && !struck;++i) {
                 if(cars[i].hidden) continue;
-                for(const ScenePrim& p:r.prims[q]) if(spheres_touch(cars[i].position,point_of(world,{{p.centre[0],p.centre[1],p.centre[2]}}),car_radius+p.radius*axis_length(world))) {struck=true;hits.push_back({i});break;}
+                for(const ScenePrim& p:r.prims[q]) if(spheres_touch(cars[i].position,point_of(world,{{p.centre[0],p.centre[1],p.centre[2]}}),car_radius+p.radius)) {struck=true;hits.push_back({i});break;}
             }
             if(struck) {r.chosen=k;r.timer=r.reload;r.swing=30;}   // 0x4cbd31
         }
@@ -1587,7 +1591,7 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
         bool struck=false;
         for(size_t i=0;i<cars.size() && !struck;++i) {
             if(cars[i].hidden) continue;
-            for(const ScenePrim& p:r.prims) if(spheres_touch(cars[i].position,point_of(w,{{p.centre[0],p.centre[1],p.centre[2]}}),car_radius+p.radius*axis_length(w))) {hits.push_back({i});struck=true;break;}
+            for(const ScenePrim& p:r.prims) if(spheres_touch(cars[i].position,point_of(w,{{p.centre[0],p.centre[1],p.centre[2]}}),car_radius+p.radius)) {hits.push_back({i});struck=true;break;}   // 0x4a6198: unscaled
         }
     }
     for(DynamiteHole& d:holes_) {

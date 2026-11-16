@@ -72,7 +72,7 @@ public:
     TrackSurface ground_in(int section,float x,float z,float top,float bottom) const;
     // The same mask along any segment: the hit nearest from (0x46c97e, the
     // robots' ray along the car's up axis).
-    TrackSurface ray(const Vec3& from,const Vec3& to) const;
+    TrackSurface ray(const Vec3& from,const Vec3& to,uint32_t mask=0x018000ff) const;
     // Movement-probe query (mask 0x01e000ff). Mostly-horizontal surfaces are
     // ground, handled by ground(); only steeper hits are reported as walls.
     TrackWall wall(const Vec3& from,const Vec3& to) const;

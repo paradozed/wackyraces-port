@@ -780,6 +780,7 @@ void RaceSession::place(float x,float z,float yaw) {
     player_.position={{x,g.y,z}};player_.yaw=yaw;player_.section=g.section;
     settle(player_,body_,true);init_cameras();
 }
+void RaceSession::lift(float y) {player_.position[1]=y;player_.airtime=1;player_.pitch=player_.roll=0;player_.up={{0,1,0}};}
 void RaceSession::set_dust_option(bool on) {
     body_.fx.set_smoke(on);
     for(Body& b:opponent_bodies_) b.fx.set_smoke(on);
@@ -2538,6 +2539,18 @@ void RaceSession::move(RaceCar& car,Body& b,const VehicleTuning& tuning,bool pla
         car.up=tilted_up(car.yaw,car.pitch,car.roll);
     }
     wall_contacts(car,b,before);
+    // 0x46c6cf: in the air (+0x8a7 > 1, the last settle's count) a ray of mask
+    // 0x1e000ff (0x4a4830 -> 0x4054e3, one-sided) runs from P up to P + 200
+    // (0x512a44); P is the car's place less 26 along its up axis (provisional:
+    // the mean y of +0x40f/+0x433 less 50 along up, 0x46bafe..0x46bc41, measured
+    // 26 under +0x28c under Wine). A ceiling met turned towards P lowers the car
+    // by B - H (0x46c766..0x46c7c4: +0x28c += H.y - B.y). Wine, dt_t1 under the
+    // roof at y 532.8: P.y 410.6, H.y 532.8, +0x28c 436.6 -> 358.4 next update.
+    if(car.airtime>1) {
+        Vec3 p{};for(size_t i=0;i<3;++i) p[i]=car.position[i]-26*car.up[i];
+        const TrackSurface h=track_.ray(p,{{p[0],p[1]+200,p[2]}},0x01e000ff);
+        if(h.hit) car.position[1]+=h.point[1]-(p[1]+200);
+    }
     const int loops=car.loops;
     settle(car,b,player);
     // Compare the start-line crossing in the frame the car now occupies.

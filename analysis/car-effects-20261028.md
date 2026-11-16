@@ -132,6 +132,14 @@ After each state, grow a and grow b lose 0.0015 (`0x512b80`).
 - **Update:** a piece below local height 1 is hidden; otherwise it moves, loses 2 of upward speed and turns. Once every piece is down, the clone waits for its sound and ends.
 - **Draw:** each live piece goes through the film draw at its local position in the clone's frame, with its angle `+0x14a`.
 
+**Compared with Wine (2026-11-15).** The original's car was moved next to `cc_t1`'s cactus 25 at (-593, 559,
+-5698): the race paused (Escape), the fifteen position copies of the player's WackyAuto shifted by the same
+delta (the scratch reader's `hop`), the race resumed (Return on CONTINUER), the screen recorded at 30 fps.
+Natively `WPC_PLACE=-593,-5788,0.1473` with `WPC_WEATHER=0`. Both show the burst of green pieces (and the
+flower) round a standing car, visible about a second, and the cactus gone after. A native car driving into a
+cactus at 0.5 leaves the pieces behind at once (their forward speed is speed x 100 in the clone's units at
+scale 0.2). The native pieces live 25..42 updates (`CarEffects` alone, speed 0.5). Not compared frame by frame.
+
 ## POUSSIERE (`0x47b750`, draw `0x47b9d0`)
 
 **The option.** Menu item 588 (`WMenuSetValueItem` type 11, `0x48a7ea`) toggles `0x6f4650`, a BSS word that is off by default, between INACTIVE and ACTIVE (strings `0x9a`/`0x9b`).

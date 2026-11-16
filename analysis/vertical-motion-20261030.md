@@ -84,7 +84,7 @@ Read from a headless decompile of `0x46a4a0`, made from the local Ghidra project
   - ray: from 80 above (`0x512a3c`) to `+0x93b` = 30 below (`0x46610b`); the car's up axis is × 1.3 (`0x512a40`) for the robots' ray;
   - robots sit 3 (`0x511894`) along the normal;
   - airborne: past 10 updates, the pitch and roll are × 0.85 (`0x512a38`);
-  - the lift ray starts 200 above (`0x512a44`);
+  - the ceiling ray (formerly "lift ray") reaches 200 up (`0x512a44`), see "The ceiling ray" below;
   - mode-2 probes: ±52 across, ± half the stretched span along.
 - **The original return.** On surface `0x800000` (`+0x8bb`), after 40 updates (`+0x8e7` = `0x28`), `0x4a6730` gives the frame. The car is lifted by 50 (`0x512a5c`) and gets 25 updates of `+0x8e3`.
 
@@ -221,3 +221,38 @@ The higher second jump was attributed to the vertical rays. **Tested 2026-11-12,
   solve read. Not ported: the native contacts are the template's wheel offsets on the ground
   (`RaceSession::wheel_contacts`), not the probes, so the spreads have no native counterpart until
   the probe solve is ported.
+
+## The ceiling ray `0x46c6cf..0x46c7c4` (2026-11-16)
+
+Read statically, then measured under Wine (scratch prefix, Xvfb `:77`, counters and a ring log patched into
+the original by `wmem.py lifthook`: caves in the int3 padding at `0x406800`, `0x406880`, `0x4068c0`).
+
+- Taken when `+0x8a7` > 1 (the airtime the last ground pass left). P is set at `0x46bafe..0x46bc41`: the
+  car's x and z, y = (`+0x433` + `+0x40f`) x 0.5 (`0x51026c`), then less the up axis x 50 (`0x512a5c`). B = P
+  + (0, 200, 0) (`0x512a44`). `0x402199` -> `0x4a4830` (`ret 0xc`, so `[esp+0x94]` is still B after it) ->
+  `0x4054e3(P, B, 0x6f12b0)` with mask `0x1e000ff`.
+- On a hit (`0x46c766`), d = H - B (`0x6f12c4..cc` less `[esp+0x94..9c]`), kept at `[esp+0xec]`, and
+  `+0x28c` += d.y. H lies on the segment, so this only ever lowers the car: it keeps the segment's top under
+  a ceiling. Not a lift.
+- Wine counts: the block `0x46c6cf` runs once an update for the player's car (about 27 a second);
+  the robots pass it in some updates (57 airborne passes of 226 on dt_t1). In the open (sh_t1, the car lifted
+  by 120 each second: 240 airborne passes) and under dt_t1's deck (the deck top at 290.9 crossed from below:
+  about 600 passes) the ray returned 0 every time. So, like the port's ground query, it ignores a face whose
+  normal points away from the segment's start: an upward ray meets only faces turned down.
+- The hit (dt_t1, the car taken along a robot's line to (-8154.8, 23857.8), where the port finds a roof slab
+  from 532.8 (normal down) to 632.8 (up); then lifted by 400): P.y 410.6, B.y 610.6, H.y 532.8, `+0x28c`
+  436.6, and at the next update 358.4 (436.6 - 77.8, less that update's fall, 0.4). The same at a second
+  lift. P.y was `+0x28c` - 26 in every sample, so the copies at `+0x40f`/`+0x433` sit 24 above it.
+
+Ported (`RaceSession::move`, between the wall contacts and the ground pass): in the air, P = the place less 26
+along the up axis (provisional: the measured offset, not the two copies), `RaceTrack::ray` from P to P + 200
+with mask `0x1e000ff` (a mask argument added), y += H.y - B.y. Native, the same spot, the car level at 436.8
+with airtime 1: 436.8, 358.8, 358.4, 357.7, 356.5, 354.8, 352.5, 349.6, the falls after the clamp equal to
+Wine's (358.4, 357.7, 356.5, 354.8, 352.5, 349.6). Control: with the ray disabled the car stays in the slab
+(436.6, 436.1, 435.4). A pitched car (up (0, 0.911, 0.412)) gives P 23.7 under the place instead of 26 and
+lands 2.3 lower, so the up axis matters; the original's P uses the up axis too (`[esp+0x94]` x 50).
+`native_drive_test` checks it on dt_t1 (`RaceSession::lift`, a debug setter): `ceiling ray: lifted to 436.8 under
+the roof, then y 436.8 358.8 358.4 357.7`; with the ray disabled `436.8 436.6 436.1 435.4` and the check fails
+(exit 1). All 20 courses exit 0 with the ray, ctest 14 of 14.
+
+Not compared: a pitched car's P under Wine; the robots' hits (none seen).

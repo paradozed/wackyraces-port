@@ -316,11 +316,11 @@ TrackSurface RaceTrack::ground_in(int section,float x,float z,float top,float bo
     if(out.normal[1]<0) for(float& c:out.normal) c=-c;
     return out;
 }
-TrackSurface RaceTrack::ray(const Vec3& from,const Vec3& to) const {
+TrackSurface RaceTrack::ray(const Vec3& from,const Vec3& to,uint32_t mask) const {
     TrackSurface best;float nearest=2;
     for(size_t i=0;i<sections_.size();++i) {
         const auto& s=sections_[i];
-        const GroundQueryResult q=s.ground.query_local(point(transform_point(s.inverse,from)),point(transform_point(s.inverse,to)),0x018000ff);
+        const GroundQueryResult q=s.ground.query_local(point(transform_point(s.inverse,from)),point(transform_point(s.inverse,to)),mask);
         if(!q.hit || q.contact.fraction>=nearest) continue;
         nearest=q.contact.fraction;
         best.hit=true;best.point=transform_point(s.transform,vec(q.contact.point));best.y=best.point[1];

@@ -586,3 +586,13 @@ the callback's attachment to page 4 is still unproven.
   the scratch process only; it spoiled one run).
 - **Warning:** the ALSA file tap is unpaced and grows fast (5 GB in about three hours of Wine runs, which
   filled `/tmp`). Point `file` at `/dev/null` except for a capture, and delete captures after use.
+
+- **Hop chain to dt_t1's tram crossing** (2026-11-15). A native line with the robots always near (robot 0's
+  position every 5 updates, 145 points from the grid to past the crossing at (9918, -348, 23486)); under Wine the
+  reader's `path FILE N DELAY` hopped the player car through the first 138 points, 0.25 s apart, while the race
+  ran, ending at (8739.5, -558.9, 23610.5) about 1180 west of the crossing, still facing the grid's +x. Screenshots
+  every second: at 01:14 the red two-car tram crosses the road ahead, upright, its long side to the camera. Natively
+  `WPC_PLACE=8739.5,23610.5,-1.5708` with `WPC_WEATHER=0`: at 00:09 the same tram enters from the right on the
+  rails, upright and side-on, under the crossing's light. Wine's camera sat low after the chain (as on sh_t3);
+  the framings differ, the tram's orientation and shape agree. The cactus check used the same tool
+  (`analysis/car-effects-20261028.md`).
