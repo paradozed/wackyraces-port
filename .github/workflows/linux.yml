@@ -1,7 +1,7 @@
 # Linux x64 build of the native port. Builds with every optional dependency,
 # runs the synthetic ctest suites (no game files are needed or available here)
-# and keeps the executable as a workflow artifact. No game content is fetched,
-# bundled or published.
+# and keeps the executable as a workflow artifact. Every push to master also
+# replaces the rolling release (tag `latest`) with the new build. No game content is fetched, bundled or published.
 name: linux-x64
 
 on:
@@ -45,3 +45,30 @@ jobs:
           name: wackyraces-linux-x64
           path: wackyraces-linux-x64.tar.gz
           retention-days: 30
+
+  release:
+    # Pushes to master only: other branches, tags, pull requests and manual
+    # runs keep the workflow artifact alone.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: true
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wackyraces-linux-x64
+
+      - name: Publish rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete latest --cleanup-tag --yes 2>/dev/null || true
+          gh release create latest wackyraces-linux-x64.tar.gz \
+            --target "$GITHUB_SHA" --latest \
+            --title "master build ${GITHUB_SHA::7}" \
+            --notes "Linux x64 build of $GITHUB_SHA on master. Needs the original game files; none are included."
