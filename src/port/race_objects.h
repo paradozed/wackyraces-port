@@ -67,6 +67,8 @@ struct PathMover {
 // 0x444be0: the point at t on a GDPath (segments n - 1 when open, n when
 // closed) and the blended tangent there.
 void path_point(const std::vector<Vec3>& points,bool closed,float t,Vec3& at,Vec3& tangent);
+// 0x456af0: Kosza mode 2's Hermite walk over a GDPath's points (place, derivative).
+void path_walk(const std::vector<Vec3>& points,bool closed,float t,Vec3& at,Vec3& d);
 
 // WLogRide (sh_t3; record 0x515944, init 0x4cc3e0, update 0x4cc450): a
 // brick whose GDPathQ child (+0x23e) carries its WLogBase children (from
@@ -160,9 +162,18 @@ struct Geyser {
     std::array<float,3> s0{},s1{},rise{};
     int state=0,counter=0;
     float ring_scale=0,spin=0;
+    // WGeyserModel (0x4c99a0, slot 3 of 0x5156ec) draws its model three times:
+    // copy i turned by turn[i] (0x43b4a0) and its rows scaled (0.75 wide[i],
+    // rise[i], 0.75 wide[i]) (0x43b190, 0x511224). wide is +0x163, the value
+    // latched in WGeyser's state 2; turn is +0x16f. alpha: the state-3 fade of
+    // the model's vertices (-1 before the first eruption: the file's colours).
+    bool model3=false;
+    std::array<float,3> wide{{1,1,1}},turn{{0,0.5235988f,1.0471976f}};
+    int alpha=-1;
     std::vector<int> sections;
     bool active=true;
     float top() const {return std::max({rise[0],rise[1],rise[2]});}
+    std::array<Matrix4,3> column_frames() const;
     Matrix4 column_frame() const;
     Matrix4 ring_frame() const;
 };
@@ -532,6 +543,9 @@ struct Creature {
     int state=-1;                          // +0x131
     std::vector<int> sections;
 };
+// The loop seam as the bricks' query 0x4a71e0 sees it: the WMOD loop transform,
+// its inverse and the last section (0: no seam).
+struct Seam {Matrix4 wrap=identity_matrix(),unwrap=identity_matrix();int last=0;};
 class CourseObjects {
 public:
     void load(const Scene& scene);
@@ -541,6 +555,8 @@ public:
     LogHit log_ground(float x,float z,float top,float bottom) const;
     // 0x4cc69e: a car standing on a log moves with it.
     Vec3 log_motion(int ride,int log) const;
+    // The loop seam (RaceTrack's wrap/unwrap, the last section) for the bricks' car queries (0x4a71e0).
+    void set_seam(const Matrix4& wrap,const Matrix4& unwrap,int last) {seam_={wrap,unwrap,last};}
     // The WMOD route rows (sections) linking each object's node.
     void link(const std::function<std::vector<int>(uint32_t)>& sections_of);
     // One update; cars[i] are the racers' positions. hits lists cars a tram
@@ -602,6 +618,7 @@ public:
     std::vector<RouteWeight> route_weights() const;
     std::vector<MistyBridge>& bridges() {return bridges_;}
 private:
+    Seam seam_;
     std::vector<LogRide> log_rides_;
     std::vector<MistyBridge> bridges_;
     std::vector<Geyser> geysers_;

@@ -1,6 +1,7 @@
 #include "movie_decoder.h"
 #include <algorithm>
 #include <stdexcept>
+#include <vector>
 
 #if WPC_HAVE_LIBAVCODEC
 extern "C" {
@@ -11,36 +12,44 @@ extern "C" {
 #endif
 
 namespace wpc {
-namespace {
-uint8_t clamp8(int v) {return uint8_t(std::clamp(v,0,255));}
-}
+// Ir50_32's MMX 24-bit converter (0x100641a0; the game asks AVIStreamGetFrameOpen
+// for no format, 0x4135ad, and the codec answers 24-bit RGB). The chroma is
+// interpolated horizontally and then vertically to one sample per 2x2 pixels
+// (0x10064210: c0, (c0 + c1) >> 1, c1, ...; the last sample repeated). Then,
+// in saturating 16-bit lanes: y = (Y - 16) x 149 (psubusb, pmullw), R = (y +
+// 204 V - dR) x 2 >> 8, G = (y + dG - min(50 U + 104 V, 32767)) x 2 >> 8, B =
+// (min(258 U, 65535) + y - dB) x 2 >> 8, with 4x4 dither offsets by (row % 4,
+// column % 4) (read from the converter's frame under Wine). Bit-exact against
+// the native codec (2026-11-18: intro.avi 300/800, outro.avi 300/900,
+// legal.avi 50).
 void yuv410_to_rgba(const uint8_t* yp,int ys,const uint8_t* up,int us,const uint8_t* vp,int vs,int width,int height,uint8_t* out) {
-    // Fitted to ir50_32's own 24-bit output (VfW AVIStreamGetFrame under
-    // Wine, intro.avi frames 300 and 800; mean error 0.9/1.4 against 3.1/3.6
-    // for replicated chroma): each chroma sample sits at its 4x4 block's
-    // centre and is interpolated bilinearly (clamped at the edges), then
-    // BT.601 studio range with offsets of -2.0, -3.3 and -1.7 on R, G, B.
-    // Not the codec's recovered routine.
+    static const uint16_t dr[4][4]={{0x668c,0x6428,0x65c0,0x64f4},{0x64f4,0x65c0,0x6428,0x668c},{0x6428,0x668c,0x64f4,0x65c0},{0x65c0,0x64f4,0x668c,0x6428}};
+    static const uint16_t dg[4][4]={{0x4da8,0x4c3e,0x4d72,0x4c74},{0x4d0a,0x4cdc,0x4c70,0x4d76},{0x4c3e,0x4da8,0x4c74,0x4d72},{0x4cdc,0x4d0a,0x4d76,0x4c70}};
+    static const uint16_t db[4][4]={{0x80c0,0x7fbe,0x81c2,0x7ebc},{0x81c2,0x7ebc,0x80c0,0x7fbe},{0x7fbe,0x80c0,0x7ebc,0x81c2},{0x7ebc,0x81c2,0x7fbe,0x80c0}};
     const int cw=(width+3)/4,ch=(height+3)/4;
-    const auto at=[](int i,int n){return std::clamp(i,0,n-1);};
+    // A chroma plane at 2x2: horizontal midpoints, then vertical midpoints.
+    const auto half=[&](const uint8_t* plane,int stride) {
+        std::vector<int> h(size_t(2*cw)*size_t(ch)),v(size_t(2*cw)*size_t(2*ch));
+        for(int r=0;r<ch;++r) for(int j=0;j<cw;++j) {
+            const uint8_t* row=plane+size_t(r)*stride;const int a=row[j],b=row[j+1<cw?j+1:j];
+            h[size_t(r)*2*cw+2*j]=a;h[size_t(r)*2*cw+2*j+1]=(a+b)>>1;
+        }
+        for(int r=0;r<ch;++r) for(int j=0;j<2*cw;++j) {
+            const int a=h[size_t(r)*2*cw+j],b=h[size_t(r+1<ch?r+1:r)*2*cw+j];
+            v[size_t(2*r)*2*cw+j]=a;v[size_t(2*r+1)*2*cw+j]=(a+b)>>1;
+        }
+        return v;
+    };
+    const std::vector<int> u2=half(up,us),v2=half(vp,vs);
+    const auto sat=[](int x){return std::clamp(x,0,65535);};
     for(int row=0;row<height;++row) {
-        const uint8_t* y=yp+size_t(row)*ys;
-        // (row - 1.5) / 4 in eighths.
-        const int ty=2*row-3,ry=ty>=0?ty/8:-1,fy=ty-8*ry;
-        const uint8_t* u0=up+size_t(at(ry,ch))*us;const uint8_t* u1=up+size_t(at(ry+1,ch))*us;
-        const uint8_t* v0=vp+size_t(at(ry,ch))*vs;const uint8_t* v1=vp+size_t(at(ry+1,ch))*vs;
-        uint8_t* p=out+size_t(row)*width*4;
+        const uint8_t* y=yp+size_t(row)*ys;uint8_t* p=out+size_t(row)*width*4;
+        const int* uc=&u2[size_t(row/2)*2*cw];const int* vc=&v2[size_t(row/2)*2*cw];
         for(int x=0;x<width;++x) {
-            const int tx=2*x-3,rx=tx>=0?tx/8:-1,fx=tx-8*rx;
-            const int a=at(rx,cw),b=at(rx+1,cw);
-            const auto mix=[&](const uint8_t* r0,const uint8_t* r1) {
-                return ((r0[a]*(8-fx)+r0[b]*fx)*(8-fy)+(r1[a]*(8-fx)+r1[b]*fx)*fy+32)>>6;
-            };
-            // Fixed-point BT.601: 1.164, 1.596, 0.391, 0.813, 2.018 (x1024).
-            const int c=(y[x]-16)*1192,d=mix(u0,u1)-128,e=mix(v0,v1)-128;
-            p[0]=clamp8((c+1634*e-2048+512)>>10);
-            p[1]=clamp8((c-401*d-833*e-3379+512)>>10);
-            p[2]=clamp8((c+2066*d-1741+512)>>10);
+            const int l=std::max(y[x]-16,0)*149,u=uc[x/2],v=vc[x/2],r=row&3,k=x&3;
+            p[0]=uint8_t(sat(2*sat(sat(l+204*v)-dr[r][k]))>>8);
+            p[1]=uint8_t(sat(2*sat(sat(l+dg[r][k])-std::min(50*u+104*v,32767)))>>8);
+            p[2]=uint8_t(sat(2*sat(sat(std::min(258*u,65535)+l)-db[r][k]))>>8);
             p[3]=255;p+=4;
         }
     }

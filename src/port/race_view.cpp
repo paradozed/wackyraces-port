@@ -1746,7 +1746,21 @@ void RaceView::draw_view(int human,int width,int height) {
         }
         for(size_t i=0;i<geysers_.size();++i) if(objects.geysers()[i].active) {
             const Geyser& g=objects.geysers()[i];
-            if(g.top()>0) submit_object(geysers_[i][0],g.column_frame());
+            if(g.top()>0 && g.model3) {
+                // 0x4c99a0: WGeyserModel draws the column three times. After the first
+                // eruption its vertices are white with the fade's alpha (0x4c8f87,
+                // 0x4c944c), drawn translucent (mesh flag 0x40).
+                const std::vector<WorldBatch>* column=&geysers_[i][0];
+                if(g.alpha>=0) {
+                    if(geyser_faded_.size()<geysers_.size()) geyser_faded_.resize(geysers_.size());
+                    std::vector<WorldBatch>& f=geyser_faded_[i];
+                    if(f.size()!=geysers_[i][0].size()) {translucent_.erase(&f);f=geysers_[i][0];for(WorldBatch& b:f) b.translucent=true;}
+                    const float a=float(g.alpha)/255.f;
+                    for(WorldBatch& b:f) for(auto& v:b.vertices) {v.r=v.g=v.b=1;v.a=a;}
+                    column=&f;
+                }
+                for(const Matrix4& m:g.column_frames()) submit_object(*column,m);
+            } else if(g.top()>0) submit_object(geysers_[i][0],g.column_frame());
             if(g.ring_scale>0) submit_object(geysers_[i][1],g.ring_frame());
         }
     }

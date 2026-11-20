@@ -247,6 +247,7 @@ private:
     std::vector<std::vector<std::vector<WorldBatch>>> logs_; // per WLogRide, per log
     std::vector<std::array<std::vector<WorldBatch>,2>> bridges_; // per WMisty, its two halves
     std::vector<std::array<std::vector<WorldBatch>,2>> geysers_; // per WGeyser, column and ring
+    std::vector<std::vector<WorldBatch>> geyser_faded_;            // per WGeyser, its column with the state-3 fade's vertex alpha (0x4c9444)
     std::vector<std::array<std::vector<WorldBatch>,2>> holes_;   // per WDynamiteHole, lid and fuse
     std::vector<std::array<std::vector<WorldBatch>,3>> dicks_;    // per WDicksTrick2
     std::vector<std::array<std::vector<WorldBatch>,10>> golden_;  // per WGoldenGate: doors, marker

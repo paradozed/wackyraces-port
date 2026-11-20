@@ -58,14 +58,24 @@ std::vector<Vec3> path_points(const Node& path) {
     for(uint32_t i=0;i<n;++i) std::memcpy(out[i].data(),b.data()+4+12*size_t(i),12);
     return out;
 }
-// 0x4a71e0 for the bricks' queries: the nearest car within range of a point
+// 0x4a71e0 for the bricks' queries (WRolling 0x4c780a, WChiselCrossover
+// 0x4d02c4, WDicksTrick 0x4c802a: the brick's frame and group +0x104, angle
+// 2 pi, flags 1, racers only): the nearest car within range of a point
 // (truncated coordinates) that is shown and not being hit; -1 without one.
-int nearest_car(const std::vector<CarProbe>& cars,const Vec3& at,int range) {
+// A car in the last section seen from group 0 goes through the loop
+// transform, and the other way round (as RaceSession::find_target). During
+// the update every group's matrix is the plain one (0x5472bc clear), so the
+// brick's own place is not moved. The group is the brick's linked section
+// (-1, never wrapped, without one).
+int nearest_car(const std::vector<CarProbe>& cars,const Vec3& at,int range,int group,const Seam& seam) {
     int best=-1;int64_t best_d=-1;
     const float r=float(range);
     for(size_t i=0;i<cars.size();++i) {
         if(cars[i].hidden || cars[i].busy) continue;
-        const float dx=cars[i].position[0]-at[0],dy=cars[i].position[1]-at[1],dz=cars[i].position[2]-at[2];
+        Vec3 p=cars[i].position;
+        if(seam.last>0 && group==0 && cars[i].section==seam.last) p=point_of(seam.wrap,p);
+        else if(seam.last>0 && group==seam.last && cars[i].section==0) p=point_of(seam.unwrap,p);
+        const float dx=p[0]-at[0],dy=p[1]-at[1],dz=p[2]-at[2];
         if(!(std::abs(dx)<r && std::abs(dy)<r && std::abs(dz)<r)) continue;
         const int64_t x=int64_t(dx),y=int64_t(dy),z=int64_t(dz),d=x*x+y*y+z*z;
         if(d>int64_t(range)*range) continue;
@@ -73,6 +83,7 @@ int nearest_car(const std::vector<CarProbe>& cars,const Vec3& at,int range) {
     }
     return best;
 }
+int group_of(const std::vector<int>& linked) {return linked.empty()?-1:linked.front();}
 BlowUp blow_up_of(const Node& owner) {
     BlowUp b;
     for(const Node& c:owner.children) if(c.class_name=="GDModel") {
@@ -444,6 +455,18 @@ Vec3 CourseObjects::log_motion(int ride,int log) const {
     const auto& m=log_rides_[size_t(ride)].moved;
     return log>=0 && size_t(log)<m.size()?m[size_t(log)]:Vec3{};
 }
+std::array<Matrix4,3> Geyser::column_frames() const {
+    std::array<Matrix4,3> out;
+    for(size_t i=0;i<3;++i) {
+        Matrix4 m=column_local;
+        turn_y(m,turn[i]);                                               // 0x43b4a0
+        const float sc[3]={0.75f*wide[i],rise[i],0.75f*wide[i]};          // 0x43b190, 0x511224 = 0.75
+        for(size_t r=0;r<3;++r) for(size_t k=0;k<3;++k) m[4*r+k]*=sc[r];
+        for(size_t k=0;k<3;++k) m[12+k]+=aim[k];
+        out[i]=m;
+    }
+    return out;
+}
 Matrix4 Geyser::column_frame() const {
     // WGeyserModel's three values scale x, y and z, turning (0x4c9126:
     // 1 degree x (i + 1) per update; provisional: only y is turned here).
@@ -472,6 +495,10 @@ void CourseObjects::load(const Scene& scene) {
                 throw std::runtime_error("implausible WFountain members");
             const float c0=2*alpha*std::cos(omega),c1=-alpha*alpha,k=(1-c0-c1)*0.28985509f;
             g.filter={{c0,c1,k,k*1.8f,k*0.65f}};
+            // 0x4c84c0 (slot 1 of both WGeyser and WFountain): the filter states, the
+            // three values and the latch +0x163 at 1, the turns at 0, 30, 60 degrees.
+            g.s0=g.s1=g.rise=g.wide={{1,1,1}};g.turn={{0,0.5235988f,1.0471976f}};
+            g.model3=n.children[0].class_name=="WGeyserModel";
             g.column=n.children[0].id;g.column_local=node_transform(n.children[0]);
             const Matrix4 w=unwrapped_scene_transform(root,n.id);
             g.home=g.aim={{w[12],w[13],w[14]}};g.state=1;
@@ -691,6 +718,11 @@ void CourseObjects::load(const Scene& scene) {
             g.filter={{c0,c1,k,k*1.8f,k*0.65f}};
             if(n.children.size()<2) throw std::runtime_error("WGeyser without its column and ring");
             g.column=n.children[0].id;g.ring=n.children[1].id;g.column_local=node_transform(n.children[0]);
+            // 0x4c84c0 (slot 1 of both WGeyser and WFountain): the filter states, the
+            // three values and the latch +0x163 at 1, the turns at 0, 30, 60 degrees.
+            g.s0=g.s1=g.rise=g.wide={{1,1,1}};g.turn={{0,0.5235988f,1.0471976f}};
+            g.model3=n.children[0].class_name=="WGeyserModel";
+
             const Matrix4 w=unwrapped_scene_transform(root,n.id);
             g.home=g.aim={{w[12],w[13],w[14]}};
             g.sensors.push_back(g.home);
@@ -835,6 +867,37 @@ void creature_place(Creature& c,const Vec3& d,const Vec3& at) {
     }
     c.placed[12]=at[0];c.placed[13]=at[1];c.placed[14]=at[2];
 }
+// Hermite from p1 to p2 with unit tangent directions ta, tb, both |p2 - p1|
+// long (0x458565 for modes 6/7, 0x456e2d.. for mode 2); d the derivative.
+void creature_hermite(const Vec3& p1,const Vec3& p2,const Vec3& ta,const Vec3& tb,float u,Vec3& at,Vec3& d) {
+    const Vec3 e=sub3(p2,p1);
+    const float l=std::sqrt(e[0]*e[0]+e[1]*e[1]+e[2]*e[2]);              // 0x457270, fsqrt
+    for(size_t i=0;i<3;++i) {
+        const float t1=ta[i]*l,t2=tb[i]*l;
+        const float a=(t2-2*e[i])+t1,b=(e[i]-t1)-a;                      // u^3, u^2
+        at[i]=((a*u+b)*u+t1)*u+p1[i];
+        d[i]=((a*3.f)*u+2*b)*u+t1;                                        // 0x511894; 0x457380(2|3, v)
+    }
+}
+}
+// 0x456af0, mode 2's walk over the GDPath's points (through the path's
+// matrix, 0x4200e0): t >= 1 (0x510ae0) keeps its fraction; the segment
+// int(segments x t) mod segments (segments n closed, else n - 1), to the next
+// point mod n. The tangents' directions are next - previous and after next -
+// this, the neighbours wrapping when closed; an open end uses next - this.
+// Not compared with Wine: no course uses mode 2.
+void path_walk(const std::vector<Vec3>& p,bool closed,float t,Vec3& at,Vec3& d) {
+    if(double(t)>=1.0) t-=float(int(t));                                  // __ftol
+    const int n=int(p.size()),segments=closed?n:n-1;
+    const double f=double(segments)*double(t);const int whole=int(f);   // fild x t, __ftol
+    const float u=float(f-double(whole));
+    const int seg=((whole%segments)+segments)%segments,next=(seg+1)%n;   // a negative t reads before the array in the original
+    const Vec3& p1=p[size_t(seg)];const Vec3& p2=p[size_t(next)];
+    const Vec3 t1=seg>0?sub3(p2,p[size_t(seg-1)]):closed?sub3(p2,p[size_t(n-1)]):sub3(p2,p1);
+    const Vec3 t2=next<n-1?sub3(p[size_t(next+1)],p1):closed?sub3(p[0],p1):sub3(p2,p1);
+    creature_hermite(p1,p2,unit3(t1),unit3(t2),u,at,d);
+}
+namespace {
 const float clip_rate[4]={0.1f,0.03f,0.1f,0.1f};                      // 0x52a990
 void creature_wait(Creature& c);
 // 0x459030, the moving state (+0x131 = 1).
@@ -861,17 +924,8 @@ void creature_move(Creature& c,MsvcRandom& random) {
         const Vec3& p2=c.points[size_t((seg+1)&3)];const Vec3& p3=c.points[size_t((seg+2)&3)];
         const Vec3 ta=unit3(sub3(p2,p0)),tb=unit3(sub3(p3,p1));
         Vec3 at{},d{};
-        if(c.mode==6 || c.mode==7) {
-            // 0x458565: Hermite, both tangents |p2 - p1| long; d the derivative.
-            const Vec3 e=sub3(p2,p1);
-            const float l=std::sqrt(e[0]*e[0]+e[1]*e[1]+e[2]*e[2]);
-            for(size_t i=0;i<3;++i) {
-                const float t1=ta[i]*l,t2=tb[i]*l;
-                const float a=(t2-2*e[i])+t1,b=(e[i]-t1)-a;               // u^3, u^2
-                at[i]=((a*u+b)*u+t1)*u+p1[i];
-                d[i]=((a*3.f)*u+2*b)*u+t1;                                 // 0x511894
-            }
-        } else {
+        if(c.mode==6 || c.mode==7) creature_hermite(p1,p2,ta,tb,u,at,d);   // 0x458565
+        else {
             // 0x45846e: on the chord, heading between the two tangents.
             for(size_t i=0;i<3;++i) {at[i]=p1[i]*(1-u)+p2[i]*u;d[i]=ta[i]*(1-u)+tb[i]*u;}
             d=unit3(d);
@@ -881,9 +935,11 @@ void creature_move(Creature& c,MsvcRandom& random) {
     } else if(c.mode==1 || c.mode==2) {
         // 0x457f80: along the GDPath; past the end it wraps with m_bLoop,
         // else it stops there; either way the update restarts t and, with
-        // a wait, waits (0x45929b..0x4592be). Mode 2's walk (0x456af0, a
-        // Hermite over the points) is not ported: no course uses mode 2.
-        if(c.mode==1) {Vec3 at,d;path_point(c.path,c.closed,c.t,at,d);creature_place(c,d,at);}  // 0x444be0
+        // a wait, waits (0x45929b..0x4592be).
+        Vec3 at,d;
+        if(c.mode==1) path_point(c.path,c.closed,c.t,at,d);               // 0x444be0
+        else path_walk(c.path,c.closed,c.t,at,d);                         // 0x456af0
+        creature_place(c,d,at);
         c.t+=tick*c.rate;
         bool done=false;
         if(c.t>c.end) {if(c.loop) c.t-=1;else c.t=c.end;done=true;}
@@ -937,7 +993,8 @@ void CourseObjects::init_creatures(MsvcRandom& random) {
 }
 namespace {
 // The first car (not hidden) whose sphere touches the creature's PRIM
-// (0x4a60c0 with mask 0x100; car order provisional), or -1.
+// (0x4a60c0 with mask 0x100; the manager's list: the player, player 2's
+// entry, the robots in grid order, read under Wine 2026-11-16/17), or -1.
 // The object query 0x4a60c0: the querying PRIM's centre goes through the
 // node's world matrix (0x4200e0, 0x43b880) but its radius is the PRIM's own
 // (0x4a6198 [ebp+0x54] -> [esp+0x84]), not scaled: cc_t1's path creature
@@ -955,10 +1012,17 @@ int creature_touch(const Creature& c,const std::vector<CarProbe>& cars,Vec3& nor
     return -1;
 }
 // 0x45935f..0x4593df: the car's forward (frame row 2, 0x43bf30) x speed
-// +0x3ef, normalized, against the normal times the car's frame (0x43b980):
-// with orthonormal rows that is sign(speed) x the normal's world z (a zero
-// speed divides by 0 and fails the test).
-bool creature_struck(const CarProbe& car,const Vec3& normal) {return car.speed!=0 && (car.speed>0?normal[2]:-normal[2])>0;}
+// +0x3ef, normalized, dotted with the query's normal +0x20 (0x4a64df: +0x38
+// turned by the car's rows, 0x43b980); above 0 squashes, a zero speed
+// divides by 0 and fails. Wine (cc_t1, 2026-11-17) squashes both a car
+// driving forward into it and one reversing into it with its back turned,
+// so +0x20 acts as the world direction car -> creature: the test is "the
+// car moves towards it". The frame chain behind that (0x482190 works in the
+// creature's frame, 0x43c930) is not reconciled; inferred from the two runs.
+// The forward here is the yaw's (no pitch).
+bool creature_struck(const CarProbe& car,const Vec3& normal) {
+    return car.speed!=0 && car.speed*(car.forward[0]*normal[0]+car.forward[1]*normal[1]+car.forward[2]*normal[2])>0;
+}
 // 0x43b190(1, 0.1, 1): the frame's y axis x 0.1.
 void creature_squash(Creature& c) {for(size_t k=4;k<7;++k) c.placed[k]*=0.1f;}
 }
@@ -1052,6 +1116,14 @@ std::vector<SolidSphere> CourseObjects::solid_spheres() const {
         if(!r.active || r.blow.on) continue;
         const Matrix4 w=r.world();
         for(const ScenePrim& p:r.prims) if(p.sensor_group&0x10000) out.push_back({point_of(w,{{p.centre[0],p.centre[1],p.centre[2]}}),p.radius*axis_length(w),int(i)});
+    }
+    // WJunkyard's third arm: its PRIM sphere (sensor group 0x10000) is solid
+    // to the cars' own query too, so a squashed car is pushed off it (Wine,
+    // dr_t3 2026-11-18: 6, 10, 14 ... units an update away from the centre).
+    for(const Crane& c:cranes_) {
+        if(!c.active) continue;
+        const Matrix4 w=c.worlds()[2];
+        for(const ScenePrim& p:c.prims) if((p.sensor_group&0x10000) && !p.cylinder) out.push_back({point_of(w,{{p.centre[0],p.centre[1],p.centre[2]}}),p.radius*axis_length(w),-1});
     }
     for(size_t i=0;i<bum_steers_.size();++i) {
         const BumSteer& b=bum_steers_[i];
@@ -1150,7 +1222,7 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
         const auto pick=[&]() {const int g_=draw_random();r.chosen=int(g_)%3;};
         if(!on) {r.active=false;continue;}
         if(!r.active) {r.active=true;r.started=true;r.triggered=false;pick();}   // 0x4c7cd0
-        if(nearest_car(cars,r.centre,r.triggered?r.far:r.near)>=0) r.triggered=true;
+        if(nearest_car(cars,r.centre,r.triggered?r.far:r.near,group_of(r.sections),seam_)>=0) r.triggered=true;
         else if(r.triggered) {pick();r.triggered=false;}
     }
     for(GoldenGate& g:golden_gates_) {
@@ -1557,7 +1629,7 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
         c.started=true;      // 0x4d0029: one shot, on the first activation
         c.blow.step();       // the WLogBase's action
         if(c.blown) continue;
-        const int car=nearest_car(cars,c.centre,3000);    // 0x4d02b7
+        const int car=nearest_car(cars,c.centre,3000,group_of(c.sections),seam_);    // 0x4d02b7
         if(car>=0 && size_t(car)<effect.size() && effect[size_t(car)]==0) effect[size_t(car)]=3;
     }
     for(RollingRock& r:rocks_) {
@@ -1568,7 +1640,7 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
         }
         if(!r.active) {r.active=true;r.timer=0;r.grace=2;rock_start(r,1);}  // 0x41ba60 -> 0x4c7680, 0x4c5000
         if(r.timer>0) --r.timer;
-        const int car=nearest_car(cars,r.centre,r.state==0?r.range:20000);
+        const int car=nearest_car(cars,r.centre,r.state==0?r.range:20000,group_of(r.sections),seam_);
         if(car>=0 && size_t(car)<effect.size() && effect[size_t(car)]==0) effect[size_t(car)]=3;
         const bool any=car>=0;
         if(r.state==0) {
@@ -1650,6 +1722,7 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
             for(size_t i=0;i<3;++i) {
                 const bool late=g.counter>int(i)*g.delay;
                 g.rise[i]=filter(i,(g.state==1)==late?1.f:(g.volcano?0.6f:0.8f));
+                g.turn[i]+=float(i+1)*0.017453292f;                         // 0x4ca39f (+0x16f; +0x163 untouched)
             }
             g.spin+=0.017453292f;
             if(g.counter>=g.frames) {g.state=g.state==1?2:1;g.counter=0;}
@@ -1673,7 +1746,7 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
                     const auto around=[&]() {return (float(next_random())/16384.f-1)*float(g.sugar);};
                     g.aim={{g.home[0]+around(),g.home[1],g.home[2]+around()}};
                 }
-                if(go) {g.state=1;g.ring_scale=0;}
+                if(go) {g.state=1;g.ring_scale=0;g.alpha=255;}   // 0x4c8f63..0x4c8f9a: the vertices opaque white again
                 g.counter=0;
                 break;
             }
@@ -1683,14 +1756,19 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
                 break;
             case 2:
                 ++g.counter;
-                for(size_t i=0;i<3;++i) {g.rise[i]=filter(i,g.counter>int(i)*g.delay?1.f:0.f);}
+                // 0x4c910a: each value also latched at +0x163 (the model's x and z), and
+                // its turn +0x16f grows (i + 1) degrees (0x511518).
+                for(size_t i=0;i<3;++i) {g.rise[i]=filter(i,g.counter>int(i)*g.delay?1.f:0.f);g.wide[i]=g.rise[i];g.turn[i]+=float(i+1)*0.017453292f;}
                 g.spin+=0.017453292f;
                 if(g.counter>=g.frames) {g.state=3;g.counter=0;}
                 break;
             case 3:
                 ++g.counter;
-                for(size_t i=0;i<3;++i) g.rise[i]=filter(i,0.6f);
+                for(size_t i=0;i<3;++i) {g.rise[i]=filter(i,0.6f);g.turn[i]+=float(i+1)*0.017453292f;}
                 g.spin+=0.017453292f;
+                // 0x4c93ad..0x4c9460 (renderer 1): the model's vertices fade, alpha 255 -
+                // min(counter x 255 / 50, 254), white.
+                g.alpha=255-std::min(g.counter*255/50,254);
                 if(g.counter>50) {g.rise={};g.s0={};g.s1={};g.state=4;g.counter=0;}
                 break;
             case 4:
@@ -1708,6 +1786,18 @@ void CourseObjects::update(const std::vector<CarProbe>& cars,std::vector<ObjectH
         const float reach=float(g.height)*h;
         for(size_t i=0;i<cars.size();++i) {
             if(cars[i].hidden) continue;
+            // 0x4c91ed: a geyser only sees the cars its list query (0x405051 ->
+            // 0x4a7e70, range m_Height, flags 7) returns from the aim: every axis
+            // strictly within m_Height, then the truncated squared distance
+            // below its square. So a car above aim + m_Height falls even under a
+            // taller column (Wine, dr_t4 2026-11-18: not caught at 1275..1292
+            // above, caught at 1268.9). The fountain's update has no such query.
+            if(!g.fountain) {
+                const float ex=cars[i].position[0]-g.aim[0],ey=cars[i].position[1]-g.aim[1],ez=cars[i].position[2]-g.aim[2],r=float(g.height);
+                if(!(std::abs(ex)<r && std::abs(ey)<r && std::abs(ez)<r)) continue;
+                const int64_t qx=int64_t(ex),qy=int64_t(ey),qz=int64_t(ez);
+                if(qx*qx+qy*qy+qz*qz>=int64_t(g.height)*g.height) continue;
+            }
             // 0x4c9247/0x4ca52e: truncated to integers (__ftol), so a car just
             // under the top stays free until it has fallen a whole unit (Wine,
             // dt_t2: airtime 3..11 in the column, across it in about 5 s).

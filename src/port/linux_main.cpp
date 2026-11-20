@@ -478,25 +478,18 @@ int main(int argc,char **argv) {
                 else {joysticks[size_t(p)].open(-1);if (d>=0) wpc_log("Player %d joystick /dev/input/js%d not available",p+1,d);}
             }
             for (auto& j:joysticks) j.poll();
-            // Outside a race player 1's joystick also drives the menus: the stick
-            // gives the arrows' direction bits (0x4399b0), the accelerate button
-            // accepts (0x52aada = 0x40, the accelerate control) and the brake
-            // button backs out (provisional: the menu list's joystick bindings
-            // are not traced).
-            if (joysticks[0].is_open() && !race) {
-                const auto c=controller.prefs().controls(0);
+            // Player 1's joystick in the menus and the pause: the stick gives the
+            // arrows' direction bits (0x4399b0, +-64). The menu list (list 3,
+            // 0x40d1a7/0x40d1c5) binds joystick objects 3 and 4, buttons 0 and 1
+            // (a button's object is its index + 3, 0x40ca65), to the bits
+            // Return and Escape give (0x2000000, 0x4000000): accept and back,
+            // whatever the control table holds. No list binds a joystick to the
+            // pause key; the keyboard's Escape pauses (0x40c8be).
+            if (joysticks[0].is_open() && (!race || race->paused)) {
                 const int x=joysticks[0].axis_byte(0),y=joysticks[0].axis_byte(1);
                 new_up=new_up || y< -64;new_down=new_down || y>64;new_left=new_left || x< -64;new_right=new_right || x>64;
-                new_enter=new_enter || joysticks[0].button(int(c[0].first));
-                new_escape=new_escape || joysticks[0].button(int(c[1].first));
-            } else if (joysticks[0].is_open() && race && race->paused) {
-                // The pause's list: the stick and the accelerate button (no back:
-                // braking must not leave it; the original's joystick pause key is
-                // not traced).
-                const auto c=controller.prefs().controls(0);
-                const int x=joysticks[0].axis_byte(0),y=joysticks[0].axis_byte(1);
-                new_up=new_up || y< -64;new_down=new_down || y>64;new_left=new_left || x< -64;new_right=new_right || x>64;
-                new_enter=new_enter || joysticks[0].button(int(c[0].first));
+                new_enter=new_enter || joysticks[0].button(0);
+                new_escape=new_escape || joysticks[0].button(1);
             }
             if (stage==Stage::CardL2 || stage==Stage::CardL3) {
                 // FUN_00413bd0(2): whole seconds of timeGetTime.
@@ -690,8 +683,7 @@ int main(int argc,char **argv) {
                         if(x!=0) in.axis=x;
                         // 0x466f9e..0x466fe8: the speed code reads the y byte itself, any
                         // value below 0 accelerating and above 0 braking (the +-64 bits of
-                        // 0x4399b0 are the menus'). The byte's scaling from the device is
-                        // not traced: value / 256, whose truncation gives a small dead zone.
+                        // 0x4399b0 are the menus'). The byte: Joystick::axis_byte (0x42650a).
                         in.accelerate=in.accelerate || y<0 || j.button(b[0]);in.brake=in.brake || y>0 || j.button(b[1]);
                         in.look_back=in.look_back || j.button(b[5]);
                         if (p) {in.gadget=in.gadget || j.button(b[6]);in.weapon=in.weapon || j.button(b[7]);}

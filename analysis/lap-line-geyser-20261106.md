@@ -47,9 +47,13 @@ States `+0x17b`, jump table `0x4c9528`:
 - below the top (y + m_Height × h): it is centred on x and z, and rises 100 (`0x510414`) an update, or goes to the top once within m_MaxFly, with airtime 0;
 - at or above the top: airtime 10, so it falls.
 
+**The car query (2026-11-18, dr_t4 under Wine):** only the cars `0x405051` returns from the aim within `m_Height`
+(each axis strictly, then the truncated squared distance) are tested, so a car above aim + `m_Height` falls
+(`analysis/crane-geyser-portal-20261118.md`).
+
 **Native.** `Geyser` in `race_objects`, `CourseObjects::lifts()` applied by `RaceSession::update_objects`, column and ring drawn by `RaceView`.
 
-**Provisional or not ported.** The three values are taken to scale x, y and z, and only the y turn is applied (WGeyserModel `0x4c9850`, `0x4c99a0` not read). The fade and the sounds are not ported. The random draws use their own stream, not the shared rand(). The random aim's range is read as ± m_Sugar (`0x40321a` not read). Not compared with Wine.
+**Provisional or not ported.** (2026-11-18: WGeyserModel's three copies, the latch, the turns, the start values and the fade are ported; there are no sounds: `analysis/geyser-model-20261118.md`.) The random draws use their own stream, not the shared rand(). The random aim's range is read as ± m_Sugar (`0x40321a` not read). Not compared with Wine.
 
 ## Results (`native_drive_test`, 2026-11-06, final binary, all 20 courses)
 

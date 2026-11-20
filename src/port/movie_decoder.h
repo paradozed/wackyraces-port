@@ -23,7 +23,7 @@ protected:
 // Returns null and sets reason when the stream's codec is unavailable.
 std::unique_ptr<VideoDecoder> create_video_decoder(const AviStream& stream,std::string& reason);
 // YUV 4:1:0 (Indeo's YVU9 layout, one chroma sample per 4x4 pixels) to RGBA
-// with BT.601 studio-range coefficients.
+// as ir50_32's 24-bit MMX converter does (0x100641a0, bit-exact).
 void yuv410_to_rgba(const uint8_t* y,int y_stride,const uint8_t* u,int u_stride,const uint8_t* v,int v_stride,
                     int width,int height,uint8_t* rgba);
 }

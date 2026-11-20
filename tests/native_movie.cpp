@@ -1,6 +1,7 @@
 #include "game_avi.h"
 #include "movie_decoder.h"
 #include <cstdio>
+#include <array>
 #include <cstring>
 #include <functional>
 #include <stdexcept>
@@ -69,18 +70,18 @@ void test_avi() {
     require(!wpc::create_video_decoder(audio,reason) && !reason.empty(),"non-video stream rejected");
 }
 void test_color() {
-    // 8x4 picture: two chroma samples per row of 4x4 blocks.
+    // 8x4 picture: two chroma samples per row of 4x4 blocks. Expected values
+    // from ir50_32's MMX converter (0x100641a0), worked by hand.
     uint8_t y[32],u[2]={128,90},v[2]={128,240},out[8*4*4];
     for(int i=0;i<32;++i) y[i]=(i%8)<4?235:82;
     wpc::yuv410_to_rgba(y,8,u,2,v,2,8,4,out);
-    // ir50_32 fit: studio white less the channel offsets (-2.0/-3.3/-1.7).
-    require(out[0]==253 && out[1]==252 && out[2]==253 && out[3]==255,"studio white with the fitted offsets");
-    const uint8_t* p=out+7*4;
-    require(p[0]>250 && p[1]<5 && p[2]<5,"the second block's right half is red");
-    // x 2 and 3 lie between the block centres (1.5 and 5.5): the white
-    // block's pixels already take some of the red block's chroma.
-    require(out[2*4+1]<out[1*4+1] && out[3*4+1]<out[2*4+1] && out[3*4+1]>200,"chroma interpolated between block centres");
-    require(std::memcmp(out,out+8*4*3,8*4)==0,"one chroma row: every row alike");
+    const auto at=[&](int x,int r) {const uint8_t* p=out+(size_t(r)*8+size_t(x))*4;return std::array<int,4>{{p[0],p[1],p[2],p[3]}};};
+    require(at(0,0)==std::array<int,4>{{253,255,254,255}},"studio white: (219 x 149 + 204 x 128 - 0x668c) x 2 >> 8 and the others");
+    require(at(0,1)==std::array<int,4>{{255,255,252,255}},"the next row takes the 4x4 dither's second row");
+    require(at(7,0)==std::array<int,4>{{255,0,4,255}},"the second block's right half is red");
+    // x 2..3 take the horizontal midpoint (U 109, V 184), one value per 2 pixels.
+    require(at(2,0)==std::array<int,4>{{255,217,215,255}},"chroma halfway between the two samples");
+    require(at(1,0)[1]==253 && at(2,0)[1]==217,"pixels 0..1 keep the first sample (dither 0x4c3e), 2..3 the midpoint");
 }
 }
 int main(int argc,char** argv) {

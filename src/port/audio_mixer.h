@@ -19,12 +19,12 @@ inline float directsound_gain(float volume) {
     return float(std::pow(10.0,(std::min(1.f,std::max(0.f,volume))-1.f)*2.0));
 }
 
-// DirectSound3D as the original sets it up (provisional law: DirectSound's
-// documented model). The distance is held within [min, max] (GDSound
-// m_MinRange/m_MaxRange, 0x427c50) and each doubling past min costs
-// rolloff x 6 dB: gain = (min / d)^rolloff, the listener's rolloff being 5
-// (0x42730f). Pan from the azimuth in the listener frame (X right, Z
-// forward), +/-90 degrees to +/-10000 mB on the far side as Wine's dsound.
+// DirectSound3D as the original gets it: DirectX 7's software Pan3D object
+// (dsound.dll 1999-09-09, from the disc's DirectX 7 redistributable; see
+// analysis/ds3d-pan3d-20261118.md). Gain: min / (min + rolloff (d - min))
+// past m_MinRange (0x427c50), muted at m_MaxRange, then -5 dB; the listener's
+// rolloff is 5 (0x42730f). Pan from x / r in the listener frame (X right),
+// full at 30 degrees. pan: -1..1, the far side's linear loss.
 struct Spatial {float gain=1,pan=0;};
 Spatial directsound3d(const std::array<float,16>& listener,const std::array<float,3>& at,float minimum,float maximum,float rolloff=5);
 

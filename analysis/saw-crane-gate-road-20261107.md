@@ -48,6 +48,8 @@ arm 0's target = rand x 180 - 150. Arm 0 turns about y, arm 1 about z, arm 2 abo
   - a busy car found first shields the next one.
   - Control: with the hit removed, the first check fails.
   - All 20 courses pass; `dr_t3`'s drive is unchanged (105.7 s).
+- **Compared with Wine (2026-11-18,** `analysis/crane-geyser-portal-20261118.md`**):** the reach (315) and the push off the
+  arm, which is solid (now in `solid_spheres`).
 - **Not compared with Wine.** The order of `0x4040e8`'s results is not traced (natively: the
   player, then the robots); arm 1's PrimBox is not used by this update.
 

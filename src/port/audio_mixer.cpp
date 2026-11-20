@@ -4,18 +4,33 @@
 
 namespace wpc {
 Spatial directsound3d(const std::array<float,16>& listener,const std::array<float,3>& at,float minimum,float maximum,float rolloff) {
-    minimum=std::max(1.f,minimum);maximum=std::max(minimum,maximum);
+    // DirectX 7 dsound.dll's software Pan3D object (the game's buffers ask for
+    // DS3DALG_DEFAULT, 0x427ad0: a cleared DSBUFFERDESC with DSBCAPS_CTRL3D).
     std::array<float,3> v{};for(size_t i=0;i<3;++i) v[i]=at[i]-listener[12+i];
-    const float length=std::sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]);
+    const float x=v[0]*listener[0]+v[1]*listener[1]+v[2]*listener[2],
+                y=v[0]*listener[4]+v[1]*listener[5]+v[2]*listener[6],
+                z=v[0]*listener[8]+v[1]*listener[9]+v[2]*listener[10];
+    const float r=std::sqrt(x*x+y*y+z*z);                                    // 0xbeb0c976
     Spatial out;
-    out.gain=std::pow(minimum/std::clamp(length,minimum,maximum),rolloff);
-    if(length>1e-3f) {
-        const float x=(v[0]*listener[0]+v[1]*listener[1]+v[2]*listener[2])/length,
-                    z=(v[0]*listener[8]+v[1]*listener[9]+v[2]*listener[10])/length;
-        const float azimuth=std::atan2(x,std::max(std::abs(z),1e-6f)); // behind folds to the front
-        const float millibels=std::min(10000.f,std::abs(azimuth)*20000.f/3.14159265f);
-        out.pan=std::copysign(1-std::pow(10.f,-millibels/2000.f),azimuth);
+    // 0xbeb0f637: at or past the max distance the buffer is muted (+0xd0, read
+    // back by 0xbeb0f923); past min the gain is min / (min + rolloff (d - min)).
+    if(r>=maximum) {out.gain=0;}
+    else {
+        const double g=(minimum<r && rolloff>0)?double(minimum)/((double(r)-minimum)*rolloff+minimum):1.0;
+        // 0xbeb103b5: 2000 log2(g) x 0.30103 truncated (0xbeb38d80), less 500 mB.
+        const int mb=std::max(-10000,int(std::trunc(2000.0*std::log10(g)))-500);
+        out.gain=mb<=-10000?0.f:float(std::pow(10.0,mb/2000.0));
     }
+    // 0xbeb10299/0xbeb1040d: p = x/r + 0.5 (0.5 when r is 0); left of 0.5 the pan
+    // is 3000 log10(2p) (-10000 at p <= 0), right of it -3000 log10(2 - 2p)
+    // (+10000 at p >= 1), truncated: full at 30 degrees off the axis.
+    const double p=r==0?0.5:double(x)/r+0.5;
+    int pan;
+    if(p<0.5) pan=p>0?int(std::trunc(3000.0*std::log10(2*p))):-10000;
+    else pan=p<1?int(std::trunc(-3000.0*std::log10(2-2*p))):10000;
+    pan=std::clamp(pan,-10000,10000);
+    // 0xbeb0b03a: a positive pan lowers the left side by pan mB, a negative one the right.
+    out.pan=float(std::copysign(1-std::pow(10.0,-std::abs(pan)/2000.0),double(pan)));
     return out;
 }
 uint32_t AudioMixer::play(SharedPcm sound,const Params& params) {
