@@ -596,3 +596,18 @@ the callback's attachment to page 4 is still unproven.
   rails, upright and side-on, under the crossing's light. Wine's camera sat low after the chain (as on sh_t3);
   the framings differ, the tram's orientation and shape agree. The cactus check used the same tool
   (`analysis/car-effects-20261028.md`).
+
+- **A paced capture of the original's mix (2026-11-18).** The ALSA null sink is not paced: Wine's mixer runs about 2x
+  real time into it, so neither the length nor the pitch of the file tap can be trusted. Instead:
+  1. load a PulseAudio/PipeWire null sink (`pactl load-module module-null-sink sink_name=wpccap`);
+  2. give Wine's ALSA driver a private config whose `pcm.!default` is `{ type pulse; device "wpccap" }`
+     (`build/wine-scratch/alsa_pulse.conf`, picked by wmem.py through `WPC_ALSA_CONF`);
+  3. record the sink's monitor with `parec -d wpccap.monitor --format=s16le --rate=44100 --channels=2
+     --file-format=wav`.
+  The sink runs at the server's pace, and the format is the one asked of `parec`. Nothing reaches the
+  speakers. Check `pactl list sink-inputs` ("ALSA plug-in [wine-preloader]" on the null sink), then unload the
+  module.
+  - Wine's own `winepulse` driver (`Audio` = `pulse` in the scratch prefix) opened no stream at all; not followed.
+  - **Do not route the port this way.** Its stream "Wacky Races" did not follow `PULSE_SINK` (the server's
+    stream-restore entry for that name wins), so it played on the default output for one 40 s run on
+    2026-11-18. Record the port with `WPC_AUDIO_CAPTURE` only.

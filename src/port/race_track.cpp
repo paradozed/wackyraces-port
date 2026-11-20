@@ -198,11 +198,14 @@ RaceTrack::RaceTrack(const Archive& course,const Scene& scene,bool battle) {
     objects_.load(scene);
     objects_.load_log_meshes(course,scene);
     objects_.link([this](uint32_t id) {const auto i=links_.find(id);return i==links_.end()?std::vector<int>{}:i->second;});
+    objects_.set_seam(wrap_,unwrap_,int(sections())-1);
     // 0x4c5962..0x4c59c3: the WMisty row's route nodes 14 and 40 (0x4856f0
     // walks the nodes, each (links + 2) x 3 words long). The section is the
     // one the first sensor stands on (provisional: +0x104 is not traced).
     // 0x4d0089..0x4d011e: a WChiselCrossover's route node and its two next
-    // ones (section under the brick: provisional, as for WMisty).
+    // ones. 0x4d0068 takes the route of the brick's group +0x104 (its
+    // linked section; 0 when out of range); here the section under the
+    // brick, which on cc_t4 (both chisels: 1) is the same (2026-11-17).
     for(ChiselCrossover& c:objects_.chisels()) {
         if(c.route_node<0) continue;
         const Route r=route(c.centre);

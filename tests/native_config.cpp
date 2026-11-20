@@ -61,7 +61,7 @@ int main() {
             }
             wpc::Joystick js;
             require(js.open_path(tmpl) && js.is_open(),"a joystick event stream opens");
-            require(js.axis_byte(0)==-78 && js.axis_byte(1)==127,"axes on the original's byte scale (-78 is left of -64)");
+            require(js.axis_byte(0)==-61 && js.axis_byte(1)==95,"axes through DirectInput's range and 95% saturation, then x 95 / 0x7fff (0x42650a): -20000 is -61 (not past -64), full travel 95");
             require(!js.button(4) && js.button(3) && !js.button(40),"buttons follow the last event");
             js.poll();require(js.is_open(),"the end of the stream keeps the state");
             std::remove(tmpl);

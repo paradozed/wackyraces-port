@@ -1,4 +1,6 @@
 #include "linux_joystick.h"
+#include <cmath>
+#include <algorithm>
 #include <cerrno>
 #include <fcntl.h>
 #include <linux/joystick.h>
@@ -39,7 +41,14 @@ void Joystick::poll() {
 }
 int Joystick::axis_byte(size_t axis) const {
     if(axis>=axes_.size()) return 0;
-    // -32767..32767 onto the signed byte the original compares with +-64.
-    return axes_[axis]/256;
+    // DirectInput as the game sets it up (0x4169bd..0x416a80): absolute axes,
+    // cooked calibration, range 0..0xffff, saturation 9500 (full scale at 95% of
+    // the travel), no dead zone set (DirectInput's default, 0). The joydev value
+    // (-32767..32767) is taken as the cooked position; DirectInput's own rounding
+    // is not known (provisional). Then 0x42650a/0x426544: (lX - 0x7fff) x 95 /
+    // 0x7fff, truncated (the 0x80010003 magic, sar 14): -95..95.
+    const double s=std::clamp(double(axes_[axis])/32767.0/0.95,-1.0,1.0);
+    const int lx=int(std::floor(32767.5+32767.5*s+0.5));
+    return (lx-0x7fff)*95/0x7fff;
 }
 }

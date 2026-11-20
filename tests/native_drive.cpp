@@ -13,6 +13,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <map>
 
 namespace {
 size_t checks=0;
@@ -232,6 +233,27 @@ void test_objects() {
     near(at[2],100,1e-3f,"GDPath end at t = 1");near(tan[2],100,1e-3f,"GDPath end keeps the last segment");
     wpc::path_point(p,true,0.75f,at,tan);
     near(at[0],75,1e-3f,"closed GDPath: three segments");near(at[2],75,1e-3f,"closed GDPath third segment back to the first point");
+    // 0x456af0 (Kosza mode 2) on the same open path: a Hermite through the
+    // points, tangents |p2 - p1| long along next - previous (an open end:
+    // next - this); halfway along the first segment the curve bulges back
+    // from the corner, at t = 1 it starts over (the fraction).
+    wpc::path_walk(p,false,0,at,tan);
+    near(at[0],0,1e-3f,"mode 2 walk starts on the first point");near(tan[0],100,1e-3f,"mode 2 open start tangent next - this");
+    wpc::path_walk(p,false,0.25f,at,tan);
+    near(at[0],53.6612f,1e-3f,"mode 2 walk halfway, x");near(at[2],-8.8388f,1e-3f,"mode 2 walk halfway bulges to -z");
+    wpc::path_walk(p,false,0.5f,at,tan);
+    near(at[0],100,1e-3f,"mode 2 walk on the middle point");near(tan[0],70.7107f,1e-3f,"mode 2 middle tangent unit(next - previous) x |p2 - p1|");
+    wpc::path_walk(p,false,1,at,tan);
+    near(at[0],0,1e-3f,"mode 2 walk at t = 1 keeps the fraction (0x510ae0)");
+    // Wine (2026-11-17): cc_t1's path creature switched to mode 2 (+0xe1) on a
+    // four-point path written over its GDPath (local (2597.112, 0, -14.430),
+    // (630, 0, 1200), (-1340, 0, -1100), (-3311.317, 0, 82.145), the path's
+    // matrix rows (0,0,1) (0,1,0) (-1,0,0) at (-35343.39, 576.66, 15117.59)):
+    // at t 0.26230 the node is at (-36525.9, 576.7, 16201.3).
+    const float sl[4][3]={{2597.112f,0,-14.430f},{630,0,1200},{-1340,0,-1100},{-3311.317f,0,82.145f}};
+    std::vector<wpc::Vec3> s;for(const auto& l:sl) s.push_back({{-l[2]-35343.3906f,l[1]+576.6611f,l[0]+15117.5850f}});
+    wpc::path_walk(s,false,0.26230f,at,tan);
+    near(at[0],-36525.9f,0.5f,"mode 2 walk on Wine's S path, x");near(at[2],16201.3f,0.5f,"mode 2 walk on Wine's S path, z");
 }
 void test_effects() {
     // WCarFx (0x47a460): dust from the rear wheels when driving forward.
@@ -882,6 +904,34 @@ void test_course(const std::string& path) {
         }
     }
     if(path.find("dr_t3")!=std::string::npos) {
+        // Wine (2026-11-18): the player parked at a crane drop, 69 x and 47 z off
+        // the third arm's lowest point: squashed (type 0x200, 0x4ce65b) once the
+        // sphere is within 300.6 (none at 353.7), then pushed off the solid
+        // sphere: moved (-6.3, -3.3), (-16.8, -8.8), (-30.6, -16.5), (-48.1,
+        // -26.6) in the next updates. Natively the first drop's lowest point is
+        // (-381.1, 3853.7), so the car stands at (-450.5, 3806.3).
+        {
+            wpc::RaceSession race(track,3);race.place(-450.5f,3806.3f,0);
+            const auto sphere=[&]() {
+                const wpc::Crane& c=race.objects().cranes().at(0);const wpc::Matrix4 m=c.worlds()[2];const auto& p=c.prims.at(0).centre;
+                return wpc::Vec3{{p[0]*m[0]+p[1]*m[4]+p[2]*m[8]+m[12],p[0]*m[1]+p[1]*m[5]+p[2]*m[9]+m[13],p[0]*m[2]+p[1]*m[6]+p[2]*m[10]+m[14]}};
+            };
+            int hit=-1;float before=0,at=0;wpc::Vec3 start{},prev{};std::vector<wpc::Vec3> moved;
+            for(int i=0;i<400 && moved.size()<4;++i) {
+                prev=race.player().position;race.update({});
+                const wpc::Vec3 s=sphere(),q=race.player().position;
+                const float d=std::sqrt((s[0]-q[0])*(s[0]-q[0])+(s[1]-q[1])*(s[1]-q[1])+(s[2]-q[2])*(s[2]-q[2]));
+                if(hit<0 && race.bomb(-1).type==0x200) {hit=i;at=d;start=prev;moved.push_back({{q[0]-start[0],0,q[2]-start[2]}});}   // pushed in the hit's update already
+                else if(hit<0) before=d;
+                else moved.push_back({{q[0]-start[0],0,q[2]-start[2]}});
+            }
+            const bool ok=moved.size()==4;
+            std::printf("%s: crane squash at update %d, sphere %.1f (before %.1f); the car moved %.1f,%.1f then %.1f,%.1f %.1f,%.1f %.1f,%.1f\n",path.c_str(),hit,at,before,
+                ok?moved[0][0]:0,ok?moved[0][2]:0,ok?moved[1][0]:0,ok?moved[1][2]:0,ok?moved[2][0]:0,ok?moved[2][2]:0,ok?moved[3][0]:0,ok?moved[3][2]:0);
+            const auto near=[](float a,float b,float tol) {return std::abs(a-b)<=tol;};
+            require(ok && at<315 && before>315 && near(moved[0][0],-6.3f,1.5f) && near(moved[0][2],-3.3f,1.5f) && near(moved[1][0],-16.8f,1.5f) && near(moved[2][0],-30.6f,1.5f) && near(moved[2][2],-16.5f,1.5f) && near(moved[3][0],-48.1f,1.5f) && near(moved[3][2],-26.6f,1.5f),
+                "dr_t3: the crane squashes the car and pushes it off its arm, as under Wine");
+        }
         // WJunkyard (0x4ce430): the crane's arms move; WConstructionSite's belts
         // move a car whose last contact has their flag.
         {
@@ -996,6 +1046,32 @@ void test_course(const std::string& path) {
         require(squashed,"sh_t3: a moving log squashes a car");
     }
     if(path.find("cc_t4")!=std::string::npos) {
+        // Wine (2026-11-17): the player parked on the rock's valley floor at
+        // (25800, -2230) facing +x while the rock climbs segment 2: it comes
+        // back and squashes the car (type 0x200, 0x4c4f60's query) at d 1155
+        // of segment 1 (none at 1274); the car then slides and spins:
+        // (25788.4, -2227.6), (25777.9, -2223.8) row 2 (0.174, 0.985),
+        // (25774.7, -2219.0) (-0.876, 0.483); the rock's timer is 60.
+        {
+            wpc::RaceSession race(track,3);
+            int placed=-1,hit=-1;std::vector<std::array<float,4>> after;
+            for(int i=0;i<3000 && after.size()<3;++i) {
+                const wpc::RollingRock& r=race.objects().rocks()[0];
+                if(placed<0 && i>200 && r.segment==2 && r.velocity>0 && r.distance>50 && r.distance<160) {race.place(25800,-2230,-1.5707964f);placed=i;}
+                race.update({});
+                if(placed<0) continue;
+                const auto& p=race.player();
+                if(hit<0 && race.bomb(-1).type==0x200) hit=i;
+                if(hit>=0) after.push_back({p.position[0],p.position[2],-std::sin(p.yaw),std::cos(p.yaw)});
+            }
+            const bool ok=after.size()==3;
+            std::printf("%s: rock squash of the parked player %d updates after the placing, type %x, timer %d; car %.1f,%.1f then %.1f,%.1f r2 %.3f,%.3f then %.1f,%.1f r2 %.3f,%.3f\n",path.c_str(),hit-placed,unsigned(race.bomb(-1).type),race.objects().rocks()[0].timer,
+                ok?after[0][0]:0,ok?after[0][1]:0,ok?after[1][0]:0,ok?after[1][1]:0,ok?after[1][2]:0,ok?after[1][3]:0,ok?after[2][0]:0,ok?after[2][1]:0,ok?after[2][2]:0,ok?after[2][3]:0);
+            const auto near=[](float a,float b,float tol) {return std::abs(a-b)<=tol;};
+            require(ok && hit>placed && near(after[0][0],25788.4f,1.0f) && near(after[0][1],-2227.6f,1.0f) && near(after[1][0],25777.9f,1.0f) && near(after[1][1],-2223.8f,1.0f)
+                && near(after[1][2],0.174f,0.01f) && near(after[1][3],0.985f,0.01f) && near(after[2][0],25774.7f,1.0f) && near(after[2][2],-0.876f,0.01f) && near(after[2][3],0.483f,0.01f),
+                "cc_t4: the rock squashes the parked car, which slides and spins as under Wine");
+        }
         // WChiselCrossover (0x4d0020): node 98's and 101's second link leads
         // to the node two on, so link 1 weighs 0x8000 whole and link 0 0xffff
         // once blown (0x4d01f0).
@@ -1099,6 +1175,32 @@ void test_course(const std::string& path) {
         for(int i=0;i<60;++i) {o.update({probe},hits,effect);if(!o.lifts().empty() && o.lifts()[0].airtime==0) {++held;top=o.lifts()[0].position[1];probe.position=o.lifts()[0].position;}}
         require(held>0 && top>aim[1] && probe.position[0]==aim[0],"cc_t3: the column centres and lifts a car");
         std::printf("%s: geyser lifts a car %.0f above its base\n",path.c_str(),top-aim[1]);
+    }
+    if(path.find("dr_t4")!=std::string::npos) {
+        // WGeyser (0x4c8cc0) in a race, against Wine (2026-11-18): the player
+        // moved onto the column's aim (+50 x) as it starts erupting (state
+        // 1 -> 2), no robot near. It is centred and rises 100 an update to
+        // 674.4 (n 24), falls free from there (above aim + m_Height the list
+        // query 0x405051 leaves it out: 644.1 at n 36), is caught again at
+        // 744.1 (n 37), and caught twice on the way down in state 3 (205.4 at
+        // n 32, 222.1 at n 50) before it lands (-625.0 by state 5's n 30).
+        wpc::RaceSession race(track,3);race.set_robots_enabled(false);
+        int placed=-1,prev=-1;std::map<std::pair<int,int>,float> y;
+        for(int i=0;i<4000;++i) {
+            const wpc::Geyser& g=race.objects().geysers().at(0);
+            if(placed<0 && i>30 && prev==1 && g.state==2) {race.place(g.aim[0]+50,g.aim[2],0);placed=i;}
+            prev=g.state;
+            race.update({});
+            if(placed<0) continue;
+            const wpc::Geyser& h=race.objects().geysers().at(0);
+            y[{h.state,h.counter}]=race.player().position[1];
+            if(h.state==5 && h.counter>=30) break;
+        }
+        const auto at=[&](int st,int n) {const auto f=y.find({st,n});return f==y.end()?-1e9f:f->second;};
+        std::printf("%s: geyser lifts the placed player to %.1f (n 24), %.1f (n 36), %.1f (n 37); state 3: %.1f (n 32), %.1f (n 50); %.1f at state 5's n 30\n",path.c_str(),at(2,24),at(2,36),at(2,37),at(3,32),at(3,50),at(5,30));
+        const auto near=[](float a,float b) {return std::abs(a-b)<=0.3f;};
+        require(placed>=0 && near(at(2,24),674.4f) && near(at(2,36),644.1f) && near(at(2,37),744.1f) && near(at(3,32),205.4f) && near(at(3,50),222.1f) && near(at(5,30),-625.0f),
+            "dr_t4: the geyser lifts a racing car and lets it fall back, as under Wine");
     }
     if(path.find("dr_t1")!=std::string::npos) {
         // WDynamiteHole (0x4cd800): a car in range fires it and is pushed up;
@@ -1876,6 +1978,23 @@ void test_course(const std::string& path) {
         }
         std::printf("%s: path Kosza struck by the moving player at update %d, t %.5f z %.1f, y axis %.3f, car z %.1f speed %.2f; restarted at update %d, t %.5f, y axis %.3f\n",path.c_str(),hit,th,zh,yh,cz,cv,again,ta,ya);
         require(hit>=0 && near(th,0.41461f,1e-4f) && near(zh,15290.0f,0.5f) && near(yh,0.25f,0.01f) && near(cz,15159.8f,0.5f) && again>hit && near(ta,0.41884f,1e-4f) && near(ya,2.5f,0.01f),"cc_t1's path Kosza squashed by the moving car and restarted, as under Wine");
+        // Wine (2026-11-17): the car turned round (row 2 (0.130, 0, -0.992)) and
+        // parked at the same spot, reversing from the creature's t 0.364 (brake,
+        // release, brake): squashed at t 0.41461 z 15290, the car then at
+        // (-35403.5, 15179.7), speed -0.17 (0x4593d4: forward x speed towards the
+        // creature). Natively the car moves one update later (3 units short).
+        wpc::RaceSession back(track,3);back.place(-35380,15000,-3.0114f);
+        press=-1;hit=-1;float bz=0,bv=0,bt=0,by=0,bzh=0;
+        for(int i=0;i<900 && hit<0;++i) {
+            const wpc::Creature* q=nullptr;for(const wpc::Creature& c:back.objects().creatures()) if(c.collision) q=&c;
+            if(press<0 && q->state==1 && q->t>=0.36f) press=i;
+            wpc::DriveInput in{};in.brake=press>=0 && i<press+45 && i!=press+1;
+            back.update(in);
+            for(const wpc::Creature& c:back.objects().creatures()) if(c.collision) q=&c;
+            if(press>=0 && q->state==2) {hit=i;bt=q->t;bzh=q->placed[14];by=q->placed[5];bz=back.player().position[2];bv=back.player().speed.speed;}
+        }
+        std::printf("%s: path Kosza struck by the reversing player at update %d, t %.5f z %.1f, y axis %.3f, car z %.1f speed %.2f\n",path.c_str(),hit,bt,bzh,by,bz,bv);
+        require(hit>=0 && near(bt,0.41461f,1e-4f) && near(bzh,15290.0f,0.5f) && near(by,0.25f,0.01f) && near(bz,15179.7f,5.0f) && near(bv,-0.17f,0.01f),"cc_t1's path Kosza squashed by a car reversing into it, as under Wine");
     }
     if(cc) {
         // Wine (2026-10-30): with the player parked at (-57000, 14172) the

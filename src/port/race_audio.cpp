@@ -58,7 +58,9 @@ void RaceAudio::place(uint32_t voice,const Node& sound,const Vec3& at,bool silen
     if(!voice) return;
     if(silent) {audio_.mixer().set_spatial(voice,0,0);return;}
     if(sound.integer(0x9b)==0) {audio_.mixer().set_spatial(voice,1,0);return;}
-    const Spatial sp=directsound3d(listener_,at,sound.real(0x95,1000),sound.real(0x96,10000));
+    // 0x427c50: a negative m_MinRange is 0, an m_MaxRange not above it becomes min + 0.01 (0x510b00).
+    const float lo=std::max(0.f,sound.real(0x95,1000)),hi=sound.real(0x96,10000)>lo?sound.real(0x96,10000):lo+0.01f;
+    const Spatial sp=directsound3d(listener_,at,lo,hi);
     audio_.mixer().set_spatial(voice,sp.gain,sp.pan);
 }
 void RaceAudio::one_shot(const Node& sound,const Vec3& at,const char* name,size_t robot) {

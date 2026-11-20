@@ -388,3 +388,21 @@ ct_t1:
   angle by that much. It grows (update 58: 0.219 against 0.181; 68: +0.129 against -0.076), and at the switch to
   far (update 71) the robot is ~60 units off. That is the car update's float arithmetic against the original's
   x87, amplified near a goal; no rule difference found, so the dt_t1 chain stops here (2026-11-15).
+
+## Championship I re-run on the build of 2026-11-17
+
+Native laps only (`natlaps2`, the player idle, vehicle 3, the original seed), against the Wine laps above
+(sh_t1 "After", cc_t1, dt_t1 and ct_t1 of 2026-11-15; dt_t1 and ct_t1 from the kept `lapupd` logs). No new
+Wine run. The build includes the Kosza hit, the ceiling ray, the battle roulettes and the struck test of
+`analysis/kosza-open-20261117.md`.
+
+| Course | Worst lap-end difference | Finishing order (Wine / native) |
+|---|---|---|
+| `sh_t1` | 0.6% (v0, v1) | 6 2 0 4 1 5 / the same |
+| `cc_t1` | 1.8% (v5 2168 / 4322 / 6476 against 2138 / 4246 / 6387; v6 1.3%, the rest within 1.1%) | 6 0 2 4 1 5 / the same |
+| `ct_t1` | 0.5% (v0 1848 / 3660 / 5481 against 1820 / 3633 / 5458) | 6 0 2 4 1 5 / the same |
+| `dt_t1` | 7.6% (v4 1344 / 2705 / 4083 against 1222 / 2510 / 3796; v6 6.6%) | 6 2 0 4 1 5 / 6 2 1 0 4 5 |
+
+sh_t1, cc_t1 and ct_t1 are as on 2026-11-15 (cc_t1's v5 is the same 1.8%, which that day's table rounded to
+1.4% against lap 3 alone). dt_t1 has the bound and order of the post-`+0x4c` run (7.6%; 6, 2, 1, 0, 4, 5). Its
+gap is the robot's near steer drifting from update 53 (see "The far turn on dt_t1"), still not traced.

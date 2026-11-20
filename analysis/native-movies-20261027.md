@@ -64,3 +64,10 @@ intro. Audio is not played.
 - **Result.** The mean absolute error per channel against the codec is 0.91 (frame 300) and 1.39 (frame 800), against 3.08 and 3.55 for the earlier replicated, offset-free conversion.
 
 **Native.** `yuv410_to_rgba` uses fixed point in eighths for the interpolation, edges clamped, and the offsets above. It is an empirical match. The codec's conversion routine is not traced, and the offsets may partly reflect luma differences between libavcodec's and the codec's decoders.
+
+## Superseded (2026-11-18)
+
+The reference above came from **Wine's builtin** `ir50_32` (it decodes through `winegstreamer`; `+loaddll`: `ir50_32.dll ... builtin`),
+not from Intel's codec, which the prefix also holds (`syswow64/Ir50_32.dll`, 1999). With `ir50_32=n` the native codec decodes too,
+and its output differs from the builtin's by 3.2..4.5 per channel. The native converter is now Intel's, recovered and bit-exact:
+`analysis/indeo-color-20261118.md`.

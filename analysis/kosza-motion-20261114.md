@@ -176,3 +176,6 @@ port's view does (`MotionController::update(10)` per race update, `RaceView::pos
 
 Not compared with Wine: a reversing car's touch; the clip's phase (the start frame int(frand x 300) follows
 the race stream).
+
+Follow-up (2026-11-17, `analysis/kosza-open-20261117.md`): the reversing car compared with Wine (it squashes;
+the struck test corrected), mode 2's walk `0x456af0` ported and compared on a forced path, the two-player car order read.

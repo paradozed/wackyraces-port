@@ -213,7 +213,7 @@ Read from the disassembly.
   - A voice with `m_3D` (`0x9b`, set on 64 of the 70 WackyAuto sounds) is an `IDirectSound3DBuffer`. `0x427c50` sets `SetMinDistance(m_MinRange)` and `SetMaxDistance(m_MaxRange)`; a max not above the min is raised.
   - Every voice update (`0x42804e..0x42808c`) passes the GDSound node's frame position to `SetPosition` (`+0x4c`, immediate). The voice's own pan (`+0x18` × 4000, `+0x40`) applies only to non-3D voices.
   - The listener is set up at `0x4272f6..`: `SetDistanceFactor(1.0)` (`+0x2c`), `SetRolloffFactor(5.0)` (`+0x3c`, `0x40a00000`). It then follows the camera node every update (`SetPosition` `+0x38` and `SetOrientation` `+0x34` at `0x4276ce`/`0x4276fa`).
-- **Native 3D law** (`directsound3d`, provisional). It follows DirectSound's documented model:
+- **Native 3D law** (`directsound3d`; superseded 2026-11-18 by DirectX 7's recovered Pan3D, `analysis/ds3d-pan3d-20261118.md`). It follows DirectSound's documented model:
   - the gain is (min / d)^rolloff, with d held within [min, max]. With 1000/10000, that is full volume within 1000, −30 dB at 2000, and silence at 10000;
   - the pan comes from the azimuth in the follow camera's frame. ±90° maps to ±10000 mB on the far side, the mapping Wine's dsound uses;
   - the listener is the follow camera (`initial_follow_camera`);

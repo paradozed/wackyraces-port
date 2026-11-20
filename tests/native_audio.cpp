@@ -63,20 +63,24 @@ void test_mixer() {
     mixer.mix(out,1);
     require(out[0]==500 && out[1]==0,"spatial gain and left pan");
     mixer.stop(far);
-    // DirectSound3D law: full within min, (min/d)^5 beyond, held at max;
-    // pan from the azimuth in the listener frame.
+    // DirectSound3D: DirectX 7's software Pan3D (dsound.dll), by hand. Within
+    // min: -500 mB, centred; d 2000: trunc(2000 log10(1/6)) - 500 = -2056;
+    // past max: muted; x/r 1 and -0.707: pans +-10000; x/r 0.447: 2929 mB.
     {
         std::array<float,16> l{};l[0]=1;l[5]=1;l[10]=1;l[15]=1;
+        const auto mb=[](float g){return std::pow(10.f,g/2000.f);};
         const auto a=wpc::directsound3d(l,{{0,0,900}},1000,10000);
         const auto b=wpc::directsound3d(l,{{0,0,2000}},1000,10000);
         const auto c=wpc::directsound3d(l,{{0,0,50000}},1000,10000);
         const auto d=wpc::directsound3d(l,{{3000,0,0}},1000,10000);
         const auto e=wpc::directsound3d(l,{{-1000,0,1000}},1000,10000);
-        require(a.gain==1 && a.pan==0,"within m_MinRange: full volume, centred");
-        require(std::abs(b.gain-1/32.f)<1e-6f,"twice m_MinRange: rolloff 5 -> -30 dB");
-        require(std::abs(c.gain-1e-5f)<1e-9f,"held at m_MaxRange");
-        require(d.pan>0.99f && std::abs(d.gain-std::pow(1/3.f,5.f))<1e-6f,"right side: full right pan");
-        require(std::abs(e.pan+1-std::pow(10.f,-2.5f))<1e-4f,"45 degrees left: -5000 mB on the right");
+        const auto f=wpc::directsound3d(l,{{500,0,1000}},1000,10000);
+        require(std::abs(a.gain-mb(-500))<1e-6f && a.pan==0,"within m_MinRange: -5 dB, centred");
+        require(std::abs(b.gain-mb(-2056))<1e-6f,"twice m_MinRange: min / (min + 5 (d - min)), -2056 mB");
+        require(c.gain==0,"muted at m_MaxRange");
+        require(std::abs(d.gain-mb(-2582))<1e-6f && std::abs(d.pan-(1-mb(-10000)))<1e-6f,"to the right: -2582 mB, full right");
+        require(std::abs(e.gain-mb(-1474))<1e-6f && std::abs(e.pan+(1-mb(-10000)))<1e-6f,"45 degrees left: full left (past 30 degrees)");
+        require(std::abs(f.pan-(1-mb(-2929)))<1e-5f,"x/r 0.447: -3000 log10(2 - 2p), 2929 mB");
     }
     // Clipping and the movie clock.
     p={};

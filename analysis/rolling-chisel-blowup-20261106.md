@@ -17,7 +17,7 @@ Native: `src/port/race_objects.{h,cpp}` (`RollingRock`, `ChiselCrossover`,
 | Rock in motion | swings: turning at d about 2200 of segment 0 and 140 of 2, about 60 at the bottom | swings; same energy reading (`sqrt(2 g h)` = 55 for that height), no frame-by-frame comparison |
 | Car told to fire | player's `+0x1c7` = 3 | 3 |
 
-**Not compared:** a rock squashing a car; a car bouncing off the wall or rock
+**Not compared:** a rock squashing a car (compared 2026-11-17, `analysis/rolling-squash-seam-20261117.md`); a car bouncing off the wall or rock
 (the sphere normal is read from the code); a projectile blowing up the rock;
 `ct_t2` and `dr_t4` (read from the code and the data only); a robot's shot at
 the wall itself, though Wine shows robots do blow walls up.
@@ -116,7 +116,8 @@ dropped weapons fire at once and leave the state set.
 
 ## Provisional
 
-- The section of a chisel's route node (under the brick).
+- The section of a chisel's route node (under the brick). Resolved 2026-11-17: the brick's group `+0x104`, the same on cc_t4.
 - `0x4a71e0` is reduced to the nearest shown car not being hit; its heading,
   section and last-section rules are not applied to the bricks' 2pi queries.
+  Resolved 2026-11-17: the seam wrap is ported, and the heading and the second list do not apply (2 pi, flags 1).
 - The update order within a tick (brick, then boulder). (The bricks run before the cars since 2026-11-15, `analysis/race-stream-20261114.md`.)
